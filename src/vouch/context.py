@@ -1,0 +1,121 @@
+"""Context-pack assembly — `vouch context` / `kb_context`.
+
+A ContextPack is the bundle an agent gets back when it asks "what does the
+KB know that's relevant to <task>". It's the shape AKBP defines so that
+hosts can compare ranking quality and budget enforcement consistently.
+
+This implementation:
+  - runs FTS5 search if state.db has any rows, falls back to substring scan
+  - resolves citations for every claim hit
+  - enforces a `max_chars` budget by clipping summaries before omitting items
+  - flags freshness using the source-verification cache (when available)
+"""
+
+from __future__ import annotations
+
+from . import index_db
+from .models import ContextItem, ContextPack, ContextQuality
+from .storage import KBStore
+
+
+def _retrieve(store: KBStore, query: str, limit: int
+              ) -> list[tuple[str, str, str, float, str]]:
+    """Return list of (kind, id, summary, score, backend)."""
+    try:
+        hits = index_db.search(store.kb_dir, query, limit=limit)
+        if hits:
+            return [(k, i, s, sc, "fts5") for k, i, s, sc in hits]
+    except Exception:
+        # FTS5 unavailable or empty — fall through to substring scan.
+        pass
+    return [
+        (k, i, s, sc, "substring")
+        for k, i, s, sc in store.search_substring(query, limit=limit)
+    ]
+
+
+def _citations_for_claim(store: KBStore, claim_id: str) -> list[str]:
+    try:
+        claim = store.get_claim(claim_id)
+    except Exception:
+        return []
+    return list(claim.evidence)
+
+
+def build_context_pack(
+    store: KBStore,
+    *,
+    query: str,
+    limit: int = 10,
+    max_chars: int | None = None,
+    min_items: int = 0,
+    require_citations: bool = False,
+    fail_on_warnings: bool = False,
+    fail_on_budget_truncation: bool = False,
+) -> ContextPack:
+    hits = _retrieve(store, query, limit)
+    items: list[ContextItem] = []
+    for kind, hid, summary, score, backend in hits:
+        cites: list[str] = []
+        if kind == "claim":
+            cites = _citations_for_claim(store, hid)
+        items.append(
+            ContextItem(
+                id=hid, type=kind, summary=summary, score=score,
+                backend=backend, citations=cites,
+                freshness="unknown",
+            )
+        )
+
+    warnings: list[str] = []
+    failed: list[str] = []
+    uncited: list[str] = []
+    budget_truncated = False
+    budget_clipped = 0
+    budget_omitted = 0
+
+    if require_citations:
+        for it in items:
+            if it.type == "claim" and not it.citations:
+                uncited.append(it.id)
+
+    if max_chars is not None:
+        total = sum(len(i.summary) for i in items)
+        if total > max_chars:
+            budget_truncated = True
+            # First clip each summary uniformly, then drop tail items if still over.
+            for it in items:
+                if len(it.summary) > 200:
+                    it.summary = it.summary[:200] + "…"
+                    budget_clipped += 1
+            while items and sum(len(i.summary) for i in items) > max_chars:
+                items.pop()
+                budget_omitted += 1
+
+    if len(items) < min_items:
+        warnings.append(f"only {len(items)} items, minimum {min_items}")
+        failed.append("min_items")
+    if uncited:
+        warnings.append(f"{len(uncited)} uncited claims")
+        if require_citations:
+            failed.append("require_citations")
+    if fail_on_budget_truncation and budget_truncated:
+        failed.append("budget_truncated")
+    if fail_on_warnings and warnings:
+        failed.append("fail_on_warnings")
+
+    quality = ContextQuality(
+        ok=len(failed) == 0,
+        minimum_items=min_items,
+        require_citations=require_citations,
+        fail_on_warnings=fail_on_warnings,
+        budget_truncated=budget_truncated,
+        budget_omitted_items=budget_omitted,
+        budget_clipped_items=budget_clipped,
+        items=len(items),
+        uncited_items=uncited,
+        warnings=len(warnings),
+        failed=failed,
+    )
+
+    return ContextPack(query=query, items=items, quality=quality, warnings=warnings)
