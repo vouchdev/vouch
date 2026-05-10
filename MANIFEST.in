@@ -1,0 +1,15 @@
+include README.md
+include LICENSE
+include CHANGELOG.md
+include SPEC.md
+include pyproject.toml
+recursive-include src/vouch *.py
+recursive-include schemas *.json
+recursive-include templates *.yaml *.md
+recursive-include spec *.md
+recursive-include docs *.md
+recursive-exclude tests *
+recursive-exclude benchmarks *
+global-exclude __pycache__
+global-exclude *.py[cod]
+global-exclude .DS_Store
