@@ -1,0 +1,70 @@
+{
+  "$id": "https://vouch.dev/schemas/session.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "An agent's work session \u2014 opened on start, closed on end.\n\nCaptures the agent, the task, the proposals/claims it produced, so that\n`crystallize` can later promote the durable parts.",
+  "properties": {
+    "agent": {
+      "title": "Agent",
+      "type": "string"
+    },
+    "ended_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Ended At"
+    },
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "note": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Note"
+    },
+    "proposal_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Proposal Ids",
+      "type": "array"
+    },
+    "started_at": {
+      "format": "date-time",
+      "title": "Started At",
+      "type": "string"
+    },
+    "task": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Task"
+    }
+  },
+  "required": [
+    "id",
+    "agent"
+  ],
+  "title": "Session",
+  "type": "object"
+}

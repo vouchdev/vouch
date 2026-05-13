@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vouch.dev/schemas/jsonl-envelope.schema.json",
+  "title": "VouchJsonlEnvelope",
+  "description": "Request / response envelopes for the JSONL transport. One JSON object per line. See spec/transports.md.",
+  "oneOf": [
+    {"$ref": "#/$defs/request"},
+    {"$ref": "#/$defs/responseOk"},
+    {"$ref": "#/$defs/responseErr"}
+  ],
+  "$defs": {
+    "request": {
+      "type": "object",
+      "required": ["id", "method"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "method": {
+          "type": "string",
+          "pattern": "^kb\\.[a-z_]+$"
+        },
+        "params": {"type": "object"}
+      }
+    },
+    "responseOk": {
+      "type": "object",
+      "required": ["id", "ok"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string"},
+        "ok": {"type": "boolean", "const": true},
+        "result": {}
+      }
+    },
+    "responseErr": {
+      "type": "object",
+      "required": ["id", "ok", "error"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string"},
+        "ok": {"type": "boolean", "const": false},
+        "error": {
+          "type": "object",
+          "required": ["code", "message"],
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "type": "string",
+              "enum": [
+                "method_not_found",
+                "missing_param",
+                "invalid_request",
+                "internal_error"
+              ]
+            },
+            "message": {"type": "string"}
+          }
+        }
+      }
+    }
+  }
+}

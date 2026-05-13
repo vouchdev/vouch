@@ -1,0 +1,86 @@
+{
+  "$defs": {
+    "SourceType": {
+      "enum": [
+        "file",
+        "url",
+        "transcript",
+        "message",
+        "commit",
+        "issue",
+        "screenshot",
+        "pdf",
+        "audio",
+        "video",
+        "folder"
+      ],
+      "title": "SourceType",
+      "type": "string"
+    }
+  },
+  "$id": "https://vouch.dev/schemas/evidence.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Pointer into a Source backing a specific Claim.\n\nUnlike Source (which is the whole document), Evidence specifies *where*\nin the source the supporting material is \u2014 line range, timestamp, quote.",
+  "properties": {
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "hash": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Hash"
+    },
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "locator": {
+      "description": "span ref: 'L10-L20', 't=00:14:23', '#section-3'",
+      "title": "Locator",
+      "type": "string"
+    },
+    "quote": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Quote"
+    },
+    "source_id": {
+      "title": "Source Id",
+      "type": "string"
+    },
+    "source_type": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SourceType"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "required": [
+    "id",
+    "source_id",
+    "locator"
+  ],
+  "title": "Evidence",
+  "type": "object"
+}

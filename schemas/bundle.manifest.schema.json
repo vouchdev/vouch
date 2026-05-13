@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vouch.dev/schemas/bundle.manifest.schema.json",
+  "title": "VouchBundleManifest",
+  "description": "manifest.json inside a vouch export tarball. Lists every file in the bundle with its sha256 and byte size; consumed by `vouch export-check` and `vouch import-check` before any destructive import action.",
+  "type": "object",
+  "required": ["version", "generated_at", "kb_name", "files"],
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "type": "string",
+      "description": "bundle format version (semver)",
+      "examples": ["0.1"]
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "UTC ISO-8601 timestamp the bundle was produced"
+    },
+    "kb_name": {
+      "type": "string",
+      "description": "source KB name from config.yaml"
+    },
+    "vouch_version": {
+      "type": "string",
+      "description": "version of vouch that wrote this bundle"
+    },
+    "files": {
+      "type": "array",
+      "description": "one entry per file in the tarball (excluding manifest.json itself)",
+      "items": {
+        "type": "object",
+        "required": ["path", "sha256", "bytes"],
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "tar-relative path, forward slashes"
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "lowercase hex sha256 of file bytes"
+          },
+          "bytes": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      }
+    },
+    "stats": {
+      "type": "object",
+      "description": "informational counts; not authoritative",
+      "additionalProperties": {"type": "integer"}
+    }
+  }
+}

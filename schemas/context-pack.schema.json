@@ -1,0 +1,164 @@
+{
+  "$defs": {
+    "ContextItem": {
+      "description": "One result inside a ContextPack.",
+      "properties": {
+        "backend": {
+          "default": "fts5",
+          "title": "Backend",
+          "type": "string"
+        },
+        "citations": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Citations",
+          "type": "array"
+        },
+        "freshness": {
+          "default": "unknown",
+          "enum": [
+            "fresh",
+            "unknown",
+            "stale"
+          ],
+          "title": "Freshness",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "score": {
+          "default": 0.0,
+          "title": "Score",
+          "type": "number"
+        },
+        "summary": {
+          "title": "Summary",
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "claim",
+            "page",
+            "entity",
+            "relation",
+            "source"
+          ],
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "summary"
+      ],
+      "title": "ContextItem",
+      "type": "object"
+    },
+    "ContextQuality": {
+      "description": "Quality gate metadata attached to every ContextPack.",
+      "properties": {
+        "budget_clipped_items": {
+          "default": 0,
+          "title": "Budget Clipped Items",
+          "type": "integer"
+        },
+        "budget_omitted_items": {
+          "default": 0,
+          "title": "Budget Omitted Items",
+          "type": "integer"
+        },
+        "budget_truncated": {
+          "default": false,
+          "title": "Budget Truncated",
+          "type": "boolean"
+        },
+        "fail_on_warnings": {
+          "default": false,
+          "title": "Fail On Warnings",
+          "type": "boolean"
+        },
+        "failed": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Failed",
+          "type": "array"
+        },
+        "items": {
+          "default": 0,
+          "title": "Items",
+          "type": "integer"
+        },
+        "minimum_items": {
+          "default": 0,
+          "title": "Minimum Items",
+          "type": "integer"
+        },
+        "ok": {
+          "default": true,
+          "title": "Ok",
+          "type": "boolean"
+        },
+        "require_citations": {
+          "default": false,
+          "title": "Require Citations",
+          "type": "boolean"
+        },
+        "uncited_items": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Uncited Items",
+          "type": "array"
+        },
+        "warnings": {
+          "default": 0,
+          "title": "Warnings",
+          "type": "integer"
+        }
+      },
+      "title": "ContextQuality",
+      "type": "object"
+    }
+  },
+  "$id": "https://vouch.dev/schemas/context-pack.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A bundle of retrieved items ready to drop into an agent prompt.",
+  "properties": {
+    "generated_at": {
+      "format": "date-time",
+      "title": "Generated At",
+      "type": "string"
+    },
+    "items": {
+      "items": {
+        "$ref": "#/$defs/ContextItem"
+      },
+      "title": "Items",
+      "type": "array"
+    },
+    "quality": {
+      "$ref": "#/$defs/ContextQuality"
+    },
+    "query": {
+      "title": "Query",
+      "type": "string"
+    },
+    "warnings": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Warnings",
+      "type": "array"
+    }
+  },
+  "required": [
+    "query"
+  ],
+  "title": "ContextPack",
+  "type": "object"
+}

@@ -1,0 +1,99 @@
+{
+  "$defs": {
+    "PageStatus": {
+      "enum": [
+        "draft",
+        "active",
+        "stale",
+        "archived"
+      ],
+      "title": "PageStatus",
+      "type": "string"
+    },
+    "PageType": {
+      "enum": [
+        "entity",
+        "concept",
+        "decision",
+        "workflow",
+        "session",
+        "index",
+        "log",
+        "report",
+        "source-summary"
+      ],
+      "title": "PageType",
+      "type": "string"
+    }
+  },
+  "$id": "https://vouch.dev/schemas/page.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Compiled, maintained markdown \u2014 entity write-up, decision record,\nsession summary, etc. Body is plain markdown; metadata is YAML\nfrontmatter on disk.",
+  "properties": {
+    "body": {
+      "default": "",
+      "title": "Body",
+      "type": "string"
+    },
+    "claims": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Claims",
+      "type": "array"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "entities": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Entities",
+      "type": "array"
+    },
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "sources": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Sources",
+      "type": "array"
+    },
+    "status": {
+      "$ref": "#/$defs/PageStatus",
+      "default": "draft"
+    },
+    "tags": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Tags",
+      "type": "array"
+    },
+    "title": {
+      "title": "Title",
+      "type": "string"
+    },
+    "type": {
+      "$ref": "#/$defs/PageType",
+      "default": "concept"
+    },
+    "updated_at": {
+      "format": "date-time",
+      "title": "Updated At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "title"
+  ],
+  "title": "Page",
+  "type": "object"
+}

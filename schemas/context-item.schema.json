@@ -1,0 +1,60 @@
+{
+  "$id": "https://vouch.dev/schemas/context-item.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "One result inside a ContextPack.",
+  "properties": {
+    "backend": {
+      "default": "fts5",
+      "title": "Backend",
+      "type": "string"
+    },
+    "citations": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Citations",
+      "type": "array"
+    },
+    "freshness": {
+      "default": "unknown",
+      "enum": [
+        "fresh",
+        "unknown",
+        "stale"
+      ],
+      "title": "Freshness",
+      "type": "string"
+    },
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "score": {
+      "default": 0.0,
+      "title": "Score",
+      "type": "number"
+    },
+    "summary": {
+      "title": "Summary",
+      "type": "string"
+    },
+    "type": {
+      "enum": [
+        "claim",
+        "page",
+        "entity",
+        "relation",
+        "source"
+      ],
+      "title": "Type",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "type",
+    "summary"
+  ],
+  "title": "ContextItem",
+  "type": "object"
+}
