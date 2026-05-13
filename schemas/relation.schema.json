@@ -1,0 +1,76 @@
+{
+  "$defs": {
+    "RelationType": {
+      "enum": [
+        "uses",
+        "depends_on",
+        "contradicts",
+        "supersedes",
+        "supports",
+        "caused_by",
+        "owned_by",
+        "derived_from",
+        "similar_to",
+        "blocks",
+        "implements",
+        "references"
+      ],
+      "title": "RelationType",
+      "type": "string"
+    }
+  },
+  "$id": "https://vouch.dev/schemas/relation.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Typed edge between entities / claims / pages.",
+  "properties": {
+    "confidence": {
+      "default": 0.7,
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "title": "Confidence",
+      "type": "number"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "evidence": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Evidence",
+      "type": "array"
+    },
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "relation": {
+      "$ref": "#/$defs/RelationType"
+    },
+    "source": {
+      "description": "id of the source endpoint",
+      "title": "Source",
+      "type": "string"
+    },
+    "target": {
+      "description": "id of the target endpoint",
+      "title": "Target",
+      "type": "string"
+    },
+    "updated_at": {
+      "format": "date-time",
+      "title": "Updated At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "source",
+    "relation",
+    "target"
+  ],
+  "title": "Relation",
+  "type": "object"
+}

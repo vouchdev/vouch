@@ -1,0 +1,63 @@
+{
+  "$id": "https://vouch.dev/schemas/capabilities.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Returned by the server in response to `kb.capabilities`.",
+  "properties": {
+    "knowledge_capability": {
+      "additionalProperties": true,
+      "title": "Knowledge Capability",
+      "type": "object"
+    },
+    "level": {
+      "default": 3,
+      "description": "compliance level \u2014 see AKBP \u00a711",
+      "title": "Level",
+      "type": "integer"
+    },
+    "methods": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Methods",
+      "type": "array"
+    },
+    "name": {
+      "default": "vouch",
+      "title": "Name",
+      "type": "string"
+    },
+    "retrieval": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Retrieval",
+      "type": "array"
+    },
+    "review_gated": {
+      "default": true,
+      "title": "Review Gated",
+      "type": "boolean"
+    },
+    "spec": {
+      "default": "akbp-0.1-compatible",
+      "title": "Spec",
+      "type": "string"
+    },
+    "transports": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Transports",
+      "type": "array"
+    },
+    "version": {
+      "title": "Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "version"
+  ],
+  "title": "Capabilities",
+  "type": "object"
+}

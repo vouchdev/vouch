@@ -1,0 +1,162 @@
+{
+  "$defs": {
+    "ClaimStatus": {
+      "enum": [
+        "working",
+        "actionable",
+        "stable",
+        "contested",
+        "superseded",
+        "archived",
+        "redacted"
+      ],
+      "title": "ClaimStatus",
+      "type": "string"
+    },
+    "ClaimType": {
+      "enum": [
+        "fact",
+        "decision",
+        "preference",
+        "workflow",
+        "observation",
+        "question",
+        "warning"
+      ],
+      "title": "ClaimType",
+      "type": "string"
+    },
+    "Scope": {
+      "enum": [
+        "private",
+        "project",
+        "team",
+        "public"
+      ],
+      "title": "Scope",
+      "type": "string"
+    }
+  },
+  "$id": "https://vouch.dev/schemas/claim.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Atomic durable assertion.\n\nThe smallest thing that can be cited, contradicted, superseded,\nreinforced, decayed, or archived.",
+  "properties": {
+    "approved_by": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Approved By"
+    },
+    "confidence": {
+      "default": 0.7,
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "title": "Confidence",
+      "type": "number"
+    },
+    "contradicts": {
+      "description": "vouch: claim ids this contradicts",
+      "items": {
+        "type": "string"
+      },
+      "title": "Contradicts",
+      "type": "array"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "entities": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Entities",
+      "type": "array"
+    },
+    "evidence": {
+      "description": "Source ids OR Evidence ids \u2014 both are valid citations",
+      "items": {
+        "type": "string"
+      },
+      "title": "Evidence",
+      "type": "array"
+    },
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "last_confirmed_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Last Confirmed At"
+    },
+    "scope": {
+      "$ref": "#/$defs/Scope",
+      "default": "project"
+    },
+    "status": {
+      "$ref": "#/$defs/ClaimStatus",
+      "default": "working"
+    },
+    "superseded_by": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Superseded By"
+    },
+    "supersedes": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Supersedes",
+      "type": "array"
+    },
+    "tags": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Tags",
+      "type": "array"
+    },
+    "text": {
+      "title": "Text",
+      "type": "string"
+    },
+    "type": {
+      "$ref": "#/$defs/ClaimType",
+      "default": "observation"
+    },
+    "updated_at": {
+      "format": "date-time",
+      "title": "Updated At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "text"
+  ],
+  "title": "Claim",
+  "type": "object"
+}

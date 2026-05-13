@@ -1,0 +1,117 @@
+{
+  "$defs": {
+    "Scope": {
+      "enum": [
+        "private",
+        "project",
+        "team",
+        "public"
+      ],
+      "title": "Scope",
+      "type": "string"
+    },
+    "SourceType": {
+      "enum": [
+        "file",
+        "url",
+        "transcript",
+        "message",
+        "commit",
+        "issue",
+        "screenshot",
+        "pdf",
+        "audio",
+        "video",
+        "folder"
+      ],
+      "title": "SourceType",
+      "type": "string"
+    }
+  },
+  "$id": "https://vouch.dev/schemas/source.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Immutable input material \u2014 file, URL, transcript, commit, etc.\n\nIdentified by sha256 of content (when content is captured locally).\n`locator` retains the human-facing path/URL.",
+  "properties": {
+    "byte_size": {
+      "default": 0,
+      "title": "Byte Size",
+      "type": "integer"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "hash": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "sha256; mirrors id for content-addressed sources",
+      "title": "Hash"
+    },
+    "id": {
+      "description": "sha256 of content (hex)",
+      "title": "Id",
+      "type": "string"
+    },
+    "immutable": {
+      "default": true,
+      "title": "Immutable",
+      "type": "boolean"
+    },
+    "locator": {
+      "description": "path, URL, commit hash, etc.",
+      "title": "Locator",
+      "type": "string"
+    },
+    "media_type": {
+      "default": "text/plain",
+      "title": "Media Type",
+      "type": "string"
+    },
+    "metadata": {
+      "additionalProperties": true,
+      "title": "Metadata",
+      "type": "object"
+    },
+    "scope": {
+      "$ref": "#/$defs/Scope",
+      "default": "project"
+    },
+    "tags": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Tags",
+      "type": "array"
+    },
+    "title": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Title"
+    },
+    "type": {
+      "$ref": "#/$defs/SourceType",
+      "default": "file"
+    }
+  },
+  "required": [
+    "id",
+    "locator"
+  ],
+  "title": "Source",
+  "type": "object"
+}

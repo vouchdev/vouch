@@ -1,0 +1,68 @@
+{
+  "$id": "https://vouch.dev/schemas/context-quality.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Quality gate metadata attached to every ContextPack.",
+  "properties": {
+    "budget_clipped_items": {
+      "default": 0,
+      "title": "Budget Clipped Items",
+      "type": "integer"
+    },
+    "budget_omitted_items": {
+      "default": 0,
+      "title": "Budget Omitted Items",
+      "type": "integer"
+    },
+    "budget_truncated": {
+      "default": false,
+      "title": "Budget Truncated",
+      "type": "boolean"
+    },
+    "fail_on_warnings": {
+      "default": false,
+      "title": "Fail On Warnings",
+      "type": "boolean"
+    },
+    "failed": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Failed",
+      "type": "array"
+    },
+    "items": {
+      "default": 0,
+      "title": "Items",
+      "type": "integer"
+    },
+    "minimum_items": {
+      "default": 0,
+      "title": "Minimum Items",
+      "type": "integer"
+    },
+    "ok": {
+      "default": true,
+      "title": "Ok",
+      "type": "boolean"
+    },
+    "require_citations": {
+      "default": false,
+      "title": "Require Citations",
+      "type": "boolean"
+    },
+    "uncited_items": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Uncited Items",
+      "type": "array"
+    },
+    "warnings": {
+      "default": 0,
+      "title": "Warnings",
+      "type": "integer"
+    }
+  },
+  "title": "ContextQuality",
+  "type": "object"
+}

@@ -1,0 +1,122 @@
+{
+  "$defs": {
+    "ProposalKind": {
+      "enum": [
+        "claim",
+        "page",
+        "entity",
+        "relation"
+      ],
+      "title": "ProposalKind",
+      "type": "string"
+    },
+    "ProposalStatus": {
+      "enum": [
+        "pending",
+        "approved",
+        "rejected"
+      ],
+      "title": "ProposalStatus",
+      "type": "string"
+    }
+  },
+  "$id": "https://vouch.dev/schemas/proposal.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "An agent's pending write. Lives outside git until reviewed.",
+  "properties": {
+    "decided_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Decided At"
+    },
+    "decided_by": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Decided By"
+    },
+    "decision_reason": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Decision Reason"
+    },
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "kind": {
+      "$ref": "#/$defs/ProposalKind"
+    },
+    "payload": {
+      "additionalProperties": true,
+      "title": "Payload",
+      "type": "object"
+    },
+    "proposed_at": {
+      "format": "date-time",
+      "title": "Proposed At",
+      "type": "string"
+    },
+    "proposed_by": {
+      "title": "Proposed By",
+      "type": "string"
+    },
+    "rationale": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Rationale"
+    },
+    "session_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Session Id"
+    },
+    "status": {
+      "$ref": "#/$defs/ProposalStatus",
+      "default": "pending"
+    }
+  },
+  "required": [
+    "id",
+    "kind",
+    "proposed_by",
+    "payload"
+  ],
+  "title": "Proposal",
+  "type": "object"
+}

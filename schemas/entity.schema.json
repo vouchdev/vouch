@@ -1,0 +1,90 @@
+{
+  "$defs": {
+    "EntityType": {
+      "enum": [
+        "person",
+        "project",
+        "repo",
+        "company",
+        "concept",
+        "decision",
+        "workflow",
+        "file",
+        "api",
+        "incident",
+        "source",
+        "agent",
+        "tool",
+        "team",
+        "system"
+      ],
+      "title": "EntityType",
+      "type": "string"
+    }
+  },
+  "$id": "https://vouch.dev/schemas/entity.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Typed named thing \u2014 a person, project, repo, concept, \u2026\n\nEntities anchor relations and aggregate the claims that mention them.",
+  "properties": {
+    "aliases": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Aliases",
+      "type": "array"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "description": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Description"
+    },
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "name": {
+      "title": "Name",
+      "type": "string"
+    },
+    "page": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional page id for this entity",
+      "title": "Page"
+    },
+    "type": {
+      "$ref": "#/$defs/EntityType"
+    },
+    "updated_at": {
+      "format": "date-time",
+      "title": "Updated At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "name",
+    "type"
+  ],
+  "title": "Entity",
+  "type": "object"
+}

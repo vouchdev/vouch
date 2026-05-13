@@ -1,0 +1,54 @@
+{
+  "$id": "https://vouch.dev/schemas/audit-event.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Append-only record of one mutation. Written to `.vouch/audit.log.jsonl`.",
+  "properties": {
+    "actor": {
+      "title": "Actor",
+      "type": "string"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "data": {
+      "additionalProperties": true,
+      "title": "Data",
+      "type": "object"
+    },
+    "dry_run": {
+      "default": false,
+      "title": "Dry Run",
+      "type": "boolean"
+    },
+    "event": {
+      "description": "dotted verb, e.g. 'claim.create', 'proposal.approve'",
+      "title": "Event",
+      "type": "string"
+    },
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "object_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Object Ids",
+      "type": "array"
+    },
+    "reversible": {
+      "default": true,
+      "title": "Reversible",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "id",
+    "event",
+    "actor"
+  ],
+  "title": "AuditEvent",
+  "type": "object"
+}
