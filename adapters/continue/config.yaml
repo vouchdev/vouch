@@ -1,0 +1,6 @@
+mcpServers:
+  - name: vouch
+    command: vouch
+    args: ["serve"]
+    env:
+      VOUCH_AGENT: continue
