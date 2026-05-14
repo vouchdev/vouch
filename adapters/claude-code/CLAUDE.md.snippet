@@ -1,0 +1,43 @@
+# Vouch — knowledge base
+
+This repo uses **vouch** for durable agent knowledge. The KB lives in
+`.vouch/` and is reviewed in PRs like any other code.
+
+## How to remember things
+
+To preserve a fact, decision, or workflow across sessions:
+
+1. Register evidence: `kb_register_source` (or
+   `kb_register_source_from_path` for a file).
+2. Propose a claim that cites it: `kb_propose_claim`. Every claim
+   MUST cite at least one source or evidence id.
+3. For richer write-ups, propose pages: `kb_propose_page` with a
+   markdown body that references claims.
+
+You **cannot** write durable knowledge directly. Proposals land in
+`.vouch/proposed/` and require human approval via `vouch approve`.
+This is intentional.
+
+## How to read
+
+- `kb_search` for keyword search.
+- `kb_context` to fill a working set for a task ("what does this KB
+  know about X?").
+- `kb_read_*` for specific ids.
+
+## Lifecycle hygiene
+
+When you find a claim that's wrong or out-of-date:
+
+- If you can replace it with a corrected version, use `kb_supersede`
+  rather than proposing a contradicting claim.
+- If two existing claims conflict, mark them with `kb_contradict` so
+  the human can choose.
+- Re-cite a claim you used recently with `kb_confirm` — it bumps
+  `last_confirmed_at` so the lint doesn't flag it as stale.
+
+## Identity
+
+You are recorded as `proposed_by: claude-code` in the audit log. Be
+mindful that everything you propose is visible to whoever runs
+`vouch pending`.

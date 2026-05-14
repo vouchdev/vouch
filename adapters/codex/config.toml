@@ -1,0 +1,6 @@
+[mcp_servers.vouch]
+command = "vouch"
+args = ["serve"]
+
+[mcp_servers.vouch.env]
+VOUCH_AGENT = "codex"
