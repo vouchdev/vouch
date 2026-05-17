@@ -18,7 +18,7 @@ classifiers = [
 ]
 dependencies = [
     "pydantic>=2.5,<3",
-    "click>=8.1,<9",
+    "click>=8.4.0,<9",
     "pyyaml>=6,<7",
     "mcp>=1.0,<2",
 ]
