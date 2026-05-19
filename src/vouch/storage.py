@@ -249,7 +249,7 @@ class KBStore:
         except FileExistsError:
             raise ValueError(
                 f"claim {claim.id} already exists -- use update_claim()"
-            )
+            ) from None
         return claim
 
     def get_claim(self, claim_id: str) -> Claim:
@@ -285,7 +285,7 @@ class KBStore:
         except FileExistsError:
             raise ValueError(
                 f"page {page.id} already exists -- choose a different slug"
-            )
+            ) from None
         return page
 
     def get_page(self, page_id: str) -> Page:
@@ -309,7 +309,7 @@ class KBStore:
         except FileExistsError:
             raise ValueError(
                 f"entity {entity.id} already exists -- choose a different slug"
-            )
+            ) from None
         return entity
 
     def get_entity(self, eid: str) -> Entity:
@@ -334,7 +334,7 @@ class KBStore:
         except FileExistsError:
             raise ValueError(
                 f"relation {rel.id} already exists -- choose a different slug"
-            )
+            ) from None
         return rel
 
     def get_relation(self, rid: str) -> Relation:
@@ -367,7 +367,7 @@ class KBStore:
         except FileExistsError:
             raise ValueError(
                 f"evidence {ev.id} already exists -- choose a different slug"
-            )
+            ) from None
         return ev
 
     def get_evidence(self, eid: str) -> Evidence:
@@ -392,7 +392,7 @@ class KBStore:
         except FileExistsError:
             raise ValueError(
                 f"session {sess.id} already exists -- choose a different id"
-            )
+            ) from None
         return sess
 
     def get_session(self, sid: str) -> Session:
@@ -417,7 +417,7 @@ class KBStore:
         except FileExistsError:
             raise ValueError(
                 f"proposal {proposal.id} already exists -- choose a different id"
-            )
+            ) from None
         return proposal
 
     def get_proposal(self, proposal_id: str) -> Proposal:

@@ -13,7 +13,7 @@ from pathlib import Path
 
 from . import audit
 from .models import Source
-from .storage import KBStore, ArtifactNotFoundError, sha256_hex
+from .storage import ArtifactNotFoundError, KBStore, sha256_hex
 
 
 @dataclass
