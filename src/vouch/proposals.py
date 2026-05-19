@@ -21,7 +21,7 @@ from .models import (
     ProposalStatus,
     Relation,
 )
-from .storage import KBStore
+from .storage import ArtifactNotFoundError, KBStore
 
 
 class ProposalError(RuntimeError):
@@ -223,6 +223,10 @@ def approve(
             f"proposal {proposal_id} is {proposal.status.value}, not pending"
         )
     payload = dict(proposal.payload)
+    # Refuse to overwrite an existing artifact. Without this guard a retry
+    # after a crash between put_<kind>() and move_proposal_to_decided() would
+    # silently rewrite the artifact with new approved_by / created_at metadata.
+    _ensure_no_existing_artifact(store, proposal.kind, payload["id"])
     result: Claim | Page | Entity | Relation
     if proposal.kind == ProposalKind.CLAIM:
         claim = Claim(approved_by=approved_by, **payload)
@@ -294,6 +298,29 @@ def reject(
         data={"reason": reason},
     )
     return proposal
+
+
+_ARTIFACT_GETTERS = {
+    ProposalKind.CLAIM: "get_claim",
+    ProposalKind.PAGE: "get_page",
+    ProposalKind.ENTITY: "get_entity",
+    ProposalKind.RELATION: "get_relation",
+}
+
+
+def _ensure_no_existing_artifact(
+    store: KBStore, kind: ProposalKind, artifact_id: str
+) -> None:
+    getter = getattr(store, _ARTIFACT_GETTERS[kind])
+    try:
+        getter(artifact_id)
+    except ArtifactNotFoundError:
+        return
+    raise ProposalError(
+        f"cannot approve: {kind.value} {artifact_id} already exists "
+        f"(a prior approve may have been interrupted; reconcile manually "
+        f"by removing the artifact or rejecting this proposal)"
+    )
 
 
 def _slugify(text: str) -> str:
