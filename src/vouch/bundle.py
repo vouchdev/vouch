@@ -20,6 +20,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import re
 import tarfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -57,6 +58,7 @@ def _init_validators():
     _VALIDATORS.update({
         "claims": lambda data: Claim.model_validate(yaml.safe_load(data)),
         "pages": lambda data: _deserialize_page(data.decode()),
+        "sources": lambda data: Source.model_validate(yaml.safe_load(data)),
         "entities": lambda data: Entity.model_validate(yaml.safe_load(data)),
         "relations": lambda data: Relation.model_validate(yaml.safe_load(data)),
         "evidence": lambda data: Evidence.model_validate(yaml.safe_load(data)),
@@ -65,20 +67,26 @@ def _init_validators():
     })
 
 
+_PAGE_FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---\n?(.*)$", re.DOTALL)
+
+
 def _deserialize_page(data: str) -> Page:
-    parts = data.split("\n---\n", 1)
-    if len(parts) == 2:
-        meta = yaml.safe_load(parts[0]) or {}
-        body = parts[1].strip()
-    else:
-        meta = yaml.safe_load(data) or {}
-        body = ""
+    m = _PAGE_FRONTMATTER_RE.match(data)
+    if not m:
+        raise ValueError("missing YAML frontmatter")
+    meta = yaml.safe_load(m.group(1)) or {}
+    body = m.group(2)
     return Page(**{**meta, "body": body})
+
+
+_VALID_EXTENSIONS = {".yaml", ".yml", ".md"}
 
 
 def _validate_bundle_content(
     member_name: str, body: bytes,
 ) -> str | None:
+    if not any(member_name.endswith(ext) for ext in _VALID_EXTENSIONS):
+        return None
     subdir = member_name.split("/")[0]
     validator = _VALIDATORS.get(subdir)
     if validator is None:
@@ -278,7 +286,8 @@ def import_apply(
     if on_conflict == "fail" and check.conflicts:
         raise RuntimeError(f"refusing to import: {len(check.conflicts)} conflicts")
     written: list[str] = []
-    skipped: list[str] = []
+    skipped_conflicts: list[str] = []
+    skipped_schema: list[str] = []
     with tarfile.open(bundle_path, "r:gz") as tar:
         manifest = json.loads(
             tar.extractfile(tar.getmember(MANIFEST_NAME)).read().decode()  # type: ignore[union-attr]
@@ -296,12 +305,12 @@ def import_apply(
                 and sha256_hex(dest.read_bytes())
                 != recorded[member.name]["sha256"]
             ):
-                skipped.append(member.name)
+                skipped_conflicts.append(member.name)
                 continue
             body = tar.extractfile(member).read()  # type: ignore[union-attr]
             err = _validate_bundle_content(member.name, body)
             if err is not None:
-                skipped.append(member.name)
+                skipped_schema.append(member.name)
                 continue
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_bytes(body)
@@ -309,7 +318,8 @@ def import_apply(
     result = {
         "bundle_id": check.bundle_id,
         "written": written,
-        "skipped_conflicts": skipped,
+        "skipped_conflicts": skipped_conflicts,
+        "skipped_schema": skipped_schema,
         "identical": check.identical,
         "on_conflict": on_conflict,
     }
@@ -318,7 +328,8 @@ def import_apply(
         object_ids=[check.bundle_id],
         data={
             "written": len(written),
-            "skipped": len(skipped),
+            "skipped_conflicts": len(skipped_conflicts),
+            "skipped_schema": len(skipped_schema),
             "on_conflict": on_conflict,
         },
     )

@@ -6,6 +6,11 @@ All notable changes to vouch are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+- Content validation on bundle import: `import_check` and `import_apply`
+  now validate artifact content against Pydantic models before writing.
+  Files that fail schema validation are reported and skipped.
+
 ## [0.0.1] — 2026-05-17
 
 Initial alpha. Surface intentionally small; expect breaking changes pre-1.0.
@@ -24,13 +29,3 @@ Initial alpha. Surface intentionally small; expect breaking changes pre-1.0.
   `session start/end`, `crystallize`, `search`, `context`, `index`,
   `audit`, `export`, `export-check`, `import-check`, `import-apply`,
   `serve`.
-- Transports: MCP over stdio and newline-delimited JSON (JSONL).
-- SQLite FTS5 index, rebuildable from files.
-- Append-only audit log, JSONL.
-- Portable bundle export/import (tar.gz + manifest with per-file sha256).
-- Content-addressed sources; evidence registration de-duplicates.
-- Claim validation: at least one source/evidence citation required.
-- Per-agent attribution via `VOUCH_AGENT` env var.
-
-[Unreleased]: https://github.com/plind-junior/vouch/compare/v0.0.1...HEAD
-[0.0.1]: https://github.com/plind-junior/vouch/releases/tag/v0.0.1
