@@ -283,6 +283,7 @@ class KBStore:
             raise ValueError(
                 f"claim {claim.id} already exists -- use update_claim()"
             ) from e
+        self._embed_and_store(kind="claim", id=claim.id, text=claim.text)
         return claim
 
     def get_claim(self, claim_id: str) -> Claim:
@@ -449,6 +450,47 @@ class KBStore:
             return []
         return [Session.model_validate(_yaml_load(p.read_text()))
                 for p in sorted(d.glob("*.yaml"))]
+
+    # --- embedding hook ------------------------------------------------------
+
+    def _embed_and_store(self, *, kind: str, id: str, text: str) -> None:
+        """Compute and persist an embedding for an artifact.
+
+        Skipped if (kind, id) already exists with the same content hash.
+        Failures (e.g. embeddings extras not installed) are swallowed --
+        embeddings are an enhancement, not a hard requirement.
+        """
+        if not text or not text.strip():
+            return
+        try:
+            from . import index_db as _index_db
+            from .embeddings import content_hash, get_embedder
+        except ImportError:
+            return
+        h = content_hash(text)
+        existing = _index_db.get_embedding(self.kb_dir, kind=kind, id=id)
+        if existing is not None and existing[1] == h:
+            return
+        try:
+            embedder = get_embedder()
+        except KeyError:
+            return
+        vec = embedder.encode(text)
+        with _index_db.open_db(self.kb_dir) as conn:
+            _index_db.put_embedding(
+                conn, kind=kind, id=id, vec=vec, content_hash=h,
+                model=embedder.name, model_version=embedder.version,
+                dim=embedder.dim,
+            )
+        _index_db.set_embedding_meta(
+            self.kb_dir, model=embedder.name,
+            version=embedder.version, dim=embedder.dim,
+        )
+        try:
+            from .embeddings.dedup import check_and_log
+            check_and_log(self.kb_dir, kind=kind, id=id, vec=vec)
+        except ImportError:
+            pass
 
     # --- proposals ---------------------------------------------------------
 
