@@ -210,6 +210,13 @@ class ImportCheckResult:
 
 def _validate_content(path: str, data: bytes, issues: list[str]) -> None:
     subdir = path.split("/")[0]
+    # Source artifacts have two file kinds:
+    #   sources/<sha>/meta.yaml  -- the Source pydantic model (validate)
+    #   sources/<sha>/content    -- the raw source bytes (skip validation)
+    # The opaque content file isn't a pydantic model, so model_validate
+    # on raw bytes raises spuriously.
+    if subdir == "sources" and not path.endswith("/meta.yaml"):
+        return
     validator = VALIDATORS.get(subdir)
     if validator is None:
         return
