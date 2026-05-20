@@ -524,7 +524,8 @@ def search(
 
     if rerank and hits:
         try:
-            from .embeddings.rerank import default_reranker, rerank as do_rerank
+            from .embeddings.rerank import default_reranker
+            from .embeddings.rerank import rerank as do_rerank
             hits = do_rerank(query=query, hits=hits, reranker=default_reranker(),
                              top_k=limit)
         except ImportError:
@@ -617,19 +618,19 @@ def eval_group() -> None:
 def eval_embedding(queries: str, metric: str) -> None:
     """Run retrieval-quality metrics over a JSONL query set."""
     from pathlib import Path as _Path
+
     from .embeddings.scorer import evaluate
     store = _load_store()
     metrics = tuple(m.strip() for m in metric.split(","))
     canonical = tuple(
         "recall@k" if m.startswith("recall@") else m for m in metrics
     )
+    import contextlib
     k = 10
     for m in metrics:
         if m.startswith("recall@"):
-            try:
+            with contextlib.suppress(ValueError):
                 k = int(m.split("@", 1)[1])
-            except ValueError:
-                pass
     out = evaluate(
         kb_dir=store.kb_dir,
         queries_file=_Path(queries),

@@ -441,6 +441,7 @@ def _h_dedup_scan(p: dict) -> dict:
 
 def _h_eval_embeddings(p: dict) -> dict:
     from pathlib import Path
+
     from .embeddings.scorer import evaluate
     return evaluate(
         kb_dir=_store().kb_dir,

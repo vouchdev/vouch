@@ -620,6 +620,7 @@ def kb_dedup_scan(
 def kb_eval_embeddings(*, queries_path: str, k: int = 10) -> dict[str, Any]:
     """Run retrieval eval over a JSONL queries file."""
     from pathlib import Path
+
     from .embeddings.scorer import evaluate
     store = _store()
     return evaluate(

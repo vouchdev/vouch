@@ -7,12 +7,12 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
+from tests.embeddings._fakes import MockEmbedder
 from vouch.cli import cli
 from vouch.embeddings import register
 from vouch.embeddings.base import DEFAULT_MODEL_NAME
 from vouch.models import Claim
 from vouch.storage import KBStore
-from tests.embeddings._fakes import MockEmbedder
 
 
 @pytest.fixture(autouse=True)
@@ -77,7 +77,7 @@ def test_dedup_scan_lists_duplicates(kb: Path) -> None:
 
 def test_reindex_embeddings_backfills(kb: Path) -> None:
     from vouch import index_db
-    from vouch.storage import discover_root, KBStore
+    from vouch.storage import KBStore, discover_root
     store = KBStore(discover_root(kb))
     with index_db.open_db(store.kb_dir) as conn:
         conn.execute("DELETE FROM embedding_index")
