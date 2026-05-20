@@ -33,6 +33,20 @@ dev = [
     "mypy>=1.10",
     "types-pyyaml",
 ]
+embeddings = [
+    "sentence-transformers>=2.7,<4",
+    "numpy>=1.26,<3",
+    "sqlite-vec>=0.1,<1",
+]
+embeddings-fast = [
+    "fastembed>=0.3,<1",
+    "onnxruntime>=1.18,<2",
+    "numpy>=1.26,<3",
+    "sqlite-vec>=0.1,<1",
+]
+rerank = [
+    "sentence-transformers>=2.7,<4",
+]
 
 [project.scripts]
 vouch = "vouch.cli:cli"
@@ -57,4 +71,7 @@ select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
+addopts = "-q -m 'not integration'"
+markers = [
+    "integration: tests that load the real embedding model (slow, network on first run)",
+]
