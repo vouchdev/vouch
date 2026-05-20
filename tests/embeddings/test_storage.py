@@ -82,9 +82,13 @@ def test_set_embedding_meta_round_trip(kb_dir: Path) -> None:
 def test_search_embedding_returns_topk(kb_dir: Path) -> None:
     from vouch.embeddings.base import content_hash as ch
 
-    query = np.zeros(8, dtype=np.float32); query[0] = 1.0
-    near = np.zeros(8, dtype=np.float32); near[0] = 0.99; near[1] = 0.05
-    far  = np.zeros(8, dtype=np.float32); far[7] = 1.0
+    query = np.zeros(8, dtype=np.float32)
+    query[0] = 1.0
+    near = np.zeros(8, dtype=np.float32)
+    near[0] = 0.99
+    near[1] = 0.05
+    far = np.zeros(8, dtype=np.float32)
+    far[7] = 1.0
     near /= float(np.linalg.norm(near))
     with index_db.open_db(kb_dir) as conn:
         for cid, vec in [("c-near", near), ("c-far", far)]:
@@ -100,14 +104,17 @@ def test_search_embedding_returns_topk(kb_dir: Path) -> None:
 
 
 def test_search_embedding_empty_db(kb_dir: Path) -> None:
-    q = np.zeros(8, dtype=np.float32); q[0] = 1.0
+    q = np.zeros(8, dtype=np.float32)
+    q[0] = 1.0
     hits = index_db.search_embedding(kb_dir, query_vec=q, kinds=("claim",), limit=5)
     assert hits == []
 
 
 def test_search_embedding_filters_by_kind(kb_dir: Path) -> None:
     from vouch.embeddings.base import content_hash as ch
-    v = np.zeros(4, dtype=np.float32); v[0] = 1.0
+
+    v = np.zeros(4, dtype=np.float32)
+    v[0] = 1.0
     with index_db.open_db(kb_dir) as conn:
         index_db.put_embedding(conn, kind="claim", id="c1", vec=v,
                                content_hash=ch("c1"), model="mock",
@@ -147,9 +154,7 @@ def test_search_works_under_both_backends(kb_dir: Path) -> None:
 
 
 def test_query_cache_round_trip(kb_dir: Path) -> None:
-    from vouch.embeddings.cache import (
-        cache_query_vec, lookup_query_vec, query_cache_size,
-    )
+    from vouch.embeddings.cache import cache_query_vec, lookup_query_vec, query_cache_size
     v = np.ones(4, dtype=np.float32)
     cache_query_vec(kb_dir, query="hello", vec=v)
     got = lookup_query_vec(kb_dir, query="hello")

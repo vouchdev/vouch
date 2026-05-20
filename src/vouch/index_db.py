@@ -11,9 +11,10 @@ second `backend` in the ContextItem response.
 
 from __future__ import annotations
 
+import datetime as _dt
 import sqlite3
 from collections.abc import Iterable
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from pathlib import Path
 
 DB_FILENAME = "state.db"
@@ -180,8 +181,6 @@ def stats(kb_dir: Path) -> dict[str, int]:
 
 # --- embeddings storage --------------------------------------------------
 
-import datetime as _dt
-
 
 def _vec_to_blob(vec):  # type: ignore[no-untyped-def]
     import numpy as np
@@ -266,10 +265,8 @@ def _load_sqlite_vec(conn: sqlite3.Connection) -> bool:
     except sqlite3.OperationalError:
         return False
     finally:
-        try:
+        with suppress(sqlite3.OperationalError):
             conn.enable_load_extension(False)
-        except sqlite3.OperationalError:
-            pass
     _sqlite_vec_loaded.add(id(conn))
     return True
 
