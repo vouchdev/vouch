@@ -225,14 +225,13 @@ def kb_register_source(
 def kb_register_source_from_path(path: str, title: str | None = None,
                                  url: str | None = None,
                                  source_type: str = "file") -> dict[str, Any]:
-    p = Path(path)
-    if not p.is_file():
-        raise ValueError(f"not a file: {path}")
-    src = _store().put_source(
-        p.read_bytes(), title=title or p.name, url=url,
-        locator=str(p.resolve()), source_type=source_type,
+    s = _store()
+    p, body = s.read_under_root(path)
+    src = s.put_source(
+        body, title=title or p.name, url=url,
+        locator=str(p), source_type=source_type,
     )
-    audit.log_event(_store().kb_dir, event="source.add", actor=_agent(),
+    audit.log_event(s.kb_dir, event="source.add", actor=_agent(),
                     object_ids=[src.id])
     return src.model_dump(mode="json")
 

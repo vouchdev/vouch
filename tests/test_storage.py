@@ -222,6 +222,28 @@ def test_double_approve_rejected(store: KBStore) -> None:
         approve(store, pr.id, approved_by="u")
 
 
+def test_approve_refuses_to_overwrite_existing_artifact(store: KBStore) -> None:
+    # Regression for #11: approve() wrote the artifact before moving the
+    # proposal to decided/. A crash between the two steps would leave the
+    # proposal PENDING with the artifact already on disk, and a retry would
+    # silently overwrite it with new approved_by / created_at metadata.
+    src = store.put_source(b"e")
+    store.put_claim(
+        Claim(id="auth-uses-jwt", text="prior write", evidence=[src.id],
+              approved_by="first-reviewer")
+    )
+    pr = propose_claim(
+        store, text="auth uses JWT", evidence=[src.id], proposed_by="agent",
+        slug_hint="auth-uses-jwt",
+    )
+    with pytest.raises(ProposalError, match="already exists"):
+        approve(store, pr.id, approved_by="second-reviewer")
+    survivor = store.get_claim("auth-uses-jwt")
+    assert survivor.text == "prior write"
+    assert survivor.approved_by == "first-reviewer"
+    assert store.get_proposal(pr.id).status == ProposalStatus.PENDING
+
+
 def test_reject_requires_reason(store: KBStore) -> None:
     src = store.put_source(b"e")
     pr = propose_claim(store, text="t", evidence=[src.id], proposed_by="a")

@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 from . import audit
 from .models import Page, PageType, ProposalStatus, Session
 from .proposals import approve
-from .storage import KBStore, _yaml_dump
+from .storage import KBStore
 
 
 def new_session_id() -> str:
@@ -44,8 +44,7 @@ def session_end(store: KBStore, session_id: str, *, note: str | None = None) -> 
     sess.proposal_ids = sorted({
         p.id for p in store.list_proposals() if p.session_id == sess.id
     })
-    path = store._session_path(sess.id)
-    path.write_text(_yaml_dump(sess.model_dump(mode="json")))
+    store.update_session(sess)
     audit.log_event(
         store.kb_dir, event="session.end", actor=sess.agent,
         object_ids=[sess.id], data={"proposals": len(sess.proposal_ids)},

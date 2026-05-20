@@ -65,6 +65,77 @@ def test_jsonl_full_flow(store: KBStore, monkeypatch) -> None:
     assert caps["result"]["review_gated"] is True
 
 
+def test_register_source_from_path_rejects_outside_root(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch
+) -> None:
+    # Regression for #10: kb.register_source_from_path must not read files
+    # outside the project root. Without the guard, an agent can name
+    # /etc/passwd, ~/.ssh/id_rsa, etc. and exfiltrate the contents via
+    # kb.cite / kb.list_sources.
+    kb_root = tmp_path_factory.mktemp("kb")
+    outside = tmp_path_factory.mktemp("outside")
+    secret = outside / "secret.txt"
+    secret.write_text("super-secret payload")
+    store = KBStore.init(kb_root)
+    monkeypatch.chdir(store.root)
+    resp = handle_request({
+        "id": "r1", "method": "kb.register_source_from_path",
+        "params": {"path": str(secret)},
+    })
+    assert not resp["ok"]
+    assert resp["error"]["code"] == "invalid_request"
+    assert "project root" in resp["error"]["message"]
+    # The store should be empty — the secret must not have been ingested.
+    assert store.list_sources() == []
+
+
+def test_register_source_from_path_accepts_inside_root(
+    store: KBStore, monkeypatch
+) -> None:
+    inside = store.root / "doc.txt"
+    inside.write_text("project content")
+    monkeypatch.chdir(store.root)
+    resp = handle_request({
+        "id": "r1", "method": "kb.register_source_from_path",
+        "params": {"path": str(inside)},
+    })
+    assert resp["ok"]
+    assert len(store.list_sources()) == 1
+
+
+def test_read_under_root_rejects_symlink_at_resolved_path(
+    store: KBStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # CodeRabbit review on PR #28 flagged a TOCTOU between the containment
+    # check and the actual read: even after Path.resolve() lands inside the
+    # KB root, an attacker who can swap the resolved name for a symlink
+    # before the read could still exfiltrate an out-of-root file. Defence
+    # is O_NOFOLLOW at open time.
+    #
+    # Simulate the race by short-circuiting Path.resolve() so the symlink
+    # itself is the "resolved" path that read_under_root opens.
+    target = store.root / "real.txt"
+    target.write_bytes(b"real content")
+    swap_link = store.root / "swap.txt"
+    swap_link.symlink_to(target)
+    monkeypatch.setattr(Path, "resolve", lambda self, **_kw: self)
+
+    with pytest.raises(ValueError, match="cannot read"):
+        store.read_under_root(swap_link)
+
+
+def test_read_under_root_rejects_directory(
+    store: KBStore, tmp_path: Path
+) -> None:
+    # Without the fstat/S_ISREG check, an attacker could ingest a directory
+    # listing or device node through register_source_from_path. read_under_root
+    # rejects anything that isn't a regular file even when it lives inside root.
+    subdir = store.root / "subdir"
+    subdir.mkdir()
+    with pytest.raises(ValueError, match="not a regular file"):
+        store.read_under_root(subdir)
+
+
 def test_jsonl_session_lifecycle(store: KBStore, monkeypatch) -> None:
     src = store.put_source(b"e")
     monkeypatch.chdir(store.root)

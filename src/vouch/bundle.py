@@ -221,7 +221,7 @@ def import_check(kb_dir: Path, bundle_path: Path) -> ImportCheckResult:
             _validate_content(member.name, body, issues)
 
     return ImportCheckResult(
-        ok=True, bundle_id=bundle_id,
+        ok=not issues, bundle_id=bundle_id,
         new_files=new_files, conflicts=conflicts,
         identical=identical, issues=issues,
     )
@@ -267,7 +267,11 @@ def import_apply(
                 continue
             dest.parent.mkdir(parents=True, exist_ok=True)
             body = tar.extractfile(member).read()  # type: ignore[union-attr]
-            _validate_content(member.name, body, [])
+            member_issues: list[str] = []
+            _validate_content(member.name, body, member_issues)
+            if member_issues:
+                skipped.append(member.name)
+                continue
             dest.write_bytes(body)
             written.append(member.name)
     result = {

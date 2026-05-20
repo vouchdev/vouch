@@ -13,9 +13,13 @@ This implementation:
 
 from __future__ import annotations
 
+from typing import Literal, cast
+
 from . import index_db
 from .models import ContextItem, ContextPack, ContextQuality
 from .storage import KBStore
+
+ContextItemKind = Literal["claim", "page", "entity", "relation", "source"]
 
 
 def _retrieve(store: KBStore, query: str, limit: int
@@ -61,7 +65,7 @@ def build_context_pack(
             cites = _citations_for_claim(store, hid)
         items.append(
             ContextItem(
-                id=hid, type=kind, summary=summary, score=score,  # type: ignore[arg-type]
+                id=hid, type=cast(ContextItemKind, kind), summary=summary, score=score,
                 backend=backend, citations=cites,
                 freshness="unknown",
             )

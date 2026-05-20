@@ -24,7 +24,9 @@ that `vouch index` can rebuild from disk.
 from __future__ import annotations
 
 import hashlib
+import os
 import re
+import stat
 from pathlib import Path
 from typing import Any
 
@@ -110,6 +112,37 @@ class KBStore:
     def __init__(self, root: Path):
         self.root = root.resolve()
         self.kb_dir = self.root / KB_DIRNAME
+
+    def read_under_root(self, path: str | Path) -> tuple[Path, bytes]:
+        # Guard against arbitrary-file-read primitives exposed by the MCP /
+        # JSONL `register_source_from_path` entrypoints, and against a TOCTOU
+        # race between the containment check and the read: an attacker who
+        # can swap the resolved name for a symlink after Path.resolve() has
+        # validated it could otherwise still exfiltrate an out-of-root file.
+        #
+        # Path.resolve() chases any pre-existing symlinks first (so legitimate
+        # in-root symlinks still work, then their target is the thing checked
+        # for containment). O_NOFOLLOW on the open then rejects a fresh
+        # symlink swapped into the resolved name after the containment check.
+        # fstat + S_ISREG rejects directories / special files atomically.
+        resolved = Path(path).resolve()
+        if not resolved.is_relative_to(self.root):
+            raise ValueError(
+                f"path must be inside project root ({self.root}): {resolved}"
+            )
+        try:
+            fd = os.open(resolved, os.O_RDONLY | os.O_NOFOLLOW)
+        except OSError as e:
+            raise ValueError(f"cannot read {resolved}: {e}") from e
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                os.close(fd)
+                raise ValueError(f"not a regular file: {resolved}")
+        except OSError:
+            os.close(fd)
+            raise
+        with os.fdopen(fd, "rb") as f:
+            return resolved, f.read()
 
     # --- bootstrap ---------------------------------------------------------
 
@@ -246,10 +279,10 @@ class KBStore:
         try:
             with self._claim_path(claim.id).open("x") as f:
                 f.write(_yaml_dump(claim.model_dump(mode="json")))
-        except FileExistsError:
+        except FileExistsError as e:
             raise ValueError(
                 f"claim {claim.id} already exists -- use update_claim()"
-            ) from None
+            ) from e
         return claim
 
     def get_claim(self, claim_id: str) -> Claim:
@@ -282,10 +315,10 @@ class KBStore:
         try:
             with self._page_path(page.id).open("x") as f:
                 f.write(_serialize_page(page))
-        except FileExistsError:
+        except FileExistsError as e:
             raise ValueError(
                 f"page {page.id} already exists -- choose a different slug"
-            ) from None
+            ) from e
         return page
 
     def get_page(self, page_id: str) -> Page:
@@ -306,10 +339,10 @@ class KBStore:
         try:
             with self._entity_path(entity.id).open("x") as f:
                 f.write(_yaml_dump(entity.model_dump(mode="json")))
-        except FileExistsError:
+        except FileExistsError as e:
             raise ValueError(
                 f"entity {entity.id} already exists -- choose a different slug"
-            ) from None
+            ) from e
         return entity
 
     def get_entity(self, eid: str) -> Entity:
@@ -331,10 +364,10 @@ class KBStore:
         try:
             with self._relation_path(rel.id).open("x") as f:
                 f.write(_yaml_dump(rel.model_dump(mode="json")))
-        except FileExistsError:
+        except FileExistsError as e:
             raise ValueError(
                 f"relation {rel.id} already exists -- choose a different slug"
-            ) from None
+            ) from e
         return rel
 
     def get_relation(self, rid: str) -> Relation:
@@ -364,10 +397,10 @@ class KBStore:
         try:
             with self._evidence_path(ev.id).open("x") as f:
                 f.write(_yaml_dump(ev.model_dump(mode="json")))
-        except FileExistsError:
+        except FileExistsError as e:
             raise ValueError(
                 f"evidence {ev.id} already exists -- choose a different slug"
-            ) from None
+            ) from e
         return ev
 
     def get_evidence(self, eid: str) -> Evidence:
@@ -389,10 +422,19 @@ class KBStore:
         try:
             with self._session_path(sess.id).open("x") as f:
                 f.write(_yaml_dump(sess.model_dump(mode="json")))
-        except FileExistsError:
+        except FileExistsError as e:
             raise ValueError(
                 f"session {sess.id} already exists -- choose a different id"
-            ) from None
+            ) from e
+        return sess
+
+    def update_session(self, sess: Session) -> Session:
+        # session_end() mutates an already-on-disk session (sets ended_at /
+        # backfills proposal_ids). put_session() uses exclusive create as a
+        # guard against duplicate ids, so updates need a separate path.
+        if not self._session_path(sess.id).exists():
+            raise ArtifactNotFoundError(f"session {sess.id}")
+        self._session_path(sess.id).write_text(_yaml_dump(sess.model_dump(mode="json")))
         return sess
 
     def get_session(self, sid: str) -> Session:
@@ -414,10 +456,10 @@ class KBStore:
         try:
             with self._proposal_path(proposal.id).open("x") as f:
                 f.write(_yaml_dump(proposal.model_dump(mode="json")))
-        except FileExistsError:
+        except FileExistsError as e:
             raise ValueError(
                 f"proposal {proposal.id} already exists -- choose a different id"
-            ) from None
+            ) from e
         return proposal
 
     def get_proposal(self, proposal_id: str) -> Proposal:
