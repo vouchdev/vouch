@@ -127,7 +127,7 @@ def _h_search(p: dict) -> list[dict]:
 
 
 def _h_context(p: dict) -> dict:
-    return build_context_pack(
+    return build_context_pack(  # type: ignore[return-value]
         _store(),
         query=p["task"],
         limit=int(p.get("limit", 10)),
@@ -136,7 +136,7 @@ def _h_context(p: dict) -> dict:
         require_citations=bool(p.get("require_citations", False)),
         fail_on_warnings=bool(p.get("fail_on_warnings", False)),
         fail_on_budget_truncation=bool(p.get("fail_on_budget_truncation", False)),
-    ).model_dump(mode="json")
+    )
 
 
 def _h_read_page(p: dict) -> dict:

@@ -152,10 +152,10 @@ def kb_context(
     require_citations: bool = False,
 ) -> dict[str, Any]:
     """Build a ContextPack ready to inject into an agent prompt."""
-    return build_context_pack(
+    return build_context_pack(  # type: ignore[return-value]
         _store(), query=task, limit=limit, max_chars=max_chars,
         min_items=min_items, require_citations=require_citations,
-    ).model_dump(mode="json")
+    )
 
 
 @mcp.tool()

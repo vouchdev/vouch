@@ -514,7 +514,7 @@ def context(task: str, limit: int, max_chars: int | None,
         store, query=task, limit=limit, max_chars=max_chars,
         min_items=min_items, require_citations=require_citations,
     )
-    _emit_json(pack.model_dump(mode="json"))
+    _emit_json(pack)
 
 
 @cli.command()
