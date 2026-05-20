@@ -8,6 +8,8 @@ The base install of vouch has no hard dependency on this package -- the
 modules are only imported when an embedding code path executes.
 """
 
+import contextlib
+
 from .base import (
     DEFAULT_MODEL_NAME,
     Embedder,
@@ -17,20 +19,16 @@ from .base import (
 )
 
 # Auto-register the default adapter if sentence-transformers is installed.
-try:
+# Each adapter import is best-effort -- failure means that adapter's optional
+# dependency isn't installed, which is fine (a different adapter may be).
+with contextlib.suppress(ImportError):
     from . import st_mpnet  # noqa: F401
-except ImportError:
-    pass
 
-try:
+with contextlib.suppress(ImportError):
     from . import st_minilm  # noqa: F401
-except ImportError:
-    pass
 
-try:
+with contextlib.suppress(ImportError):
     from . import fastembed_bge  # noqa: F401
-except ImportError:
-    pass
 
 __all__ = [
     "DEFAULT_MODEL_NAME",

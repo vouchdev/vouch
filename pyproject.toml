@@ -75,3 +75,25 @@ addopts = "-q -m 'not integration'"
 markers = [
     "integration: tests that load the real embedding model (slow, network on first run)",
 ]
+
+# numpy is an optional runtime dependency (pulled in by the [embeddings] or
+# [embeddings-fast] extras); the base CI install only has [dev], so mypy can't
+# resolve `import numpy as np` in the embedding-stack modules. Silence the
+# missing-stub errors -- the embeddings code paths are only reached when the
+# extras are installed, and the test suite for those paths runs in a separate
+# job with the extras present.
+[[tool.mypy.overrides]]
+module = ["numpy", "numpy.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["sqlite_vec", "sqlite_vec.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["sentence_transformers", "sentence_transformers.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["fastembed", "fastembed.*"]
+ignore_missing_imports = true
