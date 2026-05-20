@@ -407,6 +407,15 @@ class KBStore:
             ) from e
         return sess
 
+    def update_session(self, sess: Session) -> Session:
+        # session_end() mutates an already-on-disk session (sets ended_at /
+        # backfills proposal_ids). put_session() uses exclusive create as a
+        # guard against duplicate ids, so updates need a separate path.
+        if not self._session_path(sess.id).exists():
+            raise ArtifactNotFoundError(f"session {sess.id}")
+        self._session_path(sess.id).write_text(_yaml_dump(sess.model_dump(mode="json")))
+        return sess
+
     def get_session(self, sid: str) -> Session:
         p = self._session_path(sid)
         if not p.exists():

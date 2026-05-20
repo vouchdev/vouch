@@ -44,7 +44,7 @@ def session_end(store: KBStore, session_id: str, *, note: str | None = None) -> 
     sess.proposal_ids = sorted({
         p.id for p in store.list_proposals() if p.session_id == sess.id
     })
-    store.put_session(sess)
+    store.update_session(sess)
     audit.log_event(
         store.kb_dir, event="session.end", actor=sess.agent,
         object_ids=[sess.id], data={"proposals": len(sess.proposal_ids)},
