@@ -144,3 +144,24 @@ def test_search_works_under_both_backends(kb_dir: Path) -> None:
         kb_dir, query_vec=vecs[0], kinds=("claim",), limit=3,
     )
     assert hits[0][1] == "c0"  # exact self-match
+
+
+def test_query_cache_round_trip(kb_dir: Path) -> None:
+    from vouch.embeddings.cache import (
+        cache_query_vec, lookup_query_vec, query_cache_size,
+    )
+    v = np.ones(4, dtype=np.float32)
+    cache_query_vec(kb_dir, query="hello", vec=v)
+    got = lookup_query_vec(kb_dir, query="hello")
+    assert got is not None
+    assert np.allclose(got, v)
+    assert lookup_query_vec(kb_dir, query="other") is None
+    assert query_cache_size(kb_dir) == 1
+
+
+def test_query_cache_lru_eviction(kb_dir: Path) -> None:
+    from vouch.embeddings.cache import cache_query_vec, query_cache_size
+    v = np.ones(4, dtype=np.float32)
+    for i in range(5):
+        cache_query_vec(kb_dir, query=f"q{i}", vec=v, max_entries=3)
+    assert query_cache_size(kb_dir) <= 3
