@@ -119,3 +119,28 @@ def test_search_embedding_filters_by_kind(kb_dir: Path) -> None:
         kb_dir, query_vec=v, kinds=("claim",), limit=10,
     )
     assert {h[0] for h in only_claims} == {"claim"}
+
+
+def test_sqlite_vec_loader_is_idempotent(kb_dir: Path) -> None:
+    with index_db.open_db(kb_dir) as conn:
+        a = index_db._load_sqlite_vec(conn)
+        b = index_db._load_sqlite_vec(conn)
+    assert a == b
+
+
+def test_search_works_under_both_backends(kb_dir: Path) -> None:
+    from vouch.embeddings.base import content_hash as ch
+    rng = np.random.default_rng(0)
+    vecs = rng.standard_normal((20, 8)).astype(np.float32)
+    vecs /= np.linalg.norm(vecs, axis=1, keepdims=True)
+    with index_db.open_db(kb_dir) as conn:
+        for i, v in enumerate(vecs):
+            index_db.put_embedding(
+                conn, kind="claim", id=f"c{i}", vec=v,
+                content_hash=ch(f"c{i}"), model="mock",
+                model_version="1", dim=8,
+            )
+    hits = index_db.search_embedding(
+        kb_dir, query_vec=vecs[0], kinds=("claim",), limit=3,
+    )
+    assert hits[0][1] == "c0"  # exact self-match

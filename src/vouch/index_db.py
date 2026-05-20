@@ -246,6 +246,34 @@ def get_embedding_meta(kb_dir: Path) -> dict[str, str]:
     return {k: v for k, v in rows}
 
 
+_sqlite_vec_loaded: set[int] = set()
+
+
+def _load_sqlite_vec(conn: sqlite3.Connection) -> bool:
+    """Best-effort load of the sqlite-vec extension."""
+    if id(conn) in _sqlite_vec_loaded:
+        return True
+    try:
+        conn.enable_load_extension(True)
+    except (AttributeError, sqlite3.OperationalError):
+        return False
+    try:
+        import sqlite_vec  # type: ignore[import-not-found]
+    except ImportError:
+        return False
+    try:
+        sqlite_vec.load(conn)
+    except sqlite3.OperationalError:
+        return False
+    finally:
+        try:
+            conn.enable_load_extension(False)
+        except sqlite3.OperationalError:
+            pass
+    _sqlite_vec_loaded.add(id(conn))
+    return True
+
+
 def search_embedding(
     kb_dir: Path,
     *,
@@ -256,7 +284,6 @@ def search_embedding(
     limit: int = 10,
     min_score: float = 0.0,
 ) -> list[tuple[str, str, str, float]]:
-    """NumPy brute-force cosine search. Returns (kind, id, snippet, score)."""
     import numpy as np
     q = np.asarray(query_vec, dtype=np.float32)
     qnorm = float(np.linalg.norm(q))
@@ -264,6 +291,20 @@ def search_embedding(
         q = q / qnorm
     placeholders = ",".join("?" for _ in kinds)
     with open_db(kb_dir) as conn:
+        have_vec = _load_sqlite_vec(conn)
+        if have_vec:
+            try:
+                rows = conn.execute(
+                    f"SELECT kind, id, "
+                    f"  1.0 - vec_distance_cosine(vec, ?) AS score "
+                    f"FROM embedding_index "
+                    f"WHERE kind IN ({placeholders}) AND score >= ? "
+                    f"ORDER BY score DESC LIMIT ?",
+                    (q.tobytes(), *kinds, min_score, limit),
+                ).fetchall()
+                return [(k, i, "", float(s)) for k, i, s in rows]
+            except sqlite3.OperationalError:
+                pass
         rows = conn.execute(
             f"SELECT kind, id, vec, dim FROM embedding_index "
             f"WHERE kind IN ({placeholders})",
