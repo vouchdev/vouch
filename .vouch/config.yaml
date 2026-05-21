@@ -1,0 +1,7 @@
+version: 1
+review:
+  require_human_approval: true
+retrieval:
+  backends:
+  - fts5
+  - substring

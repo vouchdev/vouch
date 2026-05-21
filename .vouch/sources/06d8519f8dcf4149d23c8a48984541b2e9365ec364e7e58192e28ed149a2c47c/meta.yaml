@@ -1,0 +1,12 @@
+id: 06d8519f8dcf4149d23c8a48984541b2e9365ec364e7e58192e28ed149a2c47c
+type: transcript
+locator: /tmp/vouch-conversation-source.txt
+title: Claude Code conversation — vouch exploration
+hash: 06d8519f8dcf4149d23c8a48984541b2e9365ec364e7e58192e28ed149a2c47c
+immutable: true
+scope: project
+byte_size: 539
+media_type: text/plain
+created_at: '2026-05-21T05:51:53.562157Z'
+metadata: {}
+tags: []
