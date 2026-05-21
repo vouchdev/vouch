@@ -65,6 +65,10 @@ vouch reject <id> --reason "..."
 git add .vouch/ && git commit -m "kb: approve auth-uses-jwt"
 ```
 
+![vouch end-to-end demo](docs/demo.gif)
+
+The full captured walkthrough lives at [docs/example-session.md](docs/example-session.md); re-render the GIF from [docs/demo.tape](docs/demo.tape) with `vhs docs/demo.tape`.
+
 ## Object model
 
 ```
