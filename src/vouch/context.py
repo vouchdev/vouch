@@ -13,6 +13,7 @@ This implementation:
 
 from __future__ import annotations
 
+import sqlite3
 from typing import Literal, cast
 
 from . import index_db
@@ -29,8 +30,9 @@ def _retrieve(store: KBStore, query: str, limit: int
         hits = index_db.search(store.kb_dir, query, limit=limit)
         if hits:
             return [(k, i, s, sc, "fts5") for k, i, s, sc in hits]
-    except Exception:
-        # FTS5 unavailable or empty — fall through to substring scan.
+    except sqlite3.Error:
+        # FTS5 unavailable, db missing, or schema mismatch — fall through
+        # to substring scan. Other exceptions are real bugs and propagate.
         pass
     return [
         (k, i, s, sc, "substring")
