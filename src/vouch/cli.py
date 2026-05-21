@@ -471,11 +471,11 @@ def search(query: str, limit: int) -> None:
     store = _load_store()
     try:
         hits = index_db.search(store.kb_dir, query, limit=limit)
-        if hits:
-            backend = "fts5"
-        else:
+        if not hits:
             hits = store.search_substring(query, limit=limit)
             backend = "substring"
+        else:
+            backend = "fts5"
     except Exception:
         hits = store.search_substring(query, limit=limit)
         backend = "substring"
