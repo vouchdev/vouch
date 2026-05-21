@@ -1,7 +1,10 @@
 # Example session
 
+![vouch end-to-end demo](demo.gif)
+
 A full propose → review → commit → retrieve loop, captured from a real
-run on 2026-05-21. Reproduce by following along in any git repo.
+run on 2026-05-21. Reproduce by following along in any git repo, or
+re-render the GIF with `vhs docs/demo.tape` (see [demo.tape](demo.tape)).
 
 ## Setup
 
