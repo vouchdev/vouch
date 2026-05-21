@@ -72,7 +72,15 @@ def _load_store(start: Path | None = None) -> KBStore:
 
 
 def _whoami() -> str:
-    return os.environ.get("VOUCH_USER") or getpass.getuser()
+    # Match MCP/JSONL server behaviour (server.py, jsonl_server.py): when an
+    # agent invokes the CLI it sets VOUCH_AGENT; honour it as the actor so
+    # multi-agent attribution stays consistent across transports. VOUCH_USER
+    # remains an escape hatch; OS user is the friendly default for humans.
+    return (
+        os.environ.get("VOUCH_AGENT")
+        or os.environ.get("VOUCH_USER")
+        or getpass.getuser()
+    )
 
 
 def _emit_json(obj) -> None:
