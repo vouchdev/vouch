@@ -97,8 +97,8 @@ def _h_search(p: dict) -> list[dict]:
         hits = s.search_substring(q, limit=limit)
         used = "substring"
     if backend_arg == "hybrid":
-        from .embeddings.fusion import (
-            rrf_fuse,  # type: ignore[import-not-found,import-untyped,unused-ignore]
+        from .embeddings.fusion import (  # type: ignore[import-not-found,import-untyped,unused-ignore]
+            rrf_fuse,
         )
         emb = index_db.search_semantic(s.kb_dir, q, limit=limit * 2)
         fts = index_db.search(s.kb_dir, q, limit=limit * 2)

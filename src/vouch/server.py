@@ -124,8 +124,8 @@ def kb_search(
         return _to_dicts(hits, "substring")
 
     if backend == "hybrid":
-        from .embeddings.fusion import (
-            rrf_fuse,  # type: ignore[import-not-found,import-untyped,unused-ignore]
+        from .embeddings.fusion import (  # type: ignore[import-not-found,import-untyped,unused-ignore]
+            rrf_fuse,
         )
         emb = index_db.search_semantic(store.kb_dir, query, limit=limit * 2)
         fts = index_db.search(store.kb_dir, query, limit=limit * 2)
