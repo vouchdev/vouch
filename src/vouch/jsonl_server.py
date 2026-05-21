@@ -81,6 +81,16 @@ def _h_search(p: dict) -> list[dict]:
     hits: list[tuple[str, str, str, float]] = []
     used = backend_arg
 
+    # Reject unknown backends with a clear error rather than silently
+    # returning []. Falling through hides client typos and diverges from
+    # the MCP transport, which raises ValueError on the same input.
+    valid_backends = {"auto", "embedding", "fts5", "substring", "hybrid"}
+    if backend_arg not in valid_backends:
+        raise ValueError(
+            f"unknown backend: {backend_arg!r} "
+            f"(expected one of {sorted(valid_backends)})"
+        )
+
     if backend_arg in ("auto", "embedding"):
         hits = index_db.search_semantic(
             s.kb_dir, q, limit=limit, min_score=min_score,
@@ -100,8 +110,15 @@ def _h_search(p: dict) -> list[dict]:
         from .embeddings.fusion import (  # type: ignore[import-not-found,import-untyped,unused-ignore]
             rrf_fuse,
         )
-        emb = index_db.search_semantic(s.kb_dir, q, limit=limit * 2)
-        fts = index_db.search(s.kb_dir, q, limit=limit * 2)
+        # Hybrid must honour min_score and survive FTS failures the same
+        # way the dedicated fts5 branch does.
+        emb = index_db.search_semantic(
+            s.kb_dir, q, limit=limit * 2, min_score=min_score,
+        )
+        try:
+            fts = index_db.search(s.kb_dir, q, limit=limit * 2)
+        except Exception:
+            fts = []
         hits = rrf_fuse(emb, fts, limit=limit)
         used = "hybrid"
 

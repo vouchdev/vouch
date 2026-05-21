@@ -24,6 +24,7 @@ that `vouch index` can rebuild from disk.
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import re
 import stat
@@ -43,6 +44,8 @@ from .models import (
     Session,
     Source,
 )
+
+_embed_log = logging.getLogger("vouch.embeddings")
 
 KB_DIRNAME = ".vouch"
 CONFIG_FILENAME = "config.yaml"
@@ -468,9 +471,14 @@ class KBStore:
     def _embed_and_store(self, *, kind: str, id: str, text: str) -> None:
         """Compute and persist an embedding for an artifact.
 
-        Skipped if (kind, id) already exists with the same content hash.
-        Failures (e.g. embeddings extras not installed) are swallowed --
-        embeddings are an enhancement, not a hard requirement.
+        Skipped only if (kind, id) already has an embedding produced by
+        the *current* embedder model for the same content. Changing
+        embedders mid-life means the existing vector is in the wrong
+        space, so we must re-embed even when the content hash matches.
+
+        Every failure in here is swallowed (logged at DEBUG) — embeddings
+        are an enhancement, not a hard requirement. The caller has
+        already committed the artifact to disk; we must not undo that.
         """
         if not text or not text.strip():
             return
@@ -479,25 +487,35 @@ class KBStore:
             from .embeddings import content_hash, get_embedder
         except ImportError:
             return
-        h = content_hash(text)
-        existing = _index_db.get_embedding(self.kb_dir, kind=kind, id=id)
-        if existing is not None and existing[1] == h:
-            return
         try:
             embedder = get_embedder()
         except KeyError:
             return
-        vec = embedder.encode(text)
-        with _index_db.open_db(self.kb_dir) as conn:
-            _index_db.put_embedding(
-                conn, kind=kind, id=id, vec=vec, content_hash=h,
-                model=embedder.name, model_version=embedder.version,
-                dim=embedder.dim,
+        try:
+            h = content_hash(text)
+            existing = _index_db.get_embedding(self.kb_dir, kind=kind, id=id)
+            # existing is (vec, content_hash, model); skip only when both the
+            # content AND the embedder model match what's on disk.
+            if (
+                existing is not None
+                and existing[1] == h
+                and existing[2] == embedder.name
+            ):
+                return
+            vec = embedder.encode(text)
+            with _index_db.open_db(self.kb_dir) as conn:
+                _index_db.put_embedding(
+                    conn, kind=kind, id=id, vec=vec, content_hash=h,
+                    model=embedder.name, model_version=embedder.version,
+                    dim=embedder.dim,
+                )
+            _index_db.set_embedding_meta(
+                self.kb_dir, model=embedder.name,
+                version=embedder.version, dim=embedder.dim,
             )
-        _index_db.set_embedding_meta(
-            self.kb_dir, model=embedder.name,
-            version=embedder.version, dim=embedder.dim,
-        )
+        except Exception as e:
+            _embed_log.debug("embedding write failed for %s/%s: %s", kind, id, e)
+            return
         try:
             # NB: dedup module is added in a later phase; ignore missing-stub
             # / missing-module noise in CI's [dev]-only mypy run.
@@ -507,6 +525,8 @@ class KBStore:
             check_and_log(self.kb_dir, kind=kind, id=id, vec=vec)
         except ImportError:
             pass
+        except Exception as e:
+            _embed_log.debug("dedup check failed for %s/%s: %s", kind, id, e)
 
     # --- proposals ---------------------------------------------------------
 

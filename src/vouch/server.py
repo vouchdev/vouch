@@ -127,8 +127,16 @@ def kb_search(
         from .embeddings.fusion import (  # type: ignore[import-not-found,import-untyped,unused-ignore]
             rrf_fuse,
         )
-        emb = index_db.search_semantic(store.kb_dir, query, limit=limit * 2)
-        fts = index_db.search(store.kb_dir, query, limit=limit * 2)
+        # Hybrid must honour min_score (the embedding side can return
+        # low-relevance noise otherwise) and survive FTS failures the same
+        # way the dedicated fts5 branch does.
+        emb = index_db.search_semantic(
+            store.kb_dir, query, limit=limit * 2, min_score=min_score,
+        )
+        try:
+            fts = index_db.search(store.kb_dir, query, limit=limit * 2)
+        except Exception:
+            fts = []
         hits = rrf_fuse(emb, fts, limit=limit)
         return _to_dicts(hits, "hybrid")
 

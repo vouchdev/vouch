@@ -87,10 +87,24 @@ def open_db(kb_dir: Path):
 
 
 def reset(kb_dir: Path) -> None:
-    """Drop everything; the rebuild caller re-populates."""
+    """Drop everything; the rebuild caller re-populates.
+
+    Clears every derived table — FTS indexes, embedding vectors, the
+    query embedding cache, dedup detections, and embedding metadata.
+    `vouch index` rebuilds the FTS rows from disk; the embedding write
+    hook backfills `embedding_index` and `index_meta` as artifacts are
+    re-read. Leaving stale rows here means semantic search can return
+    orphaned hits after a reindex.
+    """
     with open_db(kb_dir) as conn:
         conn.executescript(
-            "DELETE FROM claims_fts; DELETE FROM pages_fts; DELETE FROM entities_fts;"
+            "DELETE FROM claims_fts;"
+            "DELETE FROM pages_fts;"
+            "DELETE FROM entities_fts;"
+            "DELETE FROM embedding_index;"
+            "DELETE FROM query_embedding_cache;"
+            "DELETE FROM embedding_dupes;"
+            "DELETE FROM index_meta WHERE key LIKE 'embedding_%';"
         )
 
 
@@ -314,7 +328,13 @@ def search_embedding(
     scored: list[tuple[str, str, str, float]] = []
     for kind, id_, blob, dim in rows:
         vec = _blob_to_vec(blob, dim)
-        score = float(q @ vec)
+        # Cosine similarity: q is already unit-normalized above; normalize
+        # the stored vec here too so rankings match the sqlite-vec path
+        # (which uses `1 - vec_distance_cosine`, i.e. true cosine).
+        vnorm = float(np.linalg.norm(vec))
+        if vnorm == 0:
+            continue
+        score = float(q @ vec) / vnorm
         if score >= min_score:
             scored.append((kind, id_, "", score))
     scored.sort(key=lambda r: r[3], reverse=True)
@@ -342,6 +362,14 @@ def search_semantic(
     except KeyError:
         return []
     qvec = lookup_query_vec(kb_dir, query=query)
+    # The query cache is keyed by text only; if the embedder model or
+    # vector dimension has changed since the entry was cached, the stored
+    # vector lives in a different space than the indexed document
+    # embeddings. Drop the stale entry and re-encode in that case.
+    if qvec is not None:
+        cached_dim = int(getattr(qvec, "shape", [0])[0] or 0)
+        if cached_dim != embedder.dim:
+            qvec = None
     if qvec is None:
         qvec = embedder.encode(query)
         cache_query_vec(kb_dir, query=query, vec=qvec)
