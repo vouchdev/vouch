@@ -59,23 +59,17 @@ def test_reject_empty_reason_shows_clean_error(store: KBStore) -> None:
 
 def test_propose_claim_empty_text_shows_clean_error(store: KBStore) -> None:
     src = store.put_source(b"e")
-    result = CliRunner().invoke(
-        cli, ["propose-claim", "--text", "   ", "--source", src.id]
-    )
+    result = CliRunner().invoke(cli, ["propose-claim", "--text", "   ", "--source", src.id])
     _assert_clean_error(result, "claim text")
 
 
 def test_propose_claim_unknown_source_shows_clean_error(store: KBStore) -> None:
-    result = CliRunner().invoke(
-        cli, ["propose-claim", "--text", "ok", "--source", "deadbeef"]
-    )
+    result = CliRunner().invoke(cli, ["propose-claim", "--text", "ok", "--source", "deadbeef"])
     _assert_clean_error(result, "unknown source")
 
 
 def test_propose_entity_empty_name_shows_clean_error(store: KBStore) -> None:
-    result = CliRunner().invoke(
-        cli, ["propose-entity", "--name", "   ", "--type", "project"]
-    )
+    result = CliRunner().invoke(cli, ["propose-entity", "--name", "   ", "--type", "project"])
     _assert_clean_error(result, "entity name")
 
 
