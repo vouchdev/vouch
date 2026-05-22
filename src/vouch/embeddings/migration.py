@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -31,53 +32,29 @@ def detect_mismatch(kb_dir: Path) -> dict[str, Any] | None:
     }
 
 
-def backfill_embeddings(store: Any, *, force: bool = False) -> int:
+def backfill_embeddings(store: Any) -> int:
     """Re-encode every artifact under the current adapter. Returns count touched."""
     embedder = get_embedder()
     touched = 0
-    try:
-        for c in store.list_claims():
-            store._embed_and_store(kind="claim", id=c.id, text=c.text)
+    # (list-method, kind, text-extractor). Missing list methods are skipped;
+    # errors raised inside the loop body propagate so a partial backfill never
+    # silently updates embedding_meta as if it had succeeded.
+    plan: list[tuple[str, str, Callable[[Any], str]]] = [
+        ("list_claims", "claim", lambda c: c.text),
+        ("list_pages", "page", lambda p: f"{p.title}\n\n{p.body}"),
+        ("list_sources", "source", lambda s: s.title or s.locator or ""),
+        ("list_entities", "entity", lambda e: f"{e.name}\n\n{e.description or ''}"),
+        ("list_relations", "relation",
+         lambda r: f"{r.source} {r.relation.value} {r.target}"),
+        ("list_evidence", "evidence", lambda ev: ev.quote or ""),
+    ]
+    for list_name, kind, text_of in plan:
+        lister = getattr(store, list_name, None)
+        if lister is None:
+            continue
+        for obj in lister():
+            store._embed_and_store(kind=kind, id=obj.id, text=text_of(obj))
             touched += 1
-    except AttributeError:
-        pass
-    try:
-        for p in store.list_pages():
-            store._embed_and_store(kind="page", id=p.id, text=f"{p.title}\n\n{p.body}")
-            touched += 1
-    except AttributeError:
-        pass
-    try:
-        for s in store.list_sources():
-            store._embed_and_store(
-                kind="source", id=s.id, text=s.title or s.locator or "",
-            )
-            touched += 1
-    except AttributeError:
-        pass
-    try:
-        for e in store.list_entities():
-            store._embed_and_store(
-                kind="entity", id=e.id, text=f"{e.name}\n\n{e.description or ''}",
-            )
-            touched += 1
-    except AttributeError:
-        pass
-    try:
-        for r in store.list_relations():
-            store._embed_and_store(
-                kind="relation", id=r.id,
-                text=f"{r.source} {r.relation.value} {r.target}",
-            )
-            touched += 1
-    except AttributeError:
-        pass
-    try:
-        for ev in store.list_evidence():
-            store._embed_and_store(kind="evidence", id=ev.id, text=ev.quote or "")
-            touched += 1
-    except AttributeError:
-        pass
     index_db.set_embedding_meta(
         store.kb_dir, model=embedder.name, version=embedder.version, dim=embedder.dim,
     )
