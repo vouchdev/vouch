@@ -7,6 +7,9 @@ All notable changes to vouch are documented here. Format follows
 ## [Unreleased]
 
 ### Fixed
+- `vouch crystallize` now exits with code 1 and prints an error when all proposals fail to approve, and prints a warning on partial failures.
+
+### Fixed
 - Bundle import rejects tar members whose path escapes `kb_dir`
   (CVE-2007-4559, #9). Previously a crafted `.tar.gz` with a member
   named `../../evil.txt` could write outside `.vouch/`; the manifest
