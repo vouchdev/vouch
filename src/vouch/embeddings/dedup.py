@@ -73,6 +73,9 @@ def scan_all(
         for k2 in keys[i + 1:]:
             if k1[0] != k2[0]:
                 continue
+            if vecs[k1].shape != vecs[k2].shape:
+                # Different embedding dims (e.g. mid-migration) aren't comparable.
+                continue
             cos = float(vecs[k1] @ vecs[k2])
             if cos >= threshold:
                 pair = frozenset([k1, k2])
