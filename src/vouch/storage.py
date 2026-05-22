@@ -24,6 +24,7 @@ that `vouch index` can rebuild from disk.
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import re
 import stat
@@ -43,6 +44,8 @@ from .models import (
     Session,
     Source,
 )
+
+_embed_log = logging.getLogger("vouch.embeddings")
 
 KB_DIRNAME = ".vouch"
 CONFIG_FILENAME = "config.yaml"
@@ -239,6 +242,7 @@ class KBStore:
             metadata=metadata or {},
         )
         meta_path.write_text(_yaml_dump(src.model_dump(mode="json")))
+        self._embed_and_store(kind="source", id=src.id, text=src.title or src.locator or "")
         return src
 
     def get_source(self, source_id: str) -> Source:
@@ -283,6 +287,7 @@ class KBStore:
             raise ValueError(
                 f"claim {claim.id} already exists -- use update_claim()"
             ) from e
+        self._embed_and_store(kind="claim", id=claim.id, text=claim.text)
         return claim
 
     def get_claim(self, claim_id: str) -> Claim:
@@ -304,6 +309,7 @@ class KBStore:
         if not self._claim_path(claim.id).exists():
             raise ArtifactNotFoundError(f"claim {claim.id}")
         self._claim_path(claim.id).write_text(_yaml_dump(claim.model_dump(mode="json")))
+        self._embed_and_store(kind="claim", id=claim.id, text=claim.text)
         return claim
 
     # --- pages -------------------------------------------------------------
@@ -319,6 +325,7 @@ class KBStore:
             raise ValueError(
                 f"page {page.id} already exists -- choose a different slug"
             ) from e
+        self._embed_and_store(kind="page", id=page.id, text=f"{page.title}\n\n{page.body}")
         return page
 
     def get_page(self, page_id: str) -> Page:
@@ -343,6 +350,10 @@ class KBStore:
             raise ValueError(
                 f"entity {entity.id} already exists -- choose a different slug"
             ) from e
+        self._embed_and_store(
+            kind="entity", id=entity.id,
+            text=f"{entity.name}\n\n{entity.description or ''}",
+        )
         return entity
 
     def get_entity(self, eid: str) -> Entity:
@@ -368,6 +379,10 @@ class KBStore:
             raise ValueError(
                 f"relation {rel.id} already exists -- choose a different slug"
             ) from e
+        self._embed_and_store(
+            kind="relation", id=rel.id,
+            text=f"{rel.source} {rel.relation.value} {rel.target}",
+        )
         return rel
 
     def get_relation(self, rid: str) -> Relation:
@@ -401,6 +416,7 @@ class KBStore:
             raise ValueError(
                 f"evidence {ev.id} already exists -- choose a different slug"
             ) from e
+        self._embed_and_store(kind="evidence", id=ev.id, text=ev.quote or "")
         return ev
 
     def get_evidence(self, eid: str) -> Evidence:
@@ -449,6 +465,68 @@ class KBStore:
             return []
         return [Session.model_validate(_yaml_load(p.read_text()))
                 for p in sorted(d.glob("*.yaml"))]
+
+    # --- embedding hook ------------------------------------------------------
+
+    def _embed_and_store(self, *, kind: str, id: str, text: str) -> None:
+        """Compute and persist an embedding for an artifact.
+
+        Skipped only if (kind, id) already has an embedding produced by
+        the *current* embedder model for the same content. Changing
+        embedders mid-life means the existing vector is in the wrong
+        space, so we must re-embed even when the content hash matches.
+
+        Every failure in here is swallowed (logged at DEBUG) — embeddings
+        are an enhancement, not a hard requirement. The caller has
+        already committed the artifact to disk; we must not undo that.
+        """
+        if not text or not text.strip():
+            return
+        try:
+            from . import index_db as _index_db
+            from .embeddings import content_hash, get_embedder
+        except ImportError:
+            return
+        try:
+            embedder = get_embedder()
+        except KeyError:
+            return
+        try:
+            h = content_hash(text)
+            existing = _index_db.get_embedding(self.kb_dir, kind=kind, id=id)
+            # existing is (vec, content_hash, model); skip only when both the
+            # content AND the embedder model match what's on disk.
+            if (
+                existing is not None
+                and existing[1] == h
+                and existing[2] == embedder.name
+            ):
+                return
+            vec = embedder.encode(text)
+            with _index_db.open_db(self.kb_dir) as conn:
+                _index_db.put_embedding(
+                    conn, kind=kind, id=id, vec=vec, content_hash=h,
+                    model=embedder.name, model_version=embedder.version,
+                    dim=embedder.dim,
+                )
+            _index_db.set_embedding_meta(
+                self.kb_dir, model=embedder.name,
+                version=embedder.version, dim=embedder.dim,
+            )
+        except Exception as e:
+            _embed_log.debug("embedding write failed for %s/%s: %s", kind, id, e)
+            return
+        try:
+            # NB: dedup module is added in a later phase; ignore missing-stub
+            # / missing-module noise in CI's [dev]-only mypy run.
+            from .embeddings.dedup import (  # type: ignore[import-not-found,import-untyped,unused-ignore]
+                check_and_log,
+            )
+            check_and_log(self.kb_dir, kind=kind, id=id, vec=vec)
+        except ImportError:
+            pass
+        except Exception as e:
+            _embed_log.debug("dedup check failed for %s/%s: %s", kind, id, e)
 
     # --- proposals ---------------------------------------------------------
 

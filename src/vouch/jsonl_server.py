@@ -76,17 +76,54 @@ def _h_search(p: dict) -> list[dict]:
     s = _store()
     q = p["query"]
     limit = int(p.get("limit", 10))
-    try:
-        hits = index_db.search(s.kb_dir, q, limit=limit)
-        backend = "fts5"
-        if not hits:
-            hits = s.search_substring(q, limit=limit)
-            backend = "substring"
-    except Exception:
+    backend_arg = p.get("backend", "auto")
+    min_score = float(p.get("min_score", 0.0))
+    hits: list[tuple[str, str, str, float]] = []
+    used = backend_arg
+
+    # Reject unknown backends with a clear error rather than silently
+    # returning []. Falling through hides client typos and diverges from
+    # the MCP transport, which raises ValueError on the same input.
+    valid_backends = {"auto", "embedding", "fts5", "substring", "hybrid"}
+    if backend_arg not in valid_backends:
+        raise ValueError(
+            f"unknown backend: {backend_arg!r} "
+            f"(expected one of {sorted(valid_backends)})"
+        )
+
+    if backend_arg in ("auto", "embedding"):
+        hits = index_db.search_semantic(
+            s.kb_dir, q, limit=limit, min_score=min_score,
+        )
+        if hits:
+            used = "embedding"
+    if not hits and backend_arg in ("auto", "fts5"):
+        try:
+            hits = index_db.search(s.kb_dir, q, limit=limit)
+            used = "fts5" if hits else used
+        except Exception:
+            hits = []
+    if not hits and backend_arg in ("auto", "substring"):
         hits = s.search_substring(q, limit=limit)
-        backend = "substring"
+        used = "substring"
+    if backend_arg == "hybrid":
+        from .embeddings.fusion import (  # type: ignore[import-not-found,import-untyped,unused-ignore]
+            rrf_fuse,
+        )
+        # Hybrid must honour min_score and survive FTS failures the same
+        # way the dedicated fts5 branch does.
+        emb = index_db.search_semantic(
+            s.kb_dir, q, limit=limit * 2, min_score=min_score,
+        )
+        try:
+            fts = index_db.search(s.kb_dir, q, limit=limit * 2)
+        except Exception:
+            fts = []
+        hits = rrf_fuse(emb, fts, limit=limit)
+        used = "hybrid"
+
     return [
-        {"kind": k, "id": i, "snippet": sn, "score": sc, "backend": backend}
+        {"kind": k, "id": i, "snippet": sn, "score": sc, "backend": used}
         for k, i, sn, sc in hits
     ]
 

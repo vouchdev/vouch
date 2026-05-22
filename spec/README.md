@@ -13,3 +13,15 @@ is the entry point; this directory holds the longer reference material.
 
 These are *informative* where they elaborate on SPEC.md and *normative*
 where they define vocabulary (event names, error codes, JSON shapes).
+
+## Versioning
+
+The files at the top of this directory and `../SPEC.md` are the **latest**
+working draft. Dated subdirectories (`2026-05-21/`, …) are immutable
+snapshots — useful when implementations need to pin to a specific
+protocol version. Cut a new snapshot whenever you ship a breaking
+change to method shapes, on-disk layout, or vocabulary.
+
+| Version | Status | Notes |
+|---|---|---|
+| [2026-05-21](2026-05-21/) | current | initial dated snapshot |

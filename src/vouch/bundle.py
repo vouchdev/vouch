@@ -124,6 +124,18 @@ class ExportCheckResult:
     issues: list[str]
 
 
+def _unsafe_name_reason(name: str) -> str | None:
+    if not name:
+        return "empty path in bundle"
+    if name.startswith("/"):
+        return f"absolute path in bundle: {name!r}"
+    if "\x00" in name:
+        return f"nul byte in bundle path: {name!r}"
+    if ".." in Path(name).parts:
+        return f"path traversal in bundle: {name!r}"
+    return None
+
+
 def export_check(bundle_path: Path) -> ExportCheckResult:
     """Verify every file in the bundle matches its manifest hash."""
     issues: list[str] = []
@@ -137,10 +149,18 @@ def export_check(bundle_path: Path) -> ExportCheckResult:
         manifest = json.loads(tar.extractfile(mf_member).read().decode())  # type: ignore[union-attr]
         bundle_id = manifest.get("bundle_id", "")
         recorded = {f["path"]: f for f in manifest["files"]}
+        for path in recorded:
+            reason = _unsafe_name_reason(path)
+            if reason is not None:
+                issues.append(f"unsafe path in manifest: {reason}")
         for member in tar.getmembers():
             if member.name == MANIFEST_NAME:
                 continue
             if not member.isfile():
+                continue
+            reason = _unsafe_name_reason(member.name)
+            if reason is not None:
+                issues.append(reason)
                 continue
             files_checked += 1
             rec = recorded.get(member.name)
@@ -165,6 +185,19 @@ def export_check(bundle_path: Path) -> ExportCheckResult:
 # --- import ---------------------------------------------------------------
 
 
+def _safe_member_path(kb_dir: Path, member_name: str) -> Path:
+    reason = _unsafe_name_reason(member_name)
+    if reason is not None:
+        raise RuntimeError(reason)
+    kb_root = kb_dir.resolve()
+    dest = (kb_root / member_name).resolve()
+    try:
+        dest.relative_to(kb_root)
+    except ValueError as exc:
+        raise RuntimeError(f"path traversal in bundle: {member_name!r}") from exc
+    return dest
+
+
 @dataclass
 class ImportCheckResult:
     ok: bool
@@ -179,6 +212,13 @@ def _validate_content(path: str, data: bytes, issues: list[str]) -> None:
     if not any(path.endswith(ext) for ext in (".yaml", ".yml", ".md")):
         return
     subdir = path.split("/")[0]
+    # Source artifacts have two file kinds:
+    #   sources/<sha>/meta.yaml  -- the Source pydantic model (validate)
+    #   sources/<sha>/content    -- the raw source bytes (skip validation)
+    # The opaque content file isn't a pydantic model, so model_validate
+    # on raw bytes raises spuriously.
+    if subdir == "sources" and not path.endswith("/meta.yaml"):
+        return
     validator = VALIDATORS.get(subdir)
     if validator is None:
         return
@@ -207,7 +247,11 @@ def import_check(kb_dir: Path, bundle_path: Path) -> ImportCheckResult:
         bundle_id = manifest.get("bundle_id", "")
         manifest_paths = {f["path"] for f in manifest["files"]}
         for f in manifest["files"]:
-            dest = kb_dir / f["path"]
+            try:
+                dest = _safe_member_path(kb_dir, f["path"])
+            except RuntimeError as exc:
+                issues.append(str(exc))
+                continue
             if not dest.exists():
                 new_files.append(f["path"])
             elif sha256_hex(dest.read_bytes()) == f["sha256"]:
@@ -244,6 +288,8 @@ def import_apply(
     if on_conflict not in {"skip", "overwrite", "fail"}:
         raise ValueError(f"on_conflict must be skip|overwrite|fail, got {on_conflict}")
     check = import_check(kb_dir, bundle_path)
+    if check.issues:
+        raise RuntimeError(f"refusing to import: {check.issues[0]}")
     if on_conflict == "fail" and check.conflicts:
         raise RuntimeError(f"refusing to import: {len(check.conflicts)} conflicts")
     written: list[str] = []
@@ -258,7 +304,7 @@ def import_apply(
                 continue
             if member.name not in recorded:
                 continue
-            dest = kb_dir / member.name
+            dest = _safe_member_path(kb_dir, member.name)
             if (
                 dest.exists()
                 and on_conflict == "skip"
@@ -269,9 +315,9 @@ def import_apply(
                 continue
             dest.parent.mkdir(parents=True, exist_ok=True)
             body = tar.extractfile(member).read()  # type: ignore[union-attr]
-            member_issues: list[str] = []
-            _validate_content(member.name, body, member_issues)
-            if member_issues:
+            val_issues: list[str] = []
+            _validate_content(member.name, body, val_issues)
+            if val_issues:
                 skipped.append(member.name)
                 continue
             dest.write_bytes(body)

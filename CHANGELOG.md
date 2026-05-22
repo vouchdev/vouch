@@ -6,6 +6,17 @@ All notable changes to vouch are documented here. Format follows
 
 ## [Unreleased]
 
+### Fixed
+- Fix `vouch search` CLI: assign backend label per code path so substring fallback results are no longer mislabelled as `fts5`; update stale docstring to reflect multi-backend search surface (#52).
+
+### Fixed
+- Bundle import rejects tar members whose path escapes `kb_dir`
+  (CVE-2007-4559, #9). Previously a crafted `.tar.gz` with a member
+  named `../../evil.txt` could write outside `.vouch/`; the manifest
+  allow-list did not prevent this because the manifest lives inside
+  the same tarball. `import_apply`, `import_check`, and `export_check`
+  now validate every member path and raise on unsafe names.
+
 ## [0.0.1] — 2026-05-17
 
 Initial alpha. Surface intentionally small; expect breaking changes pre-1.0.

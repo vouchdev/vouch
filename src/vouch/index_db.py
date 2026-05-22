@@ -11,9 +11,10 @@ second `backend` in the ContextItem response.
 
 from __future__ import annotations
 
+import datetime as _dt
 import sqlite3
 from collections.abc import Iterable
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from pathlib import Path
 
 DB_FILENAME = "state.db"
@@ -21,32 +22,48 @@ DB_FILENAME = "state.db"
 
 SCHEMA = """
 CREATE VIRTUAL TABLE IF NOT EXISTS claims_fts USING fts5(
-    id UNINDEXED,
-    text,
-    type UNINDEXED,
-    status UNINDEXED,
-    tags
+    id UNINDEXED, text, type UNINDEXED, status UNINDEXED, tags
 );
 
 CREATE VIRTUAL TABLE IF NOT EXISTS pages_fts USING fts5(
-    id UNINDEXED,
-    title,
-    body,
-    type UNINDEXED,
-    tags
+    id UNINDEXED, title, body, type UNINDEXED, tags
 );
 
 CREATE VIRTUAL TABLE IF NOT EXISTS entities_fts USING fts5(
-    id UNINDEXED,
-    name,
-    description,
-    type UNINDEXED,
-    aliases
+    id UNINDEXED, name, description, type UNINDEXED, aliases
 );
 
 CREATE TABLE IF NOT EXISTS index_meta (
-    key TEXT PRIMARY KEY,
-    value TEXT NOT NULL
+    key TEXT PRIMARY KEY, value TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS embedding_index (
+    kind            TEXT NOT NULL,
+    id              TEXT NOT NULL,
+    vec             BLOB NOT NULL,
+    content_hash    TEXT NOT NULL,
+    model           TEXT NOT NULL,
+    model_version   TEXT NOT NULL,
+    dim             INTEGER NOT NULL,
+    created_at      TEXT NOT NULL,
+    PRIMARY KEY (kind, id)
+);
+
+CREATE INDEX IF NOT EXISTS embedding_index_kind ON embedding_index(kind);
+
+CREATE TABLE IF NOT EXISTS query_embedding_cache (
+    query_hash      TEXT PRIMARY KEY,
+    vec             BLOB NOT NULL,
+    hit_count       INTEGER NOT NULL DEFAULT 1,
+    last_used_at    TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS embedding_dupes (
+    kind            TEXT NOT NULL,
+    id              TEXT NOT NULL,
+    near_id         TEXT NOT NULL,
+    cosine          REAL NOT NULL,
+    detected_at     TEXT NOT NULL
 );
 """
 
@@ -70,10 +87,24 @@ def open_db(kb_dir: Path):
 
 
 def reset(kb_dir: Path) -> None:
-    """Drop everything; the rebuild caller re-populates."""
+    """Drop everything; the rebuild caller re-populates.
+
+    Clears every derived table — FTS indexes, embedding vectors, the
+    query embedding cache, dedup detections, and embedding metadata.
+    `vouch index` rebuilds the FTS rows from disk; the embedding write
+    hook backfills `embedding_index` and `index_meta` as artifacts are
+    re-read. Leaving stale rows here means semantic search can return
+    orphaned hits after a reindex.
+    """
     with open_db(kb_dir) as conn:
         conn.executescript(
-            "DELETE FROM claims_fts; DELETE FROM pages_fts; DELETE FROM entities_fts;"
+            "DELETE FROM claims_fts;"
+            "DELETE FROM pages_fts;"
+            "DELETE FROM entities_fts;"
+            "DELETE FROM embedding_index;"
+            "DELETE FROM query_embedding_cache;"
+            "DELETE FROM embedding_dupes;"
+            "DELETE FROM index_meta WHERE key LIKE 'embedding_%';"
         )
 
 
@@ -160,3 +191,188 @@ def stats(kb_dir: Path) -> dict[str, int]:
             "pages": conn.execute("SELECT COUNT(*) FROM pages_fts").fetchone()[0],
             "entities": conn.execute("SELECT COUNT(*) FROM entities_fts").fetchone()[0],
         }
+
+
+# --- embeddings storage --------------------------------------------------
+
+
+def _vec_to_blob(vec):  # type: ignore[no-untyped-def]
+    import numpy as np
+    return np.asarray(vec, dtype=np.float32).tobytes()
+
+
+def _blob_to_vec(blob: bytes, dim: int):  # type: ignore[no-untyped-def]
+    import numpy as np
+    return np.frombuffer(blob, dtype=np.float32, count=dim).copy()
+
+
+def put_embedding(
+    conn: sqlite3.Connection, *,
+    kind: str, id: str,
+    vec,  # type: ignore[no-untyped-def]
+    content_hash: str,
+    model: str, model_version: str, dim: int,
+) -> None:
+    conn.execute(
+        "INSERT OR REPLACE INTO embedding_index "
+        "(kind, id, vec, content_hash, model, model_version, dim, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            kind, id, _vec_to_blob(vec), content_hash,
+            model, model_version, dim,
+            _dt.datetime.now(_dt.UTC).isoformat(timespec="seconds"),
+        ),
+    )
+
+
+def get_embedding(kb_dir: Path, *, kind: str, id: str):  # type: ignore[no-untyped-def]
+    """Return (vec, content_hash, model) or None."""
+    with open_db(kb_dir) as conn:
+        row = conn.execute(
+            "SELECT vec, content_hash, model, dim FROM embedding_index "
+            "WHERE kind = ? AND id = ?",
+            (kind, id),
+        ).fetchone()
+    if not row:
+        return None
+    blob, ch, model, dim = row
+    return _blob_to_vec(blob, dim), ch, model
+
+
+def set_embedding_meta(kb_dir: Path, *, model: str, version: str, dim: int) -> None:
+    with open_db(kb_dir) as conn:
+        conn.executemany(
+            "INSERT OR REPLACE INTO index_meta (key, value) VALUES (?, ?)",
+            [
+                ("embedding_model", model),
+                ("embedding_model_version", version),
+                ("embedding_dim", str(dim)),
+            ],
+        )
+
+
+def get_embedding_meta(kb_dir: Path) -> dict[str, str]:
+    with open_db(kb_dir) as conn:
+        rows = conn.execute(
+            "SELECT key, value FROM index_meta WHERE key LIKE 'embedding_%'"
+        ).fetchall()
+    return {k: v for k, v in rows}
+
+
+_sqlite_vec_loaded: set[int] = set()
+
+
+def _load_sqlite_vec(conn: sqlite3.Connection) -> bool:
+    """Best-effort load of the sqlite-vec extension."""
+    if id(conn) in _sqlite_vec_loaded:
+        return True
+    try:
+        conn.enable_load_extension(True)
+    except (AttributeError, sqlite3.OperationalError):
+        return False
+    try:
+        import sqlite_vec  # type: ignore[import-not-found]
+    except ImportError:
+        return False
+    try:
+        sqlite_vec.load(conn)
+    except sqlite3.OperationalError:
+        return False
+    finally:
+        with suppress(sqlite3.OperationalError):
+            conn.enable_load_extension(False)
+    _sqlite_vec_loaded.add(id(conn))
+    return True
+
+
+def search_embedding(
+    kb_dir: Path,
+    *,
+    query_vec,  # type: ignore[no-untyped-def]
+    kinds: tuple[str, ...] = (
+        "claim", "page", "source", "entity", "relation", "evidence",
+    ),
+    limit: int = 10,
+    min_score: float = 0.0,
+) -> list[tuple[str, str, str, float]]:
+    import numpy as np
+    q = np.asarray(query_vec, dtype=np.float32)
+    qnorm = float(np.linalg.norm(q))
+    if qnorm > 0:
+        q = q / qnorm
+    placeholders = ",".join("?" for _ in kinds)
+    with open_db(kb_dir) as conn:
+        have_vec = _load_sqlite_vec(conn)
+        if have_vec:
+            try:
+                # SQLite doesn't allow a column alias to be referenced in the
+                # WHERE clause of the same SELECT, so the min_score filter
+                # goes in an outer query against the inner alias.
+                rows = conn.execute(
+                    f"SELECT kind, id, score FROM ("
+                    f"  SELECT kind, id, 1.0 - vec_distance_cosine(vec, ?) AS score "
+                    f"  FROM embedding_index "
+                    f"  WHERE kind IN ({placeholders})"
+                    f") WHERE score >= ? "
+                    f"ORDER BY score DESC LIMIT ?",
+                    (q.tobytes(), *kinds, min_score, limit),
+                ).fetchall()
+                return [(k, i, "", float(s)) for k, i, s in rows]
+            except sqlite3.OperationalError:
+                pass
+        rows = conn.execute(
+            f"SELECT kind, id, vec, dim FROM embedding_index "
+            f"WHERE kind IN ({placeholders})",
+            kinds,
+        ).fetchall()
+    scored: list[tuple[str, str, str, float]] = []
+    for kind, id_, blob, dim in rows:
+        vec = _blob_to_vec(blob, dim)
+        # Cosine similarity: q is already unit-normalized above; normalize
+        # the stored vec here too so rankings match the sqlite-vec path
+        # (which uses `1 - vec_distance_cosine`, i.e. true cosine).
+        vnorm = float(np.linalg.norm(vec))
+        if vnorm == 0:
+            continue
+        score = float(q @ vec) / vnorm
+        if score >= min_score:
+            scored.append((kind, id_, "", score))
+    scored.sort(key=lambda r: r[3], reverse=True)
+    return scored[:limit]
+
+
+def search_semantic(
+    kb_dir: Path,
+    query: str,
+    *,
+    limit: int = 10,
+    kinds: tuple[str, ...] = (
+        "claim", "page", "source", "entity", "relation", "evidence",
+    ),
+    min_score: float = 0.0,
+) -> list[tuple[str, str, str, float]]:
+    """Encode query (cached) -> ANN/cosine search."""
+    try:
+        from .embeddings import get_embedder
+        from .embeddings.cache import cache_query_vec, lookup_query_vec
+    except ImportError:
+        return []
+    try:
+        embedder = get_embedder()
+    except KeyError:
+        return []
+    qvec = lookup_query_vec(kb_dir, query=query)
+    # The query cache is keyed by text only; if the embedder model or
+    # vector dimension has changed since the entry was cached, the stored
+    # vector lives in a different space than the indexed document
+    # embeddings. Drop the stale entry and re-encode in that case.
+    if qvec is not None:
+        cached_dim = int(getattr(qvec, "shape", [0])[0] or 0)
+        if cached_dim != embedder.dim:
+            qvec = None
+    if qvec is None:
+        qvec = embedder.encode(query)
+        cache_query_vec(kb_dir, query=query, vec=qvec)
+    return search_embedding(
+        kb_dir, query_vec=qvec, kinds=kinds, limit=limit, min_score=min_score,
+    )

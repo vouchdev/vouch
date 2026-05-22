@@ -11,6 +11,8 @@ import getpass
 import json
 import os
 import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import click
@@ -23,15 +25,17 @@ from . import sessions as sess_mod
 from . import verify as verify_mod
 from .capabilities import capabilities as build_caps
 from .context import build_context_pack
+from .lifecycle import LifecycleError
 from .models import ProposalStatus
 from .proposals import (
-    approve as do_approve,
-)
-from .proposals import (
+    ProposalError,
     propose_claim,
     propose_entity,
     propose_page,
     propose_relation,
+)
+from .proposals import (
+    approve as do_approve,
 )
 from .proposals import (
     reject as do_reject,
@@ -44,6 +48,20 @@ from .storage import (
 )
 
 
+@contextmanager
+def _cli_errors() -> Iterator[None]:
+    # Translate domain errors into click.ClickException so users see a
+    # one-line `Error: ...` instead of a Python traceback. Without this,
+    # ProposalError / LifecycleError (both RuntimeError subclasses) escape
+    # the narrower `(ArtifactNotFoundError, ValueError)` tuples previously
+    # used per-command. The MCP and JSONL servers do the equivalent in
+    # their own request envelopes.
+    try:
+        yield
+    except (ArtifactNotFoundError, ValueError, ProposalError, LifecycleError) as e:
+        raise click.ClickException(str(e)) from e
+
+
 def _load_store(start: Path | None = None) -> KBStore:
     try:
         return KBStore(discover_root(start))
@@ -54,7 +72,15 @@ def _load_store(start: Path | None = None) -> KBStore:
 
 
 def _whoami() -> str:
-    return os.environ.get("VOUCH_USER") or getpass.getuser()
+    # Match MCP/JSONL server behaviour (server.py, jsonl_server.py): when an
+    # agent invokes the CLI it sets VOUCH_AGENT; honour it as the actor so
+    # multi-agent attribution stays consistent across transports. VOUCH_USER
+    # remains an escape hatch; OS user is the friendly default for humans.
+    return (
+        os.environ.get("VOUCH_AGENT")
+        or os.environ.get("VOUCH_USER")
+        or getpass.getuser()
+    )
 
 
 def _emit_json(obj) -> None:
@@ -176,10 +202,8 @@ def pending() -> None:
 def show(proposal_id: str) -> None:
     """Show full details of a proposal."""
     store = _load_store()
-    try:
+    with _cli_errors():
         pr = store.get_proposal(proposal_id)
-    except ArtifactNotFoundError as e:
-        raise click.ClickException(str(e)) from e
     click.echo(yaml.safe_dump(pr.model_dump(mode="json"), sort_keys=False))
 
 
@@ -189,10 +213,8 @@ def show(proposal_id: str) -> None:
 def approve(proposal_id: str, reason: str | None) -> None:
     """Approve a proposal — converts it into a durable artifact."""
     store = _load_store()
-    try:
+    with _cli_errors():
         artifact = do_approve(store, proposal_id, approved_by=_whoami(), reason=reason)
-    except (ArtifactNotFoundError, ValueError) as e:
-        raise click.ClickException(str(e)) from e
     click.echo(f"Approved → {type(artifact).__name__.lower()}/{artifact.id}")
 
 
@@ -202,10 +224,8 @@ def approve(proposal_id: str, reason: str | None) -> None:
 def reject(proposal_id: str, reason: str) -> None:
     """Reject a proposal — recorded for audit and future agent context."""
     store = _load_store()
-    try:
+    with _cli_errors():
         do_reject(store, proposal_id, rejected_by=_whoami(), reason=reason)
-    except (ArtifactNotFoundError, ValueError) as e:
-        raise click.ClickException(str(e)) from e
     click.echo(f"Rejected {proposal_id}")
 
 
@@ -224,11 +244,12 @@ def propose_claim_cmd(text: str, sources: tuple[str, ...], claim_type: str,
                       confidence: float, rationale: str | None,
                       tags: tuple[str, ...]) -> None:
     store = _load_store()
-    pr = propose_claim(
-        store, text=text, evidence=list(sources),
-        proposed_by=_whoami(), claim_type=claim_type,
-        confidence=confidence, tags=list(tags), rationale=rationale,
-    )
+    with _cli_errors():
+        pr = propose_claim(
+            store, text=text, evidence=list(sources),
+            proposed_by=_whoami(), claim_type=claim_type,
+            confidence=confidence, tags=list(tags), rationale=rationale,
+        )
     click.echo(pr.id)
 
 
@@ -243,11 +264,12 @@ def propose_page_cmd(title: str, body: str, page_type: str,
     store = _load_store()
     if body == "-":
         body = sys.stdin.read()
-    pr = propose_page(
-        store, title=title, body=body, page_type=page_type,
-        claim_ids=list(claims), entity_ids=list(entities),
-        proposed_by=_whoami(),
-    )
+    with _cli_errors():
+        pr = propose_page(
+            store, title=title, body=body, page_type=page_type,
+            claim_ids=list(claims), entity_ids=list(entities),
+            proposed_by=_whoami(),
+        )
     click.echo(pr.id)
 
 
@@ -259,10 +281,11 @@ def propose_page_cmd(title: str, body: str, page_type: str,
 def propose_entity_cmd(name: str, entity_type: str, aliases: tuple[str, ...],
                        description: str | None) -> None:
     store = _load_store()
-    pr = propose_entity(
-        store, name=name, entity_type=entity_type,
-        aliases=list(aliases), description=description, proposed_by=_whoami(),
-    )
+    with _cli_errors():
+        pr = propose_entity(
+            store, name=name, entity_type=entity_type,
+            aliases=list(aliases), description=description, proposed_by=_whoami(),
+        )
     click.echo(pr.id)
 
 
@@ -273,10 +296,11 @@ def propose_entity_cmd(name: str, entity_type: str, aliases: tuple[str, ...],
 @click.option("--confidence", default=0.7, show_default=True, type=float)
 def propose_relation_cmd(src: str, relation: str, target: str, confidence: float) -> None:
     store = _load_store()
-    pr = propose_relation(
-        store, src=src, relation=relation, target=target,
-        confidence=confidence, proposed_by=_whoami(),
-    )
+    with _cli_errors():
+        pr = propose_relation(
+            store, src=src, relation=relation, target=target,
+            confidence=confidence, proposed_by=_whoami(),
+        )
     click.echo(pr.id)
 
 
@@ -298,13 +322,14 @@ def source_add(path: str, title: str | None, url: str | None,
     """Register a file as a Source; prints its sha256 id."""
     store = _load_store()
     data = Path(path).read_bytes()
-    src = store.put_source(
-        data,
-        title=title or Path(path).name,
-        url=url,
-        locator=str(Path(path).resolve()),
-        source_type=source_type,
-    )
+    with _cli_errors():
+        src = store.put_source(
+            data,
+            title=title or Path(path).name,
+            url=url,
+            locator=str(Path(path).resolve()),
+            source_type=source_type,
+        )
     audit_mod.log_event(
         store.kb_dir, event="source.add", actor=_whoami(), object_ids=[src.id],
     )
@@ -338,8 +363,9 @@ def source_verify(fail_on_issue: bool) -> None:
 def supersede(old_claim_id: str, new_claim_id: str) -> None:
     """Mark OLD as superseded by NEW."""
     store = _load_store()
-    life.supersede(store, old_claim_id=old_claim_id,
-                   new_claim_id=new_claim_id, actor=_whoami())
+    with _cli_errors():
+        life.supersede(store, old_claim_id=old_claim_id,
+                       new_claim_id=new_claim_id, actor=_whoami())
     click.echo(f"superseded {old_claim_id} -> {new_claim_id}")
 
 
@@ -349,7 +375,8 @@ def supersede(old_claim_id: str, new_claim_id: str) -> None:
 def contradict(claim_a: str, claim_b: str) -> None:
     """Record that two claims contradict each other."""
     store = _load_store()
-    life.contradict(store, claim_a=claim_a, claim_b=claim_b, actor=_whoami())
+    with _cli_errors():
+        life.contradict(store, claim_a=claim_a, claim_b=claim_b, actor=_whoami())
     click.echo(f"contradiction recorded: {claim_a} <-> {claim_b}")
 
 
@@ -358,7 +385,8 @@ def contradict(claim_a: str, claim_b: str) -> None:
 def archive(claim_id: str) -> None:
     """Archive a claim (kept for history, omitted from default retrieval)."""
     store = _load_store()
-    life.archive(store, claim_id=claim_id, actor=_whoami())
+    with _cli_errors():
+        life.archive(store, claim_id=claim_id, actor=_whoami())
     click.echo(f"archived {claim_id}")
 
 
@@ -367,7 +395,8 @@ def archive(claim_id: str) -> None:
 def confirm(claim_id: str) -> None:
     """Re-confirm a claim — bumps last_confirmed_at."""
     store = _load_store()
-    life.confirm(store, claim_id=claim_id, actor=_whoami())
+    with _cli_errors():
+        life.confirm(store, claim_id=claim_id, actor=_whoami())
     click.echo(f"confirmed {claim_id}")
 
 
@@ -377,8 +406,9 @@ def cite(claim_id: str) -> None:
     """Resolve and print all citations backing a claim."""
     store = _load_store()
     out = []
-    for c in life.cite(store, claim_id):
-        out.append(c.model_dump(mode="json") if hasattr(c, "model_dump") else c)
+    with _cli_errors():
+        for c in life.cite(store, claim_id):
+            out.append(c.model_dump(mode="json") if hasattr(c, "model_dump") else c)
     _emit_json(out)
 
 
@@ -411,7 +441,8 @@ def session_start_cmd(agent: str | None, task: str | None, note: str | None) -> 
 @click.option("--note", default=None)
 def session_end_cmd(session_id: str, note: str | None) -> None:
     store = _load_store()
-    sess = sess_mod.session_end(store, session_id, note=note)
+    with _cli_errors():
+        sess = sess_mod.session_end(store, session_id, note=note)
     _emit_json({"session": sess.id, "proposals": sess.proposal_ids})
 
 
@@ -421,9 +452,10 @@ def session_end_cmd(session_id: str, note: str | None) -> None:
 def crystallize(session_id: str, no_page: bool) -> None:
     """Approve every pending proposal in a session (and write a summary page)."""
     store = _load_store()
-    result = sess_mod.crystallize(
-        store, session_id, approver=_whoami(), write_summary_page=not no_page,
-    )
+    with _cli_errors():
+        result = sess_mod.crystallize(
+            store, session_id, approver=_whoami(), write_summary_page=not no_page,
+        )
     _emit_json(result)
 
 
@@ -434,7 +466,7 @@ def crystallize(session_id: str, no_page: bool) -> None:
 @click.argument("query")
 @click.option("--limit", default=10, show_default=True, type=int)
 def search(query: str, limit: int) -> None:
-    """FTS5 search over claims, pages, and entities."""
+    """Search claims, pages, and entities (embedding → fts5 → substring)."""
     from . import index_db
     store = _load_store()
     try:

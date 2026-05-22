@@ -2,6 +2,11 @@
 
 **Git-native, review-gated knowledge base for LLM agents. MCP server + JSONL tool server + CLI.**
 
+<p align="center">
+  <img src="docs/banner.svg" alt="vouch — propose → review → commit → retrieve" width="100%"/>
+</p>
+
+
 > Agents should not start every session with amnesia — but they shouldn't get to write whatever they want either.
 
 `vouch` is a knowledge base for LLM agents with an explicit **review gate**: agents *propose* writes; humans *approve* them with `vouch approve`. Approved artifacts are plain files on disk — YAML for claims, markdown for pages — so the KB lives in your repo, is reviewed in PRs, diffs cleanly, and can be exported as a portable bundle.
@@ -15,6 +20,22 @@ Three opinionated choices distinguish vouch from the neighbours:
 1. **The KB is a folder in your repo.** Git is your audit log, your backup, and your sync mechanism. PRs are your review UI.
 2. **Writes require approval.** Agents file *proposals*; a human (or trusted approving agent) explicitly accepts them. `proposed/` is gitignored, so rejected drafts never pollute history.
 3. **Claims must cite sources.** A claim without at least one Source / Evidence id is a validation error, not a warning. Sources are content-hashed; the same evidence registered twice de-duplicates.
+
+## When to use vouch
+
+Worth it when:
+
+- **Multiple agents share a repo** (Claude Code + Cursor + a CI bot). Per-agent attribution in the audit log makes "which agent claimed what" answerable.
+- **Sessions keep re-explaining the same context.** Curated, cited claims let new sessions start from your team's agreed answer instead of re-grepping.
+- **You want decision records without the ADR ceremony.** `vouch crystallize` promotes a session's durable parts into proposals; one approve and they're permanent.
+- **You'd review agent-stated facts the way you review agent-written code.** Vouch is a PR queue for claimed knowledge.
+- **Compliance / audit trails matter.** Required citations + append-only audit log give you "who decided X, citing what, when" for free.
+
+Skip it if:
+
+- Solo hobby project where context fits in your head.
+- Short-lived branches with no compounding context.
+- Your team won't actually review proposals — without the gate, vouch is a worse note app.
 
 ## Install
 
@@ -43,6 +64,10 @@ vouch reject <id> --reason "..."
 # 4. commit
 git add .vouch/ && git commit -m "kb: approve auth-uses-jwt"
 ```
+
+![vouch end-to-end demo](docs/demo.gif)
+
+The full captured walkthrough lives at [docs/example-session.md](docs/example-session.md); re-render the GIF from [docs/demo.tape](docs/demo.tape) with `vhs docs/demo.tape`.
 
 ## Object model
 
@@ -204,6 +229,23 @@ vouch import-apply kb.tar.gz --on-conflict skip  # apply (default skip; never de
 | FTS5 search | no | varies | **yes** |
 | Portable bundle | no | no | **yes** |
 | Transports | SDK / HTTP | none | **MCP + JSONL** |
+
+## What ships today
+
+| Area | Current support |
+|------|-----------------|
+| Knowledge base | `.vouch/` folder, YAML claims/entities/relations/evidence/sessions, markdown pages with frontmatter, JSONL audit log, content-addressed sources |
+| CLI | `init`, `discover`, `capabilities`, `status`, `lint`, `doctor`, `pending`, `show`, `approve`, `reject`, `propose-{claim,page,entity,relation}`, `source add`, `source verify`, `supersede`, `contradict`, `archive`, `confirm`, `cite`, `session {start,end}`, `crystallize`, `search`, `context`, `index`, `audit`, `export`, `export-check`, `import-check`, `import-apply`, `serve` |
+| Tool servers | MCP over stdio + JSONL over stdin/stdout, same `kb.*` surface across both transports, capabilities + knowledge-capability descriptor |
+| Schemas | 13 JSON Schemas (Draft 2020-12) generated from pydantic in [schemas/](schemas/), plus hand-maintained `bundle.manifest` and `jsonl-envelope` schemas |
+| Write safety | review-gated writes via [proposed/](spec/review-gate.md), `dry_run:true` previews, host trust required for `approve`/`reject`, atomic exclusive-create storage, path-traversal blocked on source intake and bundle import |
+| Retrieval | SQLite FTS5 + substring fallback; optional semantic backends (`all-mpnet-base-v2`, `MiniLM-L6`, fastembed-BGE) behind install extras; context packs with citations + quality gate |
+| Lifecycle | `supersede`, `contradict`, `archive`, `confirm`, `cite` — direct mutations, all audited |
+| Portability | tar.gz bundles with per-file sha256 `manifest.json`, `export-check`, `import-check`, `import-apply` with skip/overwrite/fail conflict modes |
+| Audit | append-only `audit.log.jsonl`, per-event actor (`VOUCH_AGENT`), object ids, dry-run flag, reversible flag |
+| Adapters | Claude Code wiring documented via `.mcp.json` + `VOUCH_AGENT` env; per-runtime adapter templates not yet shipped |
+| Validation | pytest suite (storage, FTS5, audit, source-verify, review-gate, bundle, JSONL), ruff + mypy gates, GitHub CI |
+| Specification | dated snapshots under [spec/](spec/), JSON Schemas in [schemas/](schemas/), generator script at [scripts/gen_schemas.py](scripts/gen_schemas.py) |
 
 ## Status
 

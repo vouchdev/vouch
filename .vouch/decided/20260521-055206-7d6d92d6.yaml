@@ -1,0 +1,25 @@
+id: 20260521-055206-7d6d92d6
+kind: claim
+proposed_by: a
+session_id: null
+proposed_at: '2026-05-21T05:52:06.481764Z'
+payload:
+  id: vouch-uses-a-review-gated-proposal-workflow-agents-propose-c
+  text: 'Vouch uses a review-gated proposal workflow: agents propose claims citing
+    evidence sources, and proposals must be explicitly approved (kb_approve) before
+    becoming durable artifacts in the knowledge base. This prevents hallucinated or
+    low-quality knowledge from persisting without human oversight.'
+  type: observation
+  confidence: 0.9
+  evidence:
+  - 06d8519f8dcf4149d23c8a48984541b2e9365ec364e7e58192e28ed149a2c47c
+  entities: []
+  tags:
+  - architecture
+  - review-gate
+rationale: Verified by reading the source code in src/vouch/proposals.py and src/vouch/server.py
+  — the propose/approve separation is a core architectural decision.
+status: approved
+decided_at: '2026-05-21T05:52:34.378311Z'
+decided_by: a
+decision_reason: Verified by source code inspection

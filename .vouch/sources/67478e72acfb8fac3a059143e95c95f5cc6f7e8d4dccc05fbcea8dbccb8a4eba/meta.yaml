@@ -1,0 +1,12 @@
+id: 67478e72acfb8fac3a059143e95c95f5cc6f7e8d4dccc05fbcea8dbccb8a4eba
+type: file
+locator: /home/a/Dev/vouch/README.md
+title: vouch readme
+hash: 67478e72acfb8fac3a059143e95c95f5cc6f7e8d4dccc05fbcea8dbccb8a4eba
+immutable: true
+scope: project
+byte_size: 10846
+media_type: text/plain
+created_at: '2026-05-21T06:05:54.066529Z'
+metadata: {}
+tags: []

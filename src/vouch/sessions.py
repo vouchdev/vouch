@@ -7,6 +7,7 @@ proposal in a session and (optionally) writes a session-summary Page.
 
 from __future__ import annotations
 
+import logging
 import time
 import uuid
 from datetime import UTC, datetime
@@ -15,6 +16,8 @@ from . import audit
 from .models import Page, PageType, ProposalStatus, Session
 from .proposals import approve
 from .storage import KBStore
+
+logger = logging.getLogger(__name__)
 
 
 def new_session_id() -> str:
@@ -81,7 +84,15 @@ def crystallize(
             )
             approved_artifact_ids.append(artifact.id)
         except Exception as e:
-            failures.append({"proposal_id": proposal.id, "error": str(e)})
+            logger.exception(
+                "crystallize: approve(%s) failed in session %s",
+                proposal.id, sess.id,
+            )
+            failures.append({
+                "proposal_id": proposal.id,
+                "error": str(e),
+                "error_type": type(e).__name__,
+            })
 
     summary_page_id: str | None = None
     if write_summary_page and approved_artifact_ids:

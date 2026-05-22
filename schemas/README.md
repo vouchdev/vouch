@@ -8,29 +8,13 @@ These are **generated** from the pydantic models in
 the pydantic models are the source of truth — regenerate with:
 
 ```bash
-python3 -c "
-import json, sys
-sys.path.insert(0, 'src')
-from vouch.models import (
-    Source, Evidence, Claim, Entity, Relation, Page, Session,
-    AuditEvent, Proposal, ContextItem, ContextQuality,
-    ContextPack, Capabilities,
-)
-models = {
-    'source': Source, 'evidence': Evidence, 'claim': Claim,
-    'entity': Entity, 'relation': Relation, 'page': Page,
-    'session': Session, 'audit-event': AuditEvent,
-    'proposal': Proposal, 'context-item': ContextItem,
-    'context-quality': ContextQuality, 'context-pack': ContextPack,
-    'capabilities': Capabilities,
-}
-for slug, m in models.items():
-    s = m.model_json_schema()
-    s['\$schema'] = 'https://json-schema.org/draft/2020-12/schema'
-    s['\$id'] = f'https://vouch.dev/schemas/{slug}.schema.json'
-    open(f'schemas/{slug}.schema.json', 'w').write(json.dumps(s, indent=2, sort_keys=True))
-"
+python scripts/gen_schemas.py
 ```
+
+The generator is [../scripts/gen_schemas.py](../scripts/gen_schemas.py);
+it writes `*.schema.json` for every model in `MODELS` and is
+deterministic (sorted keys, stable `$id`s) so re-runs produce no diff
+unless a model actually changed.
 
 (`bundle.manifest.schema.json` and `jsonl-envelope.schema.json` are
 hand-maintained — they don't have pydantic counterparts.)

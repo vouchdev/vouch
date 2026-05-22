@@ -1,0 +1,214 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1500 960" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <!-- background -->
+  <rect width="1500" height="960" fill="#f1f3f7"/>
+
+  <!-- shadow filter -->
+  <defs>
+    <filter id="soft" x="-10%" y="-10%" width="120%" height="120%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="3"/>
+      <feOffset dx="0" dy="3"/>
+      <feComponentTransfer><feFuncA type="linear" slope="0.15"/></feComponentTransfer>
+      <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#4f5d9e"/>
+    </marker>
+  </defs>
+
+  <!-- title block -->
+  <text x="60" y="100" font-size="78" font-weight="800" fill="#1e2a44" letter-spacing="-1">vouch</text>
+  <text x="60" y="150" font-size="28" fill="#1e2a44" font-weight="400">Review-gated knowledge base for LLM agents</text>
+
+  <!-- pills -->
+  <g transform="translate(60,180)">
+    <g>
+      <rect x="0" y="0" width="140" height="34" rx="17" fill="#e2e6f3" stroke="#b8c1de"/>
+      <circle cx="20" cy="17" r="6" fill="#4f5d9e"/>
+      <text x="36" y="22" font-size="15" fill="#1e2a44" font-weight="500">local-first</text>
+    </g>
+    <g transform="translate(155,0)">
+      <rect x="0" y="0" width="170" height="34" rx="17" fill="#e2e6f3" stroke="#b8c1de"/>
+      <path d="M16 17 l5 5 l9 -10" stroke="#4f5d9e" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="40" y="22" font-size="15" fill="#1e2a44" font-weight="500">review-gated</text>
+    </g>
+    <g transform="translate(340,0)">
+      <rect x="0" y="0" width="105" height="34" rx="17" fill="#e2e6f3" stroke="#b8c1de"/>
+      <path d="M16 14 a5 5 0 1 0 7 7 M22 21 a5 5 0 1 0 -7 -7" stroke="#4f5d9e" stroke-width="2" fill="none" stroke-linecap="round"/>
+      <text x="36" y="22" font-size="15" fill="#1e2a44" font-weight="500">cited</text>
+    </g>
+    <g transform="translate(460,0)">
+      <rect x="0" y="0" width="135" height="34" rx="17" fill="#e2e6f3" stroke="#b8c1de"/>
+      <rect x="14" y="11" width="14" height="12" rx="1.5" fill="none" stroke="#4f5d9e" stroke-width="2"/>
+      <path d="M17 11 v-2 a4 4 0 0 1 8 0 v2" fill="none" stroke="#4f5d9e" stroke-width="2"/>
+      <text x="36" y="22" font-size="15" fill="#1e2a44" font-weight="500">auditable</text>
+    </g>
+  </g>
+
+  <!-- stage cards row -->
+  <!-- card 1: Propose -->
+  <g transform="translate(60,260)" filter="url(#soft)">
+    <rect width="320" height="370" rx="22" fill="#ffffff" stroke="#d8dde6"/>
+    <circle cx="46" cy="48" r="20" fill="#1e2a44"/>
+    <text x="46" y="55" font-size="22" font-weight="700" fill="#ffffff" text-anchor="middle">1</text>
+    <text x="80" y="56" font-size="26" font-weight="700" fill="#1e2a44">Propose</text>
+
+    <g transform="translate(28,100)">
+      <rect width="264" height="48" rx="10" fill="#eef1f6"/>
+      <rect x="16" y="14" width="16" height="20" rx="2" fill="none" stroke="#4f5d9e" stroke-width="2"/>
+      <text x="48" y="30" font-size="15" fill="#1e2a44" font-weight="500">register source</text>
+      <text x="48" y="44" font-size="11" fill="#5b657a">sha256 + meta</text>
+    </g>
+    <g transform="translate(28,160)">
+      <rect width="264" height="48" rx="10" fill="#eef1f6"/>
+      <circle cx="24" cy="24" r="9" fill="none" stroke="#4f5d9e" stroke-width="2"/>
+      <text x="48" y="30" font-size="15" fill="#1e2a44" font-weight="500">propose claim</text>
+      <text x="48" y="44" font-size="11" fill="#5b657a">must cite source</text>
+    </g>
+    <g transform="translate(28,220)">
+      <rect width="264" height="48" rx="10" fill="#eef1f6"/>
+      <path d="M16 28 h16 M16 22 h16 M16 16 h12" stroke="#4f5d9e" stroke-width="2" stroke-linecap="round"/>
+      <text x="48" y="30" font-size="15" fill="#1e2a44" font-weight="500">propose page</text>
+      <text x="48" y="44" font-size="11" fill="#5b657a">markdown + frontmatter</text>
+    </g>
+    <g transform="translate(28,280)">
+      <rect width="264" height="48" rx="10" fill="#eef1f6"/>
+      <circle cx="18" cy="20" r="4" fill="#4f5d9e"/><circle cx="30" cy="30" r="4" fill="#4f5d9e"/>
+      <path d="M18 20 L30 30" stroke="#4f5d9e" stroke-width="1.5"/>
+      <text x="48" y="30" font-size="15" fill="#1e2a44" font-weight="500">propose entity / relation</text>
+      <text x="48" y="44" font-size="11" fill="#5b657a">graph edges</text>
+    </g>
+  </g>
+
+  <!-- arrow 1->2 -->
+  <path d="M390 445 L420 445" stroke="#4f5d9e" stroke-width="2.5" fill="none" marker-end="url(#arrow)"/>
+
+  <!-- card 2: Review -->
+  <g transform="translate(430,260)" filter="url(#soft)">
+    <rect width="320" height="370" rx="22" fill="#ffffff" stroke="#d8dde6"/>
+    <circle cx="46" cy="48" r="20" fill="#1e2a44"/>
+    <text x="46" y="55" font-size="22" font-weight="700" fill="#ffffff" text-anchor="middle">2</text>
+    <text x="80" y="56" font-size="26" font-weight="700" fill="#1e2a44">Review</text>
+    <text x="80" y="76" font-size="13" fill="#5b657a" font-style="italic">the gate</text>
+
+    <g transform="translate(28,108)">
+      <rect width="264" height="56" rx="10" fill="#fff4d6" stroke="#e6d493"/>
+      <text x="18" y="24" font-size="13" font-weight="700" fill="#8a6b1c">PENDING</text>
+      <text x="18" y="44" font-size="13" fill="#5a4e2a" font-family="monospace">prop-7f3c · claim · cites src-9b2e</text>
+    </g>
+
+    <path d="M160 178 v22" stroke="#6b78a1" stroke-width="2" stroke-dasharray="4 4" fill="none"/>
+
+    <g transform="translate(28,208)">
+      <rect width="120" height="60" rx="10" fill="#e2e6f3" stroke="#b8c1de"/>
+      <path d="M28 30 l10 10 l18 -18" stroke="#1e2a44" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="60" y="50" font-size="13" font-weight="600" fill="#1e2a44" text-anchor="middle">approve</text>
+    </g>
+    <g transform="translate(172,208)">
+      <rect width="120" height="60" rx="10" fill="#f4dedb" stroke="#d9a89f"/>
+      <path d="M30 18 l24 24 M54 18 l-24 24" stroke="#9a3a2c" stroke-width="3" stroke-linecap="round"/>
+      <text x="60" y="50" font-size="13" font-weight="600" fill="#9a3a2c" text-anchor="middle">reject</text>
+    </g>
+
+    <g transform="translate(28,288)">
+      <rect width="264" height="56" rx="10" fill="#eef1f6"/>
+      <text x="16" y="22" font-size="13" font-weight="600" fill="#1e2a44">human or trusted agent</text>
+      <text x="16" y="42" font-size="11" fill="#5b657a" font-family="monospace">vouch approve &lt;id&gt;</text>
+    </g>
+  </g>
+
+  <!-- arrow 2->3 -->
+  <path d="M760 445 L790 445" stroke="#4f5d9e" stroke-width="2.5" fill="none" marker-end="url(#arrow)"/>
+
+  <!-- card 3: Commit -->
+  <g transform="translate(800,260)" filter="url(#soft)">
+    <rect width="320" height="370" rx="22" fill="#ffffff" stroke="#d8dde6"/>
+    <circle cx="46" cy="48" r="20" fill="#1e2a44"/>
+    <text x="46" y="55" font-size="22" font-weight="700" fill="#ffffff" text-anchor="middle">3</text>
+    <text x="80" y="56" font-size="26" font-weight="700" fill="#1e2a44">Commit</text>
+
+    <g transform="translate(28,100)">
+      <rect width="264" height="48" rx="10" fill="#eef1f6"/>
+      <text x="16" y="20" font-size="13" font-weight="600" fill="#1e2a44">claims/&lt;id&gt;.yaml</text>
+      <text x="16" y="40" font-size="11" fill="#5b657a" font-family="monospace">durable, cited, signed-off</text>
+    </g>
+    <g transform="translate(28,160)">
+      <rect width="264" height="48" rx="10" fill="#eef1f6"/>
+      <text x="16" y="20" font-size="13" font-weight="600" fill="#1e2a44">pages/&lt;id&gt;.md</text>
+      <text x="16" y="40" font-size="11" fill="#5b657a" font-family="monospace">markdown + frontmatter</text>
+    </g>
+    <g transform="translate(28,220)">
+      <rect width="264" height="48" rx="10" fill="#eef1f6"/>
+      <text x="16" y="20" font-size="13" font-weight="600" fill="#1e2a44">audit.log.jsonl</text>
+      <text x="16" y="40" font-size="11" fill="#5b657a" font-family="monospace">append-only · actor · ts</text>
+    </g>
+    <g transform="translate(28,280)">
+      <rect width="264" height="58" rx="10" fill="#e2e6f3" stroke="#b8c1de"/>
+      <path d="M20 30 a8 8 0 1 1 16 0 a8 8 0 1 1 -16 0 M28 22 v16" stroke="#1e2a44" stroke-width="2" fill="none"/>
+      <text x="48" y="26" font-size="13" font-weight="600" fill="#1e2a44">git commit</text>
+      <text x="48" y="44" font-size="11" fill="#5b657a">PR is the review UI</text>
+    </g>
+  </g>
+
+  <!-- arrow 3->4 -->
+  <path d="M1130 445 L1160 445" stroke="#4f5d9e" stroke-width="2.5" fill="none" marker-end="url(#arrow)"/>
+
+  <!-- card 4: Retrieve -->
+  <g transform="translate(1170,260)" filter="url(#soft)">
+    <rect width="280" height="370" rx="22" fill="#ffffff" stroke="#d8dde6"/>
+    <circle cx="46" cy="48" r="20" fill="#1e2a44"/>
+    <text x="46" y="55" font-size="22" font-weight="700" fill="#ffffff" text-anchor="middle">4</text>
+    <text x="80" y="56" font-size="26" font-weight="700" fill="#1e2a44">Retrieve</text>
+
+    <g transform="translate(24,100)">
+      <rect width="232" height="60" rx="10" fill="#1e2a44"/>
+      <text x="16" y="26" font-size="13" font-family="monospace" fill="#aab8e0">$ vouch serve</text>
+      <text x="16" y="46" font-size="11" font-family="monospace" fill="#7a87b8">MCP · JSONL</text>
+    </g>
+
+    <g transform="translate(24,180)">
+      <rect width="232" height="48" rx="10" fill="#eef1f6"/>
+      <text x="16" y="20" font-size="13" font-weight="600" fill="#1e2a44">kb.search · FTS5</text>
+      <text x="16" y="40" font-size="11" fill="#5b657a">ranked snippets</text>
+    </g>
+    <g transform="translate(24,240)">
+      <rect width="232" height="48" rx="10" fill="#eef1f6"/>
+      <text x="16" y="20" font-size="13" font-weight="600" fill="#1e2a44">kb.context · task pack</text>
+      <text x="16" y="40" font-size="11" fill="#5b657a">quality-gated bundle</text>
+    </g>
+    <g transform="translate(24,300)">
+      <rect width="232" height="48" rx="10" fill="#e2e6f3" stroke="#b8c1de"/>
+      <text x="16" y="20" font-size="13" font-weight="600" fill="#1e2a44">vouch export</text>
+      <text x="16" y="40" font-size="11" fill="#5b657a">portable bundle · sha256</text>
+    </g>
+  </g>
+
+  <!-- bottom: KB panel -->
+  <g transform="translate(330,690)" filter="url(#soft)">
+    <rect width="840" height="230" rx="22" fill="#ffffff" stroke="#d8dde6"/>
+    <rect x="24" y="24" width="32" height="32" rx="6" fill="#1e2a44"/>
+    <path d="M32 32 h16 M32 40 h16 M32 48 h10" stroke="#e2e6f3" stroke-width="2.5" stroke-linecap="round"/>
+    <text x="68" y="48" font-size="22" font-weight="700" fill="#1e2a44">.vouch/ — your KB lives in git</text>
+
+    <g transform="translate(28,85)" font-family="monospace" font-size="14">
+      <text x="0" y="0" fill="#5b657a">claim:</text>
+      <text x="120" y="0" fill="#1e2a44" font-weight="600">auth-uses-jwt — sessions are stateless JWT</text>
+      <text x="0" y="28" fill="#5b657a">cites:</text>
+      <text x="120" y="28" fill="#1e2a44">src-9b2e (README.md #L42), src-4a1e (PR #214)</text>
+      <text x="0" y="56" fill="#5b657a">status:</text>
+      <text x="120" y="56" fill="#1e2a44">stable</text>
+      <text x="320" y="56" fill="#5b657a">confidence:</text>
+      <text x="450" y="56" fill="#1e2a44">0.9</text>
+      <text x="0" y="84" fill="#5b657a">audit:</text>
+      <text x="120" y="84" fill="#1e2a44">proposed · approved by @alice · 2026-05-12</text>
+      <text x="0" y="112" fill="#5b657a">proposed_by:</text>
+      <text x="120" y="112" fill="#1e2a44">claude-code (session sess-2f81)</text>
+    </g>
+  </g>
+
+  <!-- dashed loops: KB <-> stages -->
+  <path d="M650 690 C 580 670, 380 660, 220 630" stroke="#6b78a1" stroke-width="1.8" fill="none" stroke-dasharray="5 5"/>
+  <path d="M1170 750 C 1240 720, 1290 680, 1310 630" stroke="#6b78a1" stroke-width="1.8" fill="none" stroke-dasharray="5 5"/>
+
+  <!-- footnote -->
+  <text x="60" y="945" font-size="13" fill="#5b657a">propose → review → commit → retrieve · agents write proposals · humans approve · git is the source of truth</text>
+</svg>

@@ -1,0 +1,6 @@
+This conversation explored the vouch project source code to understand how the MCP server works.
+Key findings: vouch exposes 40 MCP tools via FastMCP stdio transport, organized into read tools,
+write/proposal tools (review-gated), lifecycle management, session management, and maintenance tools.
+Sources are de-duplicated by SHA256 content hash. Claims require at least one evidence citation and
+go through a proposal → approve/reject workflow before becoming durable artifacts. All mutations are
+audit-logged to .vouch/audit.log.jsonl.

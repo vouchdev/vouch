@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 
 from . import audit
 from .models import Claim, ClaimStatus, Evidence, Relation, RelationType
-from .storage import KBStore
+from .storage import ArtifactNotFoundError, KBStore
 
 
 class LifecycleError(RuntimeError):
@@ -127,7 +127,7 @@ def cite(store: KBStore, claim_id: str) -> list[Evidence | dict]:
         try:
             out.append(store.get_evidence(ref))
             continue
-        except Exception:
+        except ArtifactNotFoundError:
             pass
         try:
             src = store.get_source(ref)
@@ -138,6 +138,6 @@ def cite(store: KBStore, claim_id: str) -> list[Evidence | dict]:
                 "locator": src.locator,
                 "hash": src.hash,
             })
-        except Exception:
+        except ArtifactNotFoundError:
             out.append({"kind": "missing", "ref": ref})
     return out

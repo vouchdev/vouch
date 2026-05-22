@@ -13,7 +13,7 @@ from pathlib import Path
 
 from . import index_db
 from .audit import count_events
-from .models import ClaimStatus
+from .models import ClaimStatus, ProposalStatus
 from .storage import KBStore, sha256_hex
 from .verify import verify_all
 
@@ -44,9 +44,7 @@ def status(store: KBStore) -> dict:
         "relations": len(store.list_relations()),
         "evidence": len(store.list_evidence()),
         "sessions": len(store.list_sessions()),
-        "pending_proposals": sum(
-            1 for p in store.list_proposals() if p.status.value == "pending"
-        ),
+        "pending_proposals": len(store.list_proposals(ProposalStatus.PENDING)),
         "audit_events": count_events(store.kb_dir),
         "index_present": (store.kb_dir / index_db.DB_FILENAME).exists(),
     }
