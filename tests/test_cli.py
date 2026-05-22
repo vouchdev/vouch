@@ -78,3 +78,44 @@ def test_propose_entity_empty_name_shows_clean_error(store: KBStore) -> None:
 def test_show_missing_proposal_shows_clean_error(store: KBStore) -> None:
     result = CliRunner().invoke(cli, ["show", "no-such-proposal"])
     _assert_clean_error(result, "proposal no-such-proposal")
+
+
+def test_search_fts5_backend_label(
+    store: KBStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """vouch search prints (fts5) when FTS5 returns hits."""
+    from vouch import index_db
+    from vouch.proposals import approve as do_approve
+    from vouch.proposals import propose_claim
+    src = store.put_source(b"e")
+    pr = propose_claim(store, text="findable token", evidence=[src.id], proposed_by="agent")
+    do_approve(store, pr.id, approved_by="reviewer")
+    # Index only the FTS5 tables directly — no embedding stack needed
+    with index_db.open_db(store.kb_dir) as conn:
+        index_db.index_claim(
+            conn, id="c-findable", text="findable token",
+            type="observation", status="actionable", tags=[],
+        )
+    runner = CliRunner()
+    result = runner.invoke(cli, ["search", "findable"])
+    assert result.exit_code == 0, result.output
+    assert "(fts5)" in result.output
+
+
+def test_search_substring_backend_label(
+    store: KBStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """vouch search prints (substring) when FTS5 raises and fallback runs."""
+    from vouch.proposals import approve as do_approve
+    from vouch.proposals import propose_claim
+    src = store.put_source(b"e")
+    pr = propose_claim(store, text="findable token", evidence=[src.id], proposed_by="agent")
+    do_approve(store, pr.id, approved_by="reviewer")
+    # Remove state.db so FTS5 raises and substring fallback runs
+    state_db = store.kb_dir / "state.db"
+    if state_db.exists():
+        state_db.unlink()
+    runner = CliRunner()
+    result = runner.invoke(cli, ["search", "findable"])
+    assert result.exit_code == 0, result.output
+    assert "(substring)" in result.output
