@@ -457,6 +457,22 @@ def crystallize(session_id: str, no_page: bool) -> None:
             store, session_id, approver=_whoami(), write_summary_page=not no_page,
         )
     _emit_json(result)
+    n_approved = len(result["approved"])
+    n_failed = len(result["failures"])
+    total = n_approved + n_failed
+    if total > 0 and n_failed == total:
+        click.echo(
+            f"error: all {total} proposal(s) failed to approve — "
+            f"crystallize aborted",
+            err=True,
+        )
+        raise SystemExit(1)
+    if n_failed > 0:
+        click.echo(
+            f"warning: {n_failed}/{total} proposal(s) failed to approve "
+            f"(see failures in JSON above)",
+            err=True,
+        )
 
 
 # --- retrieval ------------------------------------------------------------
