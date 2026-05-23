@@ -59,10 +59,10 @@ METHODS = [
 def capabilities() -> Capabilities:
     retrieval = ["fts5", "substring"]
     try:
-        from .embeddings import embeddings_available
-        if embeddings_available():
-            retrieval.append("embedding")
-            retrieval.append("hybrid")
+        from .embeddings import get_embedder
+        get_embedder()
+        retrieval.append("embedding")
+        retrieval.append("hybrid")
     except Exception:
         pass
     return Capabilities(

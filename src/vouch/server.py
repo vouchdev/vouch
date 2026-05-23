@@ -142,51 +142,6 @@ def kb_search(
 
     raise ValueError(f"unknown backend: {backend}")
 
-
-def _search_embedding(store: KBStore, query: str, limit: int
-                      ) -> list[dict[str, Any]]:
-    from . import index_db
-    from .embeddings import embeddings_available, encode
-    if not embeddings_available():
-        raise RuntimeError(
-            "sentence-transformers not installed. "
-            "pip install vouch[embeddings]"
-        )
-    vec = encode([query])[0].tolist()
-    hits = index_db.search_embeddings(store.kb_dir, vec, limit=limit)
-    return [
-        {"kind": k, "id": i, "snippet": s, "score": sc, "backend": "embedding"}
-        for k, i, s, sc in hits
-    ]
-
-
-def _search_hybrid(store: KBStore, query: str, limit: int
-                   ) -> list[dict[str, Any]]:
-    from contextlib import suppress
-
-    from . import index_db
-    from .embeddings import embeddings_available, encode
-    fts_hits: list[tuple[str, str, str, float]] = []
-    with suppress(Exception):
-        fts_hits = index_db.search(store.kb_dir, query, limit=limit)
-    if embeddings_available():
-        vec = encode([query])[0].tolist()
-        emb_hits = index_db.search_embeddings(store.kb_dir, vec, limit=limit)
-    else:
-        emb_hits = []
-    seen: dict[tuple[str, str], float] = {}
-    fused: list[dict[str, Any]] = []
-    for hits, weight in [(fts_hits, 1.0), (emb_hits, 1.0)]:
-        for rank, (kind, hid, snip, sc) in enumerate(hits):
-            key = (kind, hid)
-            rank_score = weight * (1.0 / (rank + 1))
-            if key in seen:
-                seen[key] += sc + rank_score
-            else:
-                seen[key] = sc + rank_score
-                fused.append({
-                    "kind": kind, "id": hid, "snippet": snip,
-                    "score": seen[key],
                     "backend": "hybrid",
                 })
     for item in fused:

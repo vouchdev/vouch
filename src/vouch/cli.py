@@ -473,13 +473,15 @@ def search(query: str, limit: int, use_embedding: bool) -> None:
     store = _load_store()
 
     if use_embedding:
-        from .embeddings import embeddings_available, encode
-        if not embeddings_available():
+        try:
+            from .embeddings import get_embedder
+            embedder = get_embedder()
+        except Exception:
             click.echo("Error: sentence-transformers not installed. "
                        "pip install vouch[embeddings]", err=True)
             raise SystemExit(1)
-        vec = encode([query])[0].tolist()
-        hits = index_db.search_embeddings(store.kb_dir, vec, limit=limit)
+        vec = embedder.encode(query).tolist()
+        hits = index_db.search_embedding(store.kb_dir, query_vec=vec, limit=limit)
         backend = "embedding"
     else:
         try:

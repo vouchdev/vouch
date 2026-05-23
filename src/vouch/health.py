@@ -169,8 +169,10 @@ def rebuild_index(store: KBStore) -> dict:
 
 
 def _rebuild_embeddings(store: KBStore) -> None:
-    from .embeddings import embeddings_available, encode
-    if not embeddings_available():
+    try:
+        from .embeddings import get_embedder
+        embedder = get_embedder()
+    except Exception:
         return
     with index_db.open_db(store.kb_dir) as conn:
         texts: list[tuple[str, str, str]] = []
@@ -185,7 +187,7 @@ def _rebuild_embeddings(store: KBStore) -> None:
         batch_size = 64
         for i in range(0, len(texts), batch_size):
             batch = texts[i:i + batch_size]
-            vecs = encode([t[2] for t in batch])
+            vecs = embedder.encode_batch([t[2] for t in batch])
             for (kind, eid, _), row in zip(batch, vecs, strict=True):
                 index_db.index_embedding(conn, kind=kind, id=eid,
                                          vec=row.tolist())
