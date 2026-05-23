@@ -28,7 +28,9 @@ class _MockEmbedder:
     def encode(self, text: str) -> np.ndarray:
         return np.zeros(self.dim, dtype=np.float32)
     def encode_batch(self, texts: list[str]) -> np.ndarray:
-        return np.zeros((len(texts), self.dim), dtype=np.float32) if texts else np.zeros((0, self.dim), dtype=np.float32)
+        if not texts:
+            return np.zeros((0, self.dim), dtype=np.float32)
+        return np.zeros((len(texts), self.dim), dtype=np.float32)
 
 
 @pytest.fixture
@@ -133,12 +135,8 @@ def test_search_substring_backend_label(
 
 
 def test_crystallize_cli_all_failures_exits_1(store: KBStore) -> None:
-    embedder_patch = patch("vouch.embeddings.get_embedder", return_value=_MockEmbedder())
-    embedder_patch.start()
-    try:
+    with patch("vouch.embeddings.get_embedder", return_value=_MockEmbedder()):
         src = store.put_source(b"e")
-    finally:
-        embedder_patch.stop()
     sess = sess_mod.session_start(store, agent="a", task="t")
     propose_claim(store, text="t1", evidence=[src.id], proposed_by="a", session_id=sess.id)
     propose_claim(store, text="t2", evidence=[src.id], proposed_by="a", session_id=sess.id)
@@ -155,12 +153,8 @@ def test_crystallize_cli_all_failures_exits_1(store: KBStore) -> None:
 def test_crystallize_cli_partial_failures_shows_warning(store: KBStore) -> None:
     from vouch.proposals import approve as real_approve
 
-    embedder_patch = patch("vouch.embeddings.get_embedder", return_value=_MockEmbedder())
-    embedder_patch.start()
-    try:
+    with patch("vouch.embeddings.get_embedder", return_value=_MockEmbedder()):
         src = store.put_source(b"e")
-    finally:
-        embedder_patch.stop()
     sess = sess_mod.session_start(store, agent="a", task="t")
     propose_claim(store, text="t1", evidence=[src.id], proposed_by="a", session_id=sess.id)
     propose_claim(store, text="t2", evidence=[src.id], proposed_by="a", session_id=sess.id)
