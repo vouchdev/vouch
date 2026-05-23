@@ -22,18 +22,6 @@ from vouch.proposals import propose_claim
 from vouch.storage import KBStore
 
 
-class _MockEmbedder:
-    dim = 768
-    def encode(self, text: str):
-        import numpy as np
-        return np.zeros(self.dim, dtype=np.float32)
-    def encode_batch(self, texts: list[str]):
-        import numpy as np
-        if not texts:
-            return np.zeros((0, self.dim), dtype=np.float32)
-        return np.zeros((len(texts), self.dim), dtype=np.float32)
-
-
 @pytest.fixture
 def store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> KBStore:
     s = KBStore.init(tmp_path)
@@ -136,7 +124,7 @@ def test_search_substring_backend_label(
 
 
 def test_crystallize_cli_all_failures_exits_1(store: KBStore) -> None:
-    with patch("vouch.embeddings.get_embedder", return_value=_MockEmbedder()):
+    with patch.object(KBStore, "_embed_and_store"):
         src = store.put_source(b"e")
     sess = sess_mod.session_start(store, agent="a", task="t")
     propose_claim(store, text="t1", evidence=[src.id], proposed_by="a", session_id=sess.id)
@@ -154,7 +142,7 @@ def test_crystallize_cli_all_failures_exits_1(store: KBStore) -> None:
 def test_crystallize_cli_partial_failures_shows_warning(store: KBStore) -> None:
     from vouch.proposals import approve as real_approve
 
-    with patch("vouch.embeddings.get_embedder", return_value=_MockEmbedder()):
+    with patch.object(KBStore, "_embed_and_store"):
         src = store.put_source(b"e")
     sess = sess_mod.session_start(store, agent="a", task="t")
     propose_claim(store, text="t1", evidence=[src.id], proposed_by="a", session_id=sess.id)
@@ -171,7 +159,7 @@ def test_crystallize_cli_partial_failures_shows_warning(store: KBStore) -> None:
         return real_approve(store, proposal_id, **kwargs)
 
     with patch("vouch.sessions.approve", side_effect=_side_effect), \
-         patch("vouch.embeddings.get_embedder", return_value=_MockEmbedder()):
+         patch.object(KBStore, "_embed_and_store"):
         result = CliRunner().invoke(cli, ["crystallize", sess.id])
 
     assert result.exit_code == 0
