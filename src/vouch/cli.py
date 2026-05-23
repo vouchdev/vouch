@@ -479,7 +479,7 @@ def search(query: str, limit: int, use_embedding: bool) -> None:
         except Exception:
             click.echo("Error: sentence-transformers not installed. "
                        "pip install vouch[embeddings]", err=True)
-            raise SystemExit(1)
+            raise SystemExit(1) from None
         vec = embedder.encode(query).tolist()
         hits = index_db.search_embedding(store.kb_dir, query_vec=vec, limit=limit)
         backend = "embedding"
