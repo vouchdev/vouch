@@ -39,7 +39,7 @@ embeddings = [
     "sqlite-vec>=0.1,<1",
 ]
 embeddings-fast = [
-    "fastembed>=0.3,<1",
+    "fastembed>=0.8.0,<1",
     "onnxruntime>=1.18,<2",
     "numpy>=1.26,<3",
     "sqlite-vec>=0.1,<1",
