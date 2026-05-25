@@ -147,6 +147,19 @@ def doctor(store: KBStore) -> HealthReport:
 
 def rebuild_index(store: KBStore) -> dict:
     """Drop and rebuild state.db from the durable files. Idempotent."""
+    # Detect a stale embedding-model identity before reset() wipes the meta.
+    try:
+        from . import audit
+        from .embeddings.migration import detect_mismatch
+        m = detect_mismatch(store.kb_dir)
+        if m is not None:
+            audit.log_event(
+                store.kb_dir, event="embedding.model_mismatch",
+                actor="vouch-health",
+                object_ids=[], data=m,
+            )
+    except ImportError:
+        pass
     index_db.reset(store.kb_dir)
     with index_db.open_db(store.kb_dir) as conn:
         for c in store.list_claims():

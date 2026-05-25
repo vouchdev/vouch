@@ -11,10 +11,12 @@ which slipped past the except and surfaced as a traceback.
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from click.testing import CliRunner
 
+from vouch import sessions as sess_mod
 from vouch.cli import cli
 from vouch.proposals import propose_claim
 from vouch.storage import KBStore
@@ -119,3 +121,47 @@ def test_search_substring_backend_label(
     result = runner.invoke(cli, ["search", "findable"])
     assert result.exit_code == 0, result.output
     assert "(substring)" in result.output
+
+
+def test_crystallize_cli_all_failures_exits_1(store: KBStore) -> None:
+    with patch.object(KBStore, "_embed_and_store"):
+        src = store.put_source(b"e")
+    sess = sess_mod.session_start(store, agent="a", task="t")
+    propose_claim(store, text="t1", evidence=[src.id], proposed_by="a", session_id=sess.id)
+    propose_claim(store, text="t2", evidence=[src.id], proposed_by="a", session_id=sess.id)
+    sess_mod.session_end(store, sess.id)
+
+    with patch("vouch.sessions.approve", side_effect=ValueError("storage full")):
+        result = CliRunner().invoke(cli, ["crystallize", sess.id])
+
+    assert result.exit_code == 1
+    assert "error:" in result.stderr
+    assert "all 2 proposal(s) failed" in result.stderr
+
+
+def test_crystallize_cli_partial_failures_shows_warning(store: KBStore) -> None:
+    from vouch.proposals import approve as real_approve
+
+    with patch.object(KBStore, "_embed_and_store"):
+        src = store.put_source(b"e")
+    sess = sess_mod.session_start(store, agent="a", task="t")
+    propose_claim(store, text="t1", evidence=[src.id], proposed_by="a", session_id=sess.id)
+    propose_claim(store, text="t2", evidence=[src.id], proposed_by="a", session_id=sess.id)
+    sess_mod.session_end(store, sess.id)
+
+    call_count = 0
+
+    def _side_effect(store, proposal_id, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise ValueError("storage full")
+        return real_approve(store, proposal_id, **kwargs)
+
+    with patch("vouch.sessions.approve", side_effect=_side_effect), \
+         patch.object(KBStore, "_embed_and_store"):
+        result = CliRunner().invoke(cli, ["crystallize", sess.id])
+
+    assert result.exit_code == 0
+    assert "warning:" in result.stderr
+    assert "1/2 proposal(s) failed" in result.stderr

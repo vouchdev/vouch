@@ -14,7 +14,7 @@ This implementation:
 from __future__ import annotations
 
 import sqlite3
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
 from . import index_db
 from .models import ContextItem, ContextPack, ContextQuality
@@ -25,7 +25,13 @@ ContextItemKind = Literal["claim", "page", "entity", "relation", "source"]
 
 def _retrieve(store: KBStore, query: str, limit: int
               ) -> list[tuple[str, str, str, float, str]]:
-    """Return list of (kind, id, summary, score, backend)."""
+    """Return list of (kind, id, summary, score, backend).
+
+    Dispatch order: embedding (semantic) -> FTS5 -> substring.
+    """
+    raw = index_db.search_semantic(store.kb_dir, query, limit=limit)
+    if raw:
+        return [(k, i, s, sc, "embedding") for k, i, s, sc in raw]
     try:
         hits = index_db.search(store.kb_dir, query, limit=limit)
         if hits:
@@ -48,6 +54,24 @@ def _citations_for_claim(store: KBStore, claim_id: str) -> list[str]:
     return list(claim.evidence)
 
 
+def _enrich_summary(store: KBStore, kind: str, artifact_id: str, summary: str) -> str:
+    """Return a non-empty summary, falling back to the stored artifact text."""
+    if summary:
+        return summary
+    try:
+        if kind == "claim":
+            return store.get_claim(artifact_id).text
+        if kind == "page":
+            p = store.get_page(artifact_id)
+            return p.title or p.body[:200]
+        if kind == "entity":
+            e = store.get_entity(artifact_id)
+            return e.name or (e.description or "")[:200]
+    except Exception:
+        pass
+    return summary
+
+
 def build_context_pack(
     store: KBStore,
     *,
@@ -58,13 +82,15 @@ def build_context_pack(
     require_citations: bool = False,
     fail_on_warnings: bool = False,
     fail_on_budget_truncation: bool = False,
-) -> ContextPack:
+    explain: bool = False,
+) -> ContextPack | dict[str, Any]:
     hits = _retrieve(store, query, limit)
     items: list[ContextItem] = []
     for kind, hid, summary, score, backend in hits:
         cites: list[str] = []
         if kind == "claim":
             cites = _citations_for_claim(store, hid)
+        summary = _enrich_summary(store, kind, hid, summary)
         items.append(
             ContextItem(
                 id=hid, type=cast(ContextItemKind, kind), summary=summary, score=score,
@@ -124,4 +150,13 @@ def build_context_pack(
         failed=failed,
     )
 
-    return ContextPack(query=query, items=items, quality=quality, warnings=warnings)
+    pack = ContextPack(query=query, items=items, quality=quality, warnings=warnings)
+    result: dict[str, Any] = pack.model_dump()
+    # Determine the backend used (all hits share the same backend in _retrieve).
+    result["backend"] = hits[0][4] if hits else "none"
+    if explain:
+        result["explain"] = [
+            {"kind": k, "id": i, "score": sc, "backend": hits[0][4] if hits else "none"}
+            for k, i, _sn, sc, _be in hits
+        ]
+    return result

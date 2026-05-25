@@ -44,6 +44,19 @@ def test_detect_mismatch_reports_model_change(store: KBStore) -> None:
     assert mismatch["current_model"] == "mock"
 
 
+def test_rebuild_index_emits_mismatch_audit_event(store: KBStore) -> None:
+    from vouch import health, index_db
+    src = store.put_source(b"e")
+    store.put_claim(Claim(id="c1", text="x", evidence=[src.id]))
+    index_db.set_embedding_meta(
+        store.kb_dir, model="some-other-model", version="v9", dim=8,
+    )
+    health.rebuild_index(store)
+    log_path = store.kb_dir / "audit.log.jsonl"
+    text = log_path.read_text() if log_path.exists() else ""
+    assert "embedding.model_mismatch" in text
+
+
 def test_backfill_re_encodes_all_artifacts(store: KBStore) -> None:
     src = store.put_source(b"e")
     store.put_claim(Claim(id="c1", text="alpha", evidence=[src.id]))

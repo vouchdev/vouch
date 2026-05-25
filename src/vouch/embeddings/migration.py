@@ -32,8 +32,12 @@ def detect_mismatch(kb_dir: Path) -> dict[str, Any] | None:
     }
 
 
-def backfill_embeddings(store: Any) -> int:
-    """Re-encode every artifact under the current adapter. Returns count touched."""
+def backfill_embeddings(store: Any, force: bool = False) -> int:
+    """Re-encode every artifact under the current adapter. Returns count touched.
+
+    With force=True, re-encode even when the stored content hash and model
+    already match (otherwise unchanged artifacts are skipped).
+    """
     embedder = get_embedder()
     touched = 0
     # (list-method, kind, text-extractor). Missing list methods are skipped;
@@ -53,7 +57,7 @@ def backfill_embeddings(store: Any) -> int:
         if lister is None:
             continue
         for obj in lister():
-            store._embed_and_store(kind=kind, id=obj.id, text=text_of(obj))
+            store._embed_and_store(kind=kind, id=obj.id, text=text_of(obj), force=force)
             touched += 1
     index_db.set_embedding_meta(
         store.kb_dir, model=embedder.name, version=embedder.version, dim=embedder.dim,

@@ -457,6 +457,22 @@ def crystallize(session_id: str, no_page: bool) -> None:
             store, session_id, approver=_whoami(), write_summary_page=not no_page,
         )
     _emit_json(result)
+    n_approved = len(result["approved"])
+    n_failed = len(result["failures"])
+    total = n_approved + n_failed
+    if total > 0 and n_failed == total:
+        click.echo(
+            f"error: all {total} proposal(s) failed to approve — "
+            f"crystallize aborted",
+            err=True,
+        )
+        raise SystemExit(1)
+    if n_failed > 0:
+        click.echo(
+            f"warning: {n_failed}/{total} proposal(s) failed to approve "
+            f"(see failures in JSON above)",
+            err=True,
+        )
 
 
 # --- retrieval ------------------------------------------------------------
@@ -464,40 +480,79 @@ def crystallize(session_id: str, no_page: bool) -> None:
 
 @cli.command()
 @click.argument("query")
-@click.option("--limit", default=10, show_default=True, type=int)
-@click.option("--embedding", "use_embedding", is_flag=True,
-              help="Use embedding-based semantic search")
-def search(query: str, limit: int, use_embedding: bool) -> None:
-    """Search claims, pages, and entities (embedding → fts5 → substring)."""
+@click.option("--limit", "-n", default=10, show_default=True, type=int)
+@click.option("--top-k", default=None, type=int, help="Alias for --limit.")
+@click.option("--semantic/--no-semantic", default=None,
+              help="Force semantic backend (alias for --backend embedding).")
+@click.option(
+    "--backend",
+    type=click.Choice(["auto", "embedding", "fts5", "substring", "hybrid"]),
+    default="auto", show_default=True,
+)
+@click.option("--min-score", default=0.0, show_default=True, type=float)
+@click.option("--rerank/--no-rerank", default=False)
+@click.option("--hyde/--no-hyde", default=False)
+@click.option("--explain/--no-explain", default=False)
+def search(
+    query: str,
+    limit: int,
+    top_k: int | None,
+    semantic: bool | None,
+    backend: str,
+    min_score: float,
+    rerank: bool,
+    hyde: bool,
+    explain: bool,
+) -> None:
+    """Search the KB."""
     from . import index_db
+    from .embeddings.fusion import rrf_fuse
     store = _load_store()
-
-    if use_embedding:
-        try:
-            from .embeddings import get_embedder
-            embedder = get_embedder()
-        except Exception:
-            click.echo("Error: sentence-transformers not installed. "
-                       "pip install vouch[embeddings]", err=True)
-            raise SystemExit(1) from None
-        vec = embedder.encode(query).tolist()
-        hits = index_db.search_embedding(store.kb_dir, query_vec=vec, limit=limit)
+    if top_k is not None:
+        limit = top_k
+    if semantic is True:
         backend = "embedding"
-    else:
-        try:
-            hits = index_db.search(store.kb_dir, query, limit=limit)
-            if not hits:
-                hits = store.search_substring(query, limit=limit)
-                backend = "substring"
-            else:
-                backend = "fts5"
-        except Exception:
-            hits = store.search_substring(query, limit=limit)
-            backend = "substring"
+    elif semantic is False:
+        backend = "fts5"
+    q = query
+    if hyde:
+        from .embeddings.hyde import expand_query_template
+        q = expand_query_template(query)
 
-    for kind, hid, snippet, score in hits:
-        click.echo(f"[{kind}] {hid}  score={score:.3f}  ({backend})")
-        click.echo(f"    {snippet[:200]}")
+    hits: list[tuple[str, str, str, float]] = []
+    used = backend
+    if backend in ("auto", "embedding"):
+        hits = index_db.search_semantic(
+            store.kb_dir, q, limit=limit, min_score=min_score,
+        )
+        used = "embedding" if hits else used
+    if not hits and backend in ("auto", "fts5"):
+        hits = index_db.search(store.kb_dir, q, limit=limit)
+        used = "fts5" if hits else used
+    if not hits and backend in ("auto", "substring"):
+        hits = store.search_substring(q, limit=limit)
+        used = "substring"
+    if backend == "hybrid":
+        emb = index_db.search_semantic(store.kb_dir, q, limit=limit * 2)
+        fts = index_db.search(store.kb_dir, q, limit=limit * 2)
+        hits = rrf_fuse(emb, fts, limit=limit)
+        used = "hybrid"
+
+    if rerank and hits:
+        try:
+            from .embeddings.rerank import default_reranker
+            from .embeddings.rerank import rerank as do_rerank
+            hits = do_rerank(query=query, hits=hits, reranker=default_reranker(),
+                             top_k=limit)
+        except ImportError:
+            click.echo("warning: rerank extras not installed; skipping rerank",
+                       err=True)
+
+    for k, i, snip, score in hits:
+        if explain:
+            click.echo(f"[{used}] {k}/{i}\tscore={score:.4f}\t{snip}  ({used})")
+        else:
+            click.echo(f"{k}/{i}\t{snip}  ({used})")
 
 
 @cli.command()
@@ -514,7 +569,7 @@ def context(task: str, limit: int, max_chars: int | None,
         store, query=task, limit=limit, max_chars=max_chars,
         min_items=min_items, require_citations=require_citations,
     )
-    _emit_json(pack.model_dump(mode="json"))
+    _emit_json(pack)
 
 
 @cli.command()
@@ -523,6 +578,107 @@ def index() -> None:
     store = _load_store()
     stats = health.rebuild_index(store)
     click.echo(f"indexed: {stats}")
+
+
+@cli.command()
+@click.option("--threshold", default=0.95, show_default=True, type=float)
+@click.option("--dry-run/--no-dry-run", default=False)
+def dedup(threshold: float, dry_run: bool) -> None:
+    """Scan embeddings for cross-artifact near-duplicates."""
+    from .embeddings.dedup import scan_all
+    store = _load_store()
+    rows = scan_all(store.kb_dir, threshold=threshold, dry_run=dry_run)
+    if not rows:
+        click.echo("dedup: no duplicates found")
+        return
+    for r in rows:
+        click.echo(
+            f"{r['kind']}/{r['id']} ~ {r['kind']}/{r['near_id']}  "
+            f"cos={r['cosine']:.4f}"
+        )
+
+
+@cli.group()
+def embeddings() -> None:
+    """Embedding maintenance commands."""
+
+
+@embeddings.command("stats")
+def embeddings_stats() -> None:
+    """Print model identity, per-kind counts, and cache hit rate."""
+    from . import index_db
+    from .embeddings.cache import query_cache_stats
+    store = _load_store()
+    meta = index_db.get_embedding_meta(store.kb_dir)
+    for k, v in sorted(meta.items()):
+        click.echo(f"{k}\t{v}")
+    with index_db.open_db(store.kb_dir) as conn:
+        rows = conn.execute(
+            "SELECT kind, COUNT(*) FROM embedding_index GROUP BY kind"
+        ).fetchall()
+    for k, n in rows:
+        click.echo(f"embedding_count_{k}\t{n}")
+    cs = query_cache_stats(store.kb_dir)
+    click.echo(f"query_cache_entries\t{cs['entries']}")
+    click.echo(f"query_cache_hits\t{cs['hits']}")
+
+
+@cli.group(name="eval")
+def eval_group() -> None:
+    """Evaluation harnesses."""
+
+
+@eval_group.command("embedding")
+@click.option("--queries", required=True, type=click.Path(exists=True))
+@click.option("--metric", default="recall@10,mrr,ndcg")
+def eval_embedding(queries: str, metric: str) -> None:
+    """Run retrieval-quality metrics over a JSONL query set."""
+    from pathlib import Path as _Path
+
+    from .embeddings.scorer import evaluate
+    store = _load_store()
+    metrics = tuple(m.strip() for m in metric.split(","))
+    canonical = tuple(
+        "recall@k" if m.startswith("recall@") else m for m in metrics
+    )
+    import contextlib
+    k = 10
+    for m in metrics:
+        if m.startswith("recall@"):
+            with contextlib.suppress(ValueError):
+                k = int(m.split("@", 1)[1])
+    out = evaluate(
+        kb_dir=store.kb_dir,
+        queries_file=_Path(queries),
+        k=k,
+        metrics=canonical,
+    )
+    for m_name, v in out.items():
+        click.echo(f"{m_name}\t{v:.4f}")
+
+
+@cli.command()
+@click.option("--embeddings/--no-embeddings", default=False,
+              help="Rebuild the embedding index in addition to FTS5.")
+@click.option("--backfill/--no-backfill", default=False,
+              help="Re-encode every artifact under the current model.")
+@click.option("--force/--no-force", default=False,
+              help="Re-encode even if content hash unchanged.")
+@click.option("--model", default=None,
+              help="Adapter name; defaults to the registered default.")
+def reindex(embeddings: bool, backfill: bool, force: bool, model: str | None) -> None:
+    """Rebuild derived indexes from on-disk artifacts."""
+    store = _load_store()
+    health.rebuild_index(store)
+    if embeddings or backfill:
+        from .embeddings.migration import backfill_embeddings
+        if model:
+            from .embeddings import get_embedder
+            get_embedder(model)
+        n = backfill_embeddings(store, force=force)
+        click.echo(f"reindex: embeddings backfilled = {n}")
+    else:
+        click.echo("reindex: FTS5 rebuilt")
 
 
 @cli.command()

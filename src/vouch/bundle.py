@@ -73,7 +73,10 @@ def build_manifest(kb_dir: Path) -> dict[str, Any]:
     for rel, abs_path in _iter_export_files(kb_dir):
         data = abs_path.read_bytes()
         files.append({
-            "path": str(rel),
+            # tarfile member names use POSIX `/` on every platform; the
+            # manifest path must match so set lookups and the per-subdir
+            # counter below work on Windows too.
+            "path": rel.as_posix(),
             "size": len(data),
             "sha256": sha256_hex(data),
         })
@@ -103,7 +106,7 @@ def export(kb_dir: Path, *, dest: Path, actor: str = "vouch-export") -> dict[str
     dest.parent.mkdir(parents=True, exist_ok=True)
     with tarfile.open(dest, "w:gz") as tar:
         for rel, abs_path in _iter_export_files(kb_dir):
-            tar.add(abs_path, arcname=str(rel))
+            tar.add(abs_path, arcname=rel.as_posix())
         manifest_bytes = json.dumps(manifest, indent=2, sort_keys=True).encode()
         info = tarfile.TarInfo(MANIFEST_NAME)
         info.size = len(manifest_bytes)
@@ -255,7 +258,7 @@ def import_check(kb_dir: Path, bundle_path: Path) -> ImportCheckResult:
                 continue
             if not dest.exists():
                 new_files.append(f["path"])
-            elif sha256_hex(dest.read_bytes()) == f["sha256"]:
+            elif sha256_hex(dest.read_bytes()) == f.get("sha256"):
                 identical.append(f["path"])
             else:
                 conflicts.append(f["path"])
@@ -268,8 +271,10 @@ def import_check(kb_dir: Path, bundle_path: Path) -> ImportCheckResult:
             # Manifest integrity: without this, a tampered tar member with an
             # unchanged manifest.json would pass import_check and land in the
             # KB via import_apply — defeating the per-file sha256 guarantee
-            # that export_check already enforces.
-            if sha256_hex(body) != recorded[member.name]["sha256"]:
+            # that export_check already enforces. `.get("sha256")` so a
+            # hand-crafted manifest entry missing the field is reported as a
+            # mismatch rather than raising a bare KeyError on import.
+            if sha256_hex(body) != recorded[member.name].get("sha256"):
                 issues.append(f"hash mismatch: {member.name}")
                 continue
             _validate_content(member.name, body, issues)
@@ -313,22 +318,28 @@ def import_apply(
             if member.name not in recorded:
                 continue
             dest = _safe_member_path(kb_dir, member.name)
+            expected_sha = recorded[member.name].get("sha256")
             if (
                 dest.exists()
                 and on_conflict == "skip"
-                and sha256_hex(dest.read_bytes())
-                != recorded[member.name]["sha256"]
+                and sha256_hex(dest.read_bytes()) != expected_sha
             ):
                 skipped.append(member.name)
                 continue
             dest.parent.mkdir(parents=True, exist_ok=True)
             body = tar.extractfile(member).read()  # type: ignore[union-attr]
             # Re-verify the manifest sha256 at write time as defence in
-            # depth against a TOCTOU between import_check and this re-open
-            # of the tarball.
-            if sha256_hex(body) != recorded[member.name]["sha256"]:
-                skipped.append(member.name)
-                continue
+            # depth against a TOCTOU between import_check (which already
+            # ran above) and this re-open of the tarball. The only way to
+            # reach here is mid-import tampering — raise rather than skip
+            # so the audit log doesn't record a `bundle.import` event for
+            # an import that silently dropped a member. This is exactly
+            # the audit-truthfulness anti-pattern #74 was about.
+            if sha256_hex(body) != expected_sha:
+                raise RuntimeError(
+                    f"refusing to import: hash mismatch at write time: "
+                    f"{member.name}"
+                )
             val_issues: list[str] = []
             _validate_content(member.name, body, val_issues)
             if val_issues:

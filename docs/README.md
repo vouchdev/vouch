@@ -20,6 +20,7 @@ If you're new, read in this order:
 7. [multi-agent.md](multi-agent.md) — running several agents against
    one KB without stepping on each other.
 8. [faq.md](faq.md) — questions we keep getting.
+9. [embeddings.md](embeddings.md) — semantic retrieval (primary backend)
 
 ### How docs relate to other directories
 

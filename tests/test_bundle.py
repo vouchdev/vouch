@@ -45,6 +45,30 @@ def test_export_import_round_trip(store: KBStore, tmp_path: Path) -> None:
     assert dest.get_claim("c1").text == "alpha"
 
 
+def test_manifest_paths_match_tar_member_names(store: KBStore, tmp_path: Path) -> None:
+    # Regression for the Windows path-separator bug: when build_manifest used
+    # str(rel) the manifest stored "sources\<sha>\meta.yaml" while the tar
+    # member name was "sources/<sha>/meta.yaml", silently breaking both
+    # export_check and import_apply on every Windows host.
+    src = store.put_source(b"e", title="doc")
+    store.put_claim(Claim(id="c1", text="alpha", evidence=[src.id]))
+    store.put_page(Page(id="p1", title="Page one"))
+    bundle_path = tmp_path / "out.tar.gz"
+    manifest = bundle.export(store.kb_dir, dest=bundle_path)
+
+    for f in manifest["files"]:
+        assert "\\" not in f["path"], f"manifest path uses native separator: {f['path']!r}"
+
+    with tarfile.open(bundle_path, "r:gz") as tar:
+        member_names = {m.name for m in tar.getmembers() if m.isfile()} - {bundle.MANIFEST_NAME}
+    manifest_paths = {f["path"] for f in manifest["files"]}
+    assert member_names == manifest_paths
+
+    assert manifest["counts"]["claims"] == 1
+    assert manifest["counts"]["pages"] == 1
+    assert manifest["counts"]["sources"] == 2
+
+
 def test_import_apply_skips_conflicts_by_default(store: KBStore, tmp_path: Path) -> None:
     src = store.put_source(b"e")
     store.put_claim(Claim(id="c1", text="first", evidence=[src.id]))
@@ -203,6 +227,76 @@ def test_import_rejects_source_content_mismatch(
     with pytest.raises(RuntimeError, match="hash mismatch"):
         bundle.import_apply(store.kb_dir, bundle_path)
     assert not (store.kb_dir / "sources" / "deadbeef" / "content").exists()
+
+
+def test_import_apply_raises_on_write_time_hash_mismatch(
+    store: KBStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression for #74 review feedback: if a tampered bundle slips past
+    import_check (e.g. TOCTOU between the check and the apply re-open),
+    import_apply must raise rather than silently dropping the member and
+    still logging a clean `bundle.import` audit event with the legitimate
+    bundle_id — that is exactly the audit-truthfulness anti-pattern #74
+    was filed to fix."""
+    legitimate = b"text: original\n"
+    tampered = b"text: TAMPERED\n"
+    bundle_path = tmp_path / "tampered.tar.gz"
+    _write_hash_mismatched_bundle(
+        bundle_path, "claims/c1.yaml", legitimate, tampered,
+    )
+
+    # Force the pre-write check to look clean so the apply path reaches
+    # the write-time re-verify branch.
+    monkeypatch.setattr(
+        bundle, "import_check",
+        lambda *_a, **_k: bundle.ImportCheckResult(
+            ok=True, bundle_id="deadbeef",
+            new_files=["claims/c1.yaml"], conflicts=[], identical=[], issues=[],
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="hash mismatch at write time"):
+        bundle.import_apply(store.kb_dir, bundle_path)
+    assert not (store.kb_dir / "claims" / "c1.yaml").exists()
+    audit_path = store.kb_dir / "audit.log.jsonl"
+    audit_text = audit_path.read_text() if audit_path.exists() else ""
+    assert "bundle.import" not in audit_text, audit_text
+
+
+def test_import_treats_missing_manifest_sha256_as_mismatch(
+    store: KBStore, tmp_path: Path
+) -> None:
+    """Regression for #74 review feedback: a hand-crafted manifest entry
+    without a `sha256` field used to raise a bare KeyError in import_check
+    and import_apply. Treat the missing field as a hash mismatch so the
+    bundle is rejected with a clean issue / RuntimeError."""
+    payload = b"text: any content\n"
+    bundle_path = tmp_path / "no-sha.tar.gz"
+    manifest = {
+        "spec": bundle.SPEC_VERSION,
+        "bundle_id": "deadbeef",
+        "files": [{"path": "claims/c1.yaml", "size": len(payload)}],
+        "counts": {},
+        "safety": {
+            "has_proposed": False, "has_state_db": False, "has_audit_log": False,
+        },
+    }
+    with tarfile.open(bundle_path, "w:gz") as tar:
+        info = tarfile.TarInfo("claims/c1.yaml")
+        info.size = len(payload)
+        tar.addfile(info, io.BytesIO(payload))
+        mf_bytes = json.dumps(manifest).encode()
+        mf_info = tarfile.TarInfo(bundle.MANIFEST_NAME)
+        mf_info.size = len(mf_bytes)
+        tar.addfile(mf_info, io.BytesIO(mf_bytes))
+
+    diff = bundle.import_check(store.kb_dir, bundle_path)
+    assert not diff.ok
+    assert any("hash mismatch" in i for i in diff.issues), diff.issues
+
+    with pytest.raises(RuntimeError, match="hash mismatch"):
+        bundle.import_apply(store.kb_dir, bundle_path)
+    assert not (store.kb_dir / "claims" / "c1.yaml").exists()
 
 
 def test_import_check_passes_when_member_matches_manifest(

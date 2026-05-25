@@ -53,6 +53,10 @@ METHODS = [
     "kb.import_check",
     "kb.import_apply",
     "kb.audit",
+    "kb.reindex_embeddings",
+    "kb.dedup_scan",
+    "kb.eval_embeddings",
+    "kb.embeddings_stats",
 ]
 
 

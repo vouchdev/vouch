@@ -414,7 +414,9 @@ def search_semantic(
         return []
     try:
         embedder = get_embedder()
-    except KeyError:
+    except (KeyError, ImportError):
+        # No embedder registered, or the adapter's heavy deps aren't
+        # installed -- semantic search is unavailable; let callers fall back.
         return []
     qvec = lookup_query_vec(kb_dir, query=query)
     # The query cache is keyed by text only; if the embedder model or

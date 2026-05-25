@@ -127,7 +127,7 @@ def _h_search(p: dict) -> list[dict]:
 
 
 def _h_context(p: dict) -> dict:
-    return build_context_pack(
+    return build_context_pack(  # type: ignore[return-value]
         _store(),
         query=p["task"],
         limit=int(p.get("limit", 10)),
@@ -136,7 +136,7 @@ def _h_context(p: dict) -> dict:
         require_citations=bool(p.get("require_citations", False)),
         fail_on_warnings=bool(p.get("fail_on_warnings", False)),
         fail_on_budget_truncation=bool(p.get("fail_on_budget_truncation", False)),
-    ).model_dump(mode="json")
+    )
 
 
 def _h_read_page(p: dict) -> dict:
@@ -422,6 +422,52 @@ def _h_audit(p: dict) -> list[dict]:
     ]
 
 
+def _h_reindex_embeddings(p: dict) -> dict:
+    from .embeddings.migration import backfill_embeddings
+    n = backfill_embeddings(_store(), force=bool(p.get("force", False)))
+    return {"touched": n}
+
+
+def _h_dedup_scan(p: dict) -> dict:
+    from .embeddings.dedup import scan_all
+    return {
+        "duplicates": scan_all(
+            _store().kb_dir,
+            threshold=float(p.get("threshold", 0.95)),
+            dry_run=bool(p.get("dry_run", False)),
+        ),
+    }
+
+
+def _h_eval_embeddings(p: dict) -> dict:
+    from pathlib import Path
+
+    from .embeddings.scorer import evaluate
+    return evaluate(
+        kb_dir=_store().kb_dir,
+        queries_file=Path(p["queries_path"]),
+        k=int(p.get("k", 10)),
+    )
+
+
+def _h_embeddings_stats(_: dict) -> dict:
+    from . import index_db
+    from .embeddings.cache import query_cache_stats
+    store = _store()
+    meta = index_db.get_embedding_meta(store.kb_dir)
+    with index_db.open_db(store.kb_dir) as conn:
+        counts = {
+            k: int(n) for k, n in conn.execute(
+                "SELECT kind, COUNT(*) FROM embedding_index GROUP BY kind"
+            )
+        }
+    return {
+        "model": meta.get("embedding_model"),
+        "counts": counts,
+        "query_cache": query_cache_stats(store.kb_dir),
+    }
+
+
 HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.capabilities": _h_capabilities,
     "kb.status": _h_status,
@@ -462,6 +508,10 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.import_check": _h_import_check,
     "kb.import_apply": _h_import_apply,
     "kb.audit": _h_audit,
+    "kb.reindex_embeddings": _h_reindex_embeddings,
+    "kb.dedup_scan": _h_dedup_scan,
+    "kb.eval_embeddings": _h_eval_embeddings,
+    "kb.embeddings_stats": _h_embeddings_stats,
 }
 
 

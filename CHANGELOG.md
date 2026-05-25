@@ -15,6 +15,14 @@ All notable changes to vouch are documented here. Format follows
   the same tarball. `import_apply`, `import_check`, and `export_check`
   now validate every member path and raise on unsafe names.
 - Fix `vouch search` CLI: assign backend label per code path so substring fallback results are no longer mislabelled as `fts5`; update stale docstring to reflect multi-backend search surface (#52).
+- Bundle export uses POSIX `/` separators in `manifest.json` and tar member
+  names on every platform. Previously on Windows the manifest stored
+  `sources\<sha>\meta.yaml` while the tarball stored `sources/<sha>/meta.yaml`,
+  so `vouch export-check` returned `ok: false` on the bundle vouch had just
+  produced, `manifest.counts` was always zero, and `vouch import-apply` was
+  a silent no-op. Existing Linux/macOS bundles are unchanged (their paths
+  were already POSIX); Windows bundles produced before this fix should be
+  re-exported.
 - `bundle.import_check` and `bundle.import_apply` now verify each tar
   member's `sha256` against `manifest.json` (#74). Previously the
   per-file hash was only enforced by `export_check`; the import side
@@ -22,8 +30,10 @@ All notable changes to vouch are documented here. Format follows
   tampered tarball with an unchanged manifest could land
   attacker-controlled content into the KB while the audit log
   recorded a clean `bundle.import` event. `import_apply` re-verifies
-  at write time as defence in depth against a TOCTOU between
-  `import_check` and the apply re-open.
+  at write time and raises on mismatch, so a bundle that is tampered
+  with between `import_check` and the apply re-open is rejected
+  before anything reaches disk and the audit log does not record
+  a `bundle.import` event.
 
 ## [0.0.1] — 2026-05-17
 

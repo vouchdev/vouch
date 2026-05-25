@@ -12,9 +12,10 @@ from __future__ import annotations
 import hashlib
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Sequence
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
-import numpy as np
+if TYPE_CHECKING:
+    import numpy as np
 
 DEFAULT_MODEL_NAME = "sentence-transformers/all-mpnet-base-v2"
 
@@ -32,6 +33,7 @@ class Embedder(ABC):
 
     def encode_batch(self, texts: Sequence[str]) -> np.ndarray:
         """Default batched encode -- subclasses override for true batching."""
+        import numpy as np
         if not texts:
             return np.zeros((0, self.dim), dtype=np.float32)
         return np.stack([self.encode(t) for t in texts])

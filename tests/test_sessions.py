@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -43,3 +44,20 @@ def test_crystallize_skips_already_approved(store: KBStore) -> None:
     sess_mod.session_end(store, sess.id)
     result = sess_mod.crystallize(store, sess.id, approver="u")
     assert result["approved"] == []  # already handled
+
+
+def test_crystallize_collects_approval_failures(store: KBStore) -> None:
+    src = store.put_source(b"e")
+    sess = sess_mod.session_start(store, agent="a", task="t")
+    propose_claim(store, text="t", evidence=[src.id], proposed_by="a", session_id=sess.id)
+    propose_claim(store, text="u", evidence=[src.id], proposed_by="a", session_id=sess.id)
+    sess_mod.session_end(store, sess.id)
+
+    with patch("vouch.sessions.approve", side_effect=ValueError("storage full")):
+        result = sess_mod.crystallize(store, sess.id, approver="u")
+
+    assert result["approved"] == []
+    assert len(result["failures"]) == 2
+    for f in result["failures"]:
+        assert f["error"] == "storage full"
+        assert f["error_type"] == "ValueError"

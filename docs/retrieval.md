@@ -117,3 +117,7 @@ vouch index
 - **Use Entities.** Once you have entities, search "postgres" or
   "billing-service" hits both via the entity name and via every
   claim that lists the entity.
+
+## Semantic retrieval
+
+See [embeddings.md](./embeddings.md).
