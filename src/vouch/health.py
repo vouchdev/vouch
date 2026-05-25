@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from pydantic import ValidationError
 
@@ -32,10 +33,15 @@ class Finding:
 class HealthReport:
     ok: bool
     findings: list[Finding] = field(default_factory=list)
-    counts: dict[str, int] = field(default_factory=dict)
+    # Mixed value types (str/int/bool) — `claims` etc. are ints,
+    # `kb_dir` is a str, `index_present` is a bool. Was `dict[str, int]`
+    # but `status()` already returned the mixed dict via an untyped
+    # `dict` return annotation; the narrow type was effectively never
+    # checked. Widened to match runtime reality.
+    counts: dict[str, Any] = field(default_factory=dict)
 
 
-def status(store: KBStore) -> dict:
+def status(store: KBStore) -> dict[str, Any]:
     """Quick, machine-readable summary. No deep checks."""
     return {
         "kb_dir": str(store.kb_dir),
