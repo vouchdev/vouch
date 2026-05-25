@@ -12,7 +12,7 @@ import time
 import uuid
 from datetime import UTC, datetime
 
-from . import audit
+from . import audit, index_db
 from .models import Page, PageType, ProposalStatus, Session
 from .proposals import approve
 from .storage import KBStore
@@ -107,6 +107,11 @@ def crystallize(
             ],
         )
         store.put_page(page)
+        with index_db.open_db(store.kb_dir) as conn:
+            index_db.index_page(
+                conn, id=page.id, title=page.title, body=page.body,
+                type=page.type.value, tags=page.tags,
+            )
         summary_page_id = page.id
 
     audit.log_event(

@@ -19,6 +19,11 @@ All notable changes to vouch are documented here. Format follows
   the same tarball. `import_apply`, `import_check`, and `export_check`
   now validate every member path and raise on unsafe names.
 - Fix `vouch search` CLI: assign backend label per code path so substring fallback results are no longer mislabelled as `fts5`; update stale docstring to reflect multi-backend search surface (#52).
+- `vouch crystallize` now indexes its session-summary page into FTS5 so it
+  surfaces from `vouch search` / `kb.search` / `kb.context` without a
+  `vouch index` rebuild. Previously the summary was written via
+  `store.put_page()` only, so on KBs with a populated `state.db` it was
+  silently absent from search results (#60).
 - Bundle export uses POSIX `/` separators in `manifest.json` and tar member
   names on every platform. Previously on Windows the manifest stored
   `sources\<sha>\meta.yaml` while the tarball stored `sources/<sha>/meta.yaml`,
