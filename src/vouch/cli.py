@@ -26,7 +26,7 @@ from . import verify as verify_mod
 from .capabilities import capabilities as build_caps
 from .context import build_context_pack
 from .lifecycle import LifecycleError
-from .models import ProposalStatus
+from .models import Proposal, ProposalKind, ProposalStatus
 from .onboarding import seed_starter_kb
 from .proposals import (
     ProposalError,
@@ -205,6 +205,104 @@ def pending() -> None:
         )
         click.echo(f"• {pr.id}  [{pr.kind.value}]  by {pr.proposed_by}")
         click.echo(f"    {str(preview).strip()[:120]}")
+
+
+def _proposal_preview(pr: Proposal) -> str:
+    preview = (
+        pr.payload.get("text")
+        or pr.payload.get("title")
+        or pr.payload.get("name")
+        or pr.payload.get("id")
+        or "-"
+    )
+    return str(preview).strip()
+
+
+def _show_review_proposal(pr: Proposal, index: int, total: int) -> None:
+    click.echo(f"\n[{index}/{total}] {pr.id}  [{pr.kind.value}]  by {pr.proposed_by}")
+    click.echo(_proposal_preview(pr))
+    if pr.rationale:
+        click.echo(f"rationale: {pr.rationale}")
+    click.echo()
+    click.echo(yaml.safe_dump(pr.model_dump(mode="json"), sort_keys=False).rstrip())
+
+
+@cli.command()
+@click.option(
+    "--limit",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Review at most N proposals.",
+)
+@click.option(
+    "--type",
+    "kind",
+    type=click.Choice([k.value for k in ProposalKind]),
+    default=None,
+    help="Only review proposals of this kind.",
+)
+@click.option("--dry-run", is_flag=True, help="Show decisions without mutating proposals.")
+def review(limit: int | None, kind: str | None, dry_run: bool) -> None:
+    """Walk pending proposals one at a time for approval or rejection."""
+    store = _load_store()
+    proposals = store.list_proposals(ProposalStatus.PENDING)
+    if kind is not None:
+        proposals = [pr for pr in proposals if pr.kind.value == kind]
+    if limit is not None:
+        proposals = proposals[:limit]
+    if not proposals:
+        click.echo("no pending proposals")
+        return
+
+    decided = 0
+    skipped = 0
+    actor = _whoami()
+    total = len(proposals)
+    for index, pr in enumerate(proposals, start=1):
+        _show_review_proposal(pr, index, total)
+        action = click.prompt(
+            "Action [a=approve, r=reject, s=skip, q=quit]",
+            type=click.Choice(["a", "r", "s", "q"], case_sensitive=False),
+            default="s",
+            show_choices=False,
+        ).lower()
+        if action == "q":
+            click.echo("Stopped review")
+            break
+        if action == "s":
+            click.echo(f"Skipped {pr.id}")
+            skipped += 1
+            continue
+        if action == "r":
+            reason = click.prompt("Rejection reason").strip()
+            with _cli_errors():
+                if not reason:
+                    raise ProposalError("rejection must include a reason (future agent context)")
+                if not dry_run:
+                    do_reject(store, pr.id, rejected_by=actor, reason=reason)
+            if dry_run:
+                click.echo(f"Would reject {pr.id}")
+            else:
+                click.echo(f"Rejected {pr.id}")
+            decided += 1
+            continue
+
+        reason = (
+            click.prompt("Approval reason", default="", show_default=False).strip()
+            or None
+        )
+        if dry_run:
+            click.echo(f"Would approve {pr.id}")
+        else:
+            with _cli_errors():
+                artifact = do_approve(store, pr.id, approved_by=actor, reason=reason)
+            click.echo(f"Approved -> {type(artifact).__name__.lower()}/{artifact.id}")
+        decided += 1
+
+    if dry_run:
+        click.echo(f"Review complete: {decided} selected, {skipped} skipped, no changes made")
+    else:
+        click.echo(f"Review complete: {decided} decided, {skipped} skipped")
 
 
 @cli.command()

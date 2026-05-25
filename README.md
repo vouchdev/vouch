@@ -142,6 +142,7 @@ vouch lint [--stale-days N]                 # user-actionable problems
 vouch doctor                                # full sweep incl. source verification
 
 vouch pending                               # list pending proposals
+vouch review [--limit N] [--type KIND]      # guided proposal review queue
 vouch show <proposal-id>
 vouch approve <proposal-id> [--reason ...]
 vouch reject <proposal-id> --reason "..."

@@ -10,6 +10,8 @@ All notable changes to vouch are documented here. Format follows
 - `vouch diff <id-old> <id-new>` shows what changed between two claim revisions or two page revisions — field-level changes plus a line-diff of the long text/body. Auto-detects the artifact kind and hides always-churning metadata. Read-only; supports `--json`.
 - Seed a cited starter source and claim during `vouch init`, print first-run
   next steps, and document a 30-second onboarding tour (#54).
+- Add `vouch review`, a guided CLI queue for approving, rejecting, skipping,
+  or dry-running pending proposals without bypassing the review gate.
 
 ### Fixed
 - Add `put_relation_idempotent()` to `KBStore` and use it in `supersede()` and `contradict()` so retrying after a partial failure converges to a consistent state instead of raising `ValueError`.
