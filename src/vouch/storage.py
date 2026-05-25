@@ -395,6 +395,35 @@ class KBStore:
         )
         return rel
 
+    def put_relation_idempotent(self, rel: Relation) -> Relation:
+        """Write a relation only if it does not already exist.
+
+        Used by lifecycle ops (supersede, contradict) that need to converge
+        to a consistent state on retry without raising if the relation file
+        was already written in a previous partial execution.
+        """
+        path = self._relation_path(rel.id)
+        if path.exists():
+            self._embed_and_store(
+                kind="relation", id=rel.id,
+                text=f"{rel.source} {rel.relation.value} {rel.target}",
+            )
+            return rel
+        try:
+            with path.open("x") as f:
+                f.write(_yaml_dump(rel.model_dump(mode="json")))
+        except FileExistsError:
+            self._embed_and_store(
+                kind="relation", id=rel.id,
+                text=f"{rel.source} {rel.relation.value} {rel.target}",
+            )
+            return rel  # lost the race — already written, that's fine
+        self._embed_and_store(
+            kind="relation", id=rel.id,
+            text=f"{rel.source} {rel.relation.value} {rel.target}",
+        )
+        return rel
+
     def get_relation(self, rid: str) -> Relation:
         p = self._relation_path(rid)
         if not p.exists():
