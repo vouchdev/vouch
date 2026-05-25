@@ -148,7 +148,14 @@ def test_jsonl_session_lifecycle(store: KBStore, monkeypatch) -> None:
                                "session_id": sid}})
     handle_request({"id": "3", "method": "kb.session_end",
                     "params": {"session_id": sid}})
-    monkeypatch.setenv("VOUCH_AGENT", "human-reviewer")
+    # No agent switch — crystallize as the same agent that filed the proposals.
+    # This is the #47 scenario: single-agent crystallize must succeed when
+    # review.approver_role: trusted-agent is configured.
+    import yaml
+    cfg_path = store.kb_dir / "config.yaml"
+    cfg = yaml.safe_load(cfg_path.read_text()) or {}
+    cfg.setdefault("review", {})["approver_role"] = "trusted-agent"
+    cfg_path.write_text(yaml.safe_dump(cfg))
     cryst = handle_request({"id": "4", "method": "kb.crystallize",
                             "params": {"session_id": sid}})
     assert len(cryst["result"]["approved"]) == 1
