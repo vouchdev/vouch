@@ -65,6 +65,22 @@ vouch reject <id> --reason "..."
 git add .vouch/ && git commit -m "kb: approve auth-uses-jwt"
 ```
 
+## 30-second tour
+
+`vouch init` now creates a starter config plus one cited example claim, so
+you can try the loop before wiring an agent:
+
+```bash
+mkdir vouch-demo && cd vouch-demo
+vouch init
+vouch status
+vouch search agent
+vouch cite vouch-starter-reviewed-knowledge
+```
+
+The starter claim is already durable and cites the starter source. Replace it
+with your project's first real source and claim when you are ready.
+
 ![vouch end-to-end demo](docs/demo.gif)
 
 The full captured walkthrough lives at [docs/example-session.md](docs/example-session.md); re-render the GIF from [docs/demo.tape](docs/demo.tape) with `vhs docs/demo.tape`.
@@ -102,7 +118,7 @@ After `vouch init`, your repo contains:
 ├── .gitignore                  # ignores proposed/, state.db
 ├── audit.log.jsonl             # append-only audit (committed)
 ├── state.db                    # SQLite FTS5 index (derived; not committed)
-├── claims/<id>.yaml            # durable, reviewed claims
+├── claims/<id>.yaml            # reviewed claims (init seeds vouch-starter-*.yaml)
 ├── pages/<id>.md               # markdown pages with YAML frontmatter
 ├── sources/<sha>/{meta.yaml,content}
 ├── entities/<id>.yaml          # graph nodes

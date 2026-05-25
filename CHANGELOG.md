@@ -6,6 +6,10 @@ All notable changes to vouch are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+- Seed a cited starter source and claim during `vouch init`, print first-run
+  next steps, and document a 30-second onboarding tour (#54).
+
 ### Fixed
 - Raise `ProposalError("forbidden_self_approval")` in `proposals.approve()` when `approved_by == proposal.proposed_by`, enforcing the review-gate guarantee documented in the README and CONTRIBUTING.
 - Bundle import rejects tar members whose path escapes `kb_dir`
@@ -15,6 +19,30 @@ All notable changes to vouch are documented here. Format follows
   the same tarball. `import_apply`, `import_check`, and `export_check`
   now validate every member path and raise on unsafe names.
 - Fix `vouch search` CLI: assign backend label per code path so substring fallback results are no longer mislabelled as `fts5`; update stale docstring to reflect multi-backend search surface (#52).
+- `vouch crystallize` now indexes its session-summary page into FTS5 so it
+  surfaces from `vouch search` / `kb.search` / `kb.context` without a
+  `vouch index` rebuild. Previously the summary was written via
+  `store.put_page()` only, so on KBs with a populated `state.db` it was
+  silently absent from search results (#60).
+- Bundle export uses POSIX `/` separators in `manifest.json` and tar member
+  names on every platform. Previously on Windows the manifest stored
+  `sources\<sha>\meta.yaml` while the tarball stored `sources/<sha>/meta.yaml`,
+  so `vouch export-check` returned `ok: false` on the bundle vouch had just
+  produced, `manifest.counts` was always zero, and `vouch import-apply` was
+  a silent no-op. Existing Linux/macOS bundles are unchanged (their paths
+  were already POSIX); Windows bundles produced before this fix should be
+  re-exported.
+- `bundle.import_check` and `bundle.import_apply` now verify each tar
+  member's `sha256` against `manifest.json` (#74). Previously the
+  per-file hash was only enforced by `export_check`; the import side
+  trusted any tar member whose path appeared in the manifest, so a
+  tampered tarball with an unchanged manifest could land
+  attacker-controlled content into the KB while the audit log
+  recorded a clean `bundle.import` event. `import_apply` re-verifies
+  at write time and raises on mismatch, so a bundle that is tampered
+  with between `import_check` and the apply re-open is rejected
+  before anything reaches disk and the audit log does not record
+  a `bundle.import` event.
 - Close the review-gate bypass in `sessions.crystallize` (#76). The
   durable session-summary page wrote `sess.task`, `sess.note`, and
   `sess.agent` verbatim into rendered markdown, letting an agent

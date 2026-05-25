@@ -248,7 +248,8 @@ def import_check(kb_dir: Path, bundle_path: Path) -> ImportCheckResult:
             )
         manifest = json.loads(tar.extractfile(mf_member).read().decode())  # type: ignore[union-attr]
         bundle_id = manifest.get("bundle_id", "")
-        manifest_paths = {f["path"] for f in manifest["files"]}
+        recorded = {f["path"]: f for f in manifest["files"]}
+        manifest_paths = set(recorded)
         for f in manifest["files"]:
             try:
                 dest = _safe_member_path(kb_dir, f["path"])
@@ -257,7 +258,7 @@ def import_check(kb_dir: Path, bundle_path: Path) -> ImportCheckResult:
                 continue
             if not dest.exists():
                 new_files.append(f["path"])
-            elif sha256_hex(dest.read_bytes()) == f["sha256"]:
+            elif sha256_hex(dest.read_bytes()) == f.get("sha256"):
                 identical.append(f["path"])
             else:
                 conflicts.append(f["path"])
@@ -267,6 +268,15 @@ def import_check(kb_dir: Path, bundle_path: Path) -> ImportCheckResult:
             if member.name not in manifest_paths:
                 continue
             body = tar.extractfile(member).read()  # type: ignore[union-attr]
+            # Manifest integrity: without this, a tampered tar member with an
+            # unchanged manifest.json would pass import_check and land in the
+            # KB via import_apply — defeating the per-file sha256 guarantee
+            # that export_check already enforces. `.get("sha256")` so a
+            # hand-crafted manifest entry missing the field is reported as a
+            # mismatch rather than raising a bare KeyError on import.
+            if sha256_hex(body) != recorded[member.name].get("sha256"):
+                issues.append(f"hash mismatch: {member.name}")
+                continue
             _validate_content(member.name, body, issues)
 
     return ImportCheckResult(
@@ -308,16 +318,28 @@ def import_apply(
             if member.name not in recorded:
                 continue
             dest = _safe_member_path(kb_dir, member.name)
+            expected_sha = recorded[member.name].get("sha256")
             if (
                 dest.exists()
                 and on_conflict == "skip"
-                and sha256_hex(dest.read_bytes())
-                != recorded[member.name]["sha256"]
+                and sha256_hex(dest.read_bytes()) != expected_sha
             ):
                 skipped.append(member.name)
                 continue
             dest.parent.mkdir(parents=True, exist_ok=True)
             body = tar.extractfile(member).read()  # type: ignore[union-attr]
+            # Re-verify the manifest sha256 at write time as defence in
+            # depth against a TOCTOU between import_check (which already
+            # ran above) and this re-open of the tarball. The only way to
+            # reach here is mid-import tampering — raise rather than skip
+            # so the audit log doesn't record a `bundle.import` event for
+            # an import that silently dropped a member. This is exactly
+            # the audit-truthfulness anti-pattern #74 was about.
+            if sha256_hex(body) != expected_sha:
+                raise RuntimeError(
+                    f"refusing to import: hash mismatch at write time: "
+                    f"{member.name}"
+                )
             val_issues: list[str] = []
             _validate_content(member.name, body, val_issues)
             if val_issues:

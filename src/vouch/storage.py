@@ -64,6 +64,24 @@ class ArtifactNotFoundError(KeyError):
     pass
 
 
+def _starter_config() -> dict[str, Any]:
+    return {
+        "version": 1,
+        "review": {"require_human_approval": True},
+        "retrieval": {
+            "backends": ["fts5", "substring"],
+            "default_limit": 10,
+        },
+        "agents": {
+            "recommended_loop": [
+                "kb.search before writing",
+                "kb.propose_* with citations",
+                "human review via vouch pending/show/approve",
+            ],
+        },
+    }
+
+
 def sha256_hex(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -156,15 +174,7 @@ class KBStore:
         for sub in SUBDIRS:
             (kb.kb_dir / sub).mkdir(exist_ok=True)
         if not kb.config_path.exists():
-            kb.config_path.write_text(
-                _yaml_dump(
-                    {
-                        "version": 1,
-                        "review": {"require_human_approval": True},
-                        "retrieval": {"backends": ["fts5", "substring"]},
-                    }
-                )
-            )
+            kb.config_path.write_text(_yaml_dump(_starter_config()))
         gi = kb.kb_dir / ".gitignore"
         if not gi.exists():
             # state.db is derived; proposed/ is the agent's scratch space.

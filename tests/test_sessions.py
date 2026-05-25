@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
+from vouch import index_db
 from vouch import sessions as sess_mod
 from vouch.proposals import approve, propose_claim
 from vouch.storage import KBStore
@@ -44,6 +46,39 @@ def test_crystallize_skips_already_approved(store: KBStore) -> None:
     sess_mod.session_end(store, sess.id)
     result = sess_mod.crystallize(store, sess.id, approver="u")
     assert result["approved"] == []  # already handled
+
+
+def test_crystallize_summary_page_is_fts5_indexed(store: KBStore) -> None:
+    src = store.put_source(b"e")
+    sess = sess_mod.session_start(store, agent="claude-code")
+    propose_claim(store, text="findable claim", evidence=[src.id],
+                  proposed_by="claude-code", session_id=sess.id)
+    sess_mod.session_end(store, sess.id)
+    result = sess_mod.crystallize(store, sess.id, approver="u")
+
+    summary_id = result["summary_page_id"]
+    assert summary_id is not None
+    hits = index_db.search(store.kb_dir, sess.id, limit=10)
+    assert any(kind == "page" and hid == summary_id for kind, hid, _, _ in hits)
+
+
+def test_crystallize_collects_approval_failures(store: KBStore) -> None:
+    src = store.put_source(b"e")
+    sess = sess_mod.session_start(store, agent="a", task="t")
+    propose_claim(store, text="t", evidence=[src.id], proposed_by="a",
+                  session_id=sess.id)
+    propose_claim(store, text="u", evidence=[src.id], proposed_by="a",
+                  session_id=sess.id)
+    sess_mod.session_end(store, sess.id)
+
+    with patch("vouch.sessions.approve", side_effect=ValueError("storage full")):
+        result = sess_mod.crystallize(store, sess.id, approver="u")
+
+    assert result["approved"] == []
+    assert len(result["failures"]) == 2
+    for f in result["failures"]:
+        assert f["error"] == "storage full"
+        assert f["error_type"] == "ValueError"
 
 
 def test_crystallize_summary_page_does_not_leak_agent_controlled_fields(

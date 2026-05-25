@@ -27,6 +27,7 @@ from .capabilities import capabilities as build_caps
 from .context import build_context_pack
 from .lifecycle import LifecycleError
 from .models import ProposalStatus
+from .onboarding import seed_starter_kb
 from .proposals import (
     ProposalError,
     propose_claim,
@@ -103,9 +104,18 @@ def init(path: str) -> None:
     root = Path(path).resolve()
     root.mkdir(parents=True, exist_ok=True)
     store = KBStore.init(root)
+    seed = seed_starter_kb(store, approved_by=_whoami())
+    health.rebuild_index(store)
     audit_mod.log_event(store.kb_dir, event="kb.init", actor=_whoami())
     click.echo(f"Initialised KB at {store.kb_dir}")
-    click.echo("Next: `vouch serve` to expose the MCP server to your agent.")
+    if seed.created_anything:
+        click.echo(f"Seeded starter claim: {seed.claim_id}")
+    else:
+        click.echo("Starter claim already present.")
+    click.echo("Next steps:")
+    click.echo("  vouch status")
+    click.echo("  vouch search agent")
+    click.echo("  vouch serve")
 
 
 @cli.command()
