@@ -73,7 +73,10 @@ def build_manifest(kb_dir: Path) -> dict[str, Any]:
     for rel, abs_path in _iter_export_files(kb_dir):
         data = abs_path.read_bytes()
         files.append({
-            "path": str(rel),
+            # tarfile member names use POSIX `/` on every platform; the
+            # manifest path must match so set lookups and the per-subdir
+            # counter below work on Windows too.
+            "path": rel.as_posix(),
             "size": len(data),
             "sha256": sha256_hex(data),
         })
@@ -103,7 +106,7 @@ def export(kb_dir: Path, *, dest: Path, actor: str = "vouch-export") -> dict[str
     dest.parent.mkdir(parents=True, exist_ok=True)
     with tarfile.open(dest, "w:gz") as tar:
         for rel, abs_path in _iter_export_files(kb_dir):
-            tar.add(abs_path, arcname=str(rel))
+            tar.add(abs_path, arcname=rel.as_posix())
         manifest_bytes = json.dumps(manifest, indent=2, sort_keys=True).encode()
         info = tarfile.TarInfo(MANIFEST_NAME)
         info.size = len(manifest_bytes)

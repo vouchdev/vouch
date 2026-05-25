@@ -15,6 +15,14 @@ All notable changes to vouch are documented here. Format follows
   the same tarball. `import_apply`, `import_check`, and `export_check`
   now validate every member path and raise on unsafe names.
 - Fix `vouch search` CLI: assign backend label per code path so substring fallback results are no longer mislabelled as `fts5`; update stale docstring to reflect multi-backend search surface (#52).
+- Bundle export uses POSIX `/` separators in `manifest.json` and tar member
+  names on every platform. Previously on Windows the manifest stored
+  `sources\<sha>\meta.yaml` while the tarball stored `sources/<sha>/meta.yaml`,
+  so `vouch export-check` returned `ok: false` on the bundle vouch had just
+  produced, `manifest.counts` was always zero, and `vouch import-apply` was
+  a silent no-op. Existing Linux/macOS bundles are unchanged (their paths
+  were already POSIX); Windows bundles produced before this fix should be
+  re-exported.
 
 ## [0.0.1] — 2026-05-17
 

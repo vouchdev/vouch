@@ -45,6 +45,30 @@ def test_export_import_round_trip(store: KBStore, tmp_path: Path) -> None:
     assert dest.get_claim("c1").text == "alpha"
 
 
+def test_manifest_paths_match_tar_member_names(store: KBStore, tmp_path: Path) -> None:
+    # Regression for the Windows path-separator bug: when build_manifest used
+    # str(rel) the manifest stored "sources\<sha>\meta.yaml" while the tar
+    # member name was "sources/<sha>/meta.yaml", silently breaking both
+    # export_check and import_apply on every Windows host.
+    src = store.put_source(b"e", title="doc")
+    store.put_claim(Claim(id="c1", text="alpha", evidence=[src.id]))
+    store.put_page(Page(id="p1", title="Page one"))
+    bundle_path = tmp_path / "out.tar.gz"
+    manifest = bundle.export(store.kb_dir, dest=bundle_path)
+
+    for f in manifest["files"]:
+        assert "\\" not in f["path"], f"manifest path uses native separator: {f['path']!r}"
+
+    with tarfile.open(bundle_path, "r:gz") as tar:
+        member_names = {m.name for m in tar.getmembers() if m.isfile()} - {bundle.MANIFEST_NAME}
+    manifest_paths = {f["path"] for f in manifest["files"]}
+    assert member_names == manifest_paths
+
+    assert manifest["counts"]["claims"] == 1
+    assert manifest["counts"]["pages"] == 1
+    assert manifest["counts"]["sources"] == 2
+
+
 def test_import_apply_skips_conflicts_by_default(store: KBStore, tmp_path: Path) -> None:
     src = store.put_source(b"e")
     store.put_claim(Claim(id="c1", text="first", evidence=[src.id]))
