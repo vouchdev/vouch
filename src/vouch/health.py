@@ -11,10 +11,12 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from pydantic import ValidationError
+
 from . import index_db
 from .audit import count_events
-from .models import ClaimStatus, ProposalStatus
-from .storage import KBStore, sha256_hex
+from .models import Claim, ClaimStatus, ProposalStatus
+from .storage import KBStore, _yaml_load, sha256_hex
 from .verify import verify_all
 
 
@@ -50,9 +52,41 @@ def status(store: KBStore) -> dict:
     }
 
 
-def lint(store: KBStore, *, stale_after_days: int = 180) -> HealthReport:
+def _load_claims_for_lint(store: KBStore) -> tuple[list[Claim], list[Finding]]:
+    """Iterate `claims/*.yaml` one file at a time so a single invalid
+    YAML can't crash the whole lint sweep — surface it as a finding
+    and keep going. This is the repair hint for KBs that have legacy
+    uncited claims from before the Claim.evidence min-citation
+    validator landed (#81): `vouch lint` lists them as
+    `invalid_claim` findings so the user can fix or delete the file
+    rather than seeing a bare `pydantic.ValidationError` traceback."""
+    valid: list[Claim] = []
     findings: list[Finding] = []
-    claims = store.list_claims()
+    cdir = store.kb_dir / "claims"
+    if not cdir.is_dir():
+        return valid, findings
+    for p in sorted(cdir.glob("*.yaml")):
+        cid = p.stem
+        try:
+            valid.append(Claim.model_validate(_yaml_load(p.read_text())))
+        except ValidationError as e:
+            tail = str(e).splitlines()[-1].strip() if str(e) else "validation failed"
+            findings.append(Finding(
+                "error", "invalid_claim",
+                f"claim {cid} ({p}) fails model validation: {tail} — "
+                "edit the YAML to add a citation, or delete the file",
+                [cid],
+            ))
+        except Exception as e:
+            findings.append(Finding(
+                "error", "unreadable_claim",
+                f"claim {cid} ({p}) could not be loaded: {e}", [cid],
+            ))
+    return valid, findings
+
+
+def lint(store: KBStore, *, stale_after_days: int = 180) -> HealthReport:
+    claims, findings = _load_claims_for_lint(store)
     sources_present = {s.id for s in store.list_sources()}
     evidence_present = {e.id for e in store.list_evidence()}
 
@@ -106,7 +140,24 @@ def lint(store: KBStore, *, stale_after_days: int = 180) -> HealthReport:
                 ))
 
     ok = not any(f.severity == "error" for f in findings)
-    return HealthReport(ok=ok, findings=findings, counts=status(store))
+    # Build counts inline rather than calling status(), because status()
+    # calls store.list_claims() which is strict and would re-raise on the
+    # same invalid YAMLs we just surfaced as findings. Use the safely-
+    # loaded `claims` list so the report is self-consistent.
+    counts = {
+        "kb_dir": str(store.kb_dir),
+        "claims": len(claims),
+        "pages": len(store.list_pages()),
+        "sources": len(sources_present),
+        "entities": len(store.list_entities()),
+        "relations": len(store.list_relations()),
+        "evidence": len(evidence_present),
+        "sessions": len(store.list_sessions()),
+        "pending_proposals": len(store.list_proposals(ProposalStatus.PENDING)),
+        "audit_events": count_events(store.kb_dir),
+        "index_present": (store.kb_dir / index_db.DB_FILENAME).exists(),
+    }
+    return HealthReport(ok=ok, findings=findings, counts=counts)
 
 
 def doctor(store: KBStore) -> HealthReport:

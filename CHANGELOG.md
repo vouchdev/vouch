@@ -54,7 +54,15 @@ All notable changes to vouch are documented here. Format follows
   all three paths at once; `store.update_claim` additionally
   re-validates via `Claim.model_validate(...)` before persisting so
   in-place mutation (`c.evidence = []; store.update_claim(c)`)
-  also raises before the YAML hits disk.
+  also raises before the YAML hits disk. **Migration note:** because
+  the validator also fires when claims are read back, a KB that
+  already has an uncited `claims/<id>.yaml` on disk from before this
+  fix would otherwise crash `vouch lint` / `vouch doctor` with a
+  `pydantic.ValidationError`. `vouch lint` now iterates `claims/`
+  per-file and surfaces unparseable / uncited YAMLs as
+  `invalid_claim` findings ("edit the YAML to add a citation, or
+  delete the file") instead of bailing out — so existing KBs get a
+  clean repair list rather than a traceback.
 
 ## [0.0.1] — 2026-05-17
 
