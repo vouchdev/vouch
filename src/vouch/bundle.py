@@ -245,7 +245,8 @@ def import_check(kb_dir: Path, bundle_path: Path) -> ImportCheckResult:
             )
         manifest = json.loads(tar.extractfile(mf_member).read().decode())  # type: ignore[union-attr]
         bundle_id = manifest.get("bundle_id", "")
-        manifest_paths = {f["path"] for f in manifest["files"]}
+        recorded = {f["path"]: f for f in manifest["files"]}
+        manifest_paths = set(recorded)
         for f in manifest["files"]:
             try:
                 dest = _safe_member_path(kb_dir, f["path"])
@@ -264,6 +265,13 @@ def import_check(kb_dir: Path, bundle_path: Path) -> ImportCheckResult:
             if member.name not in manifest_paths:
                 continue
             body = tar.extractfile(member).read()  # type: ignore[union-attr]
+            # Manifest integrity: without this, a tampered tar member with an
+            # unchanged manifest.json would pass import_check and land in the
+            # KB via import_apply — defeating the per-file sha256 guarantee
+            # that export_check already enforces.
+            if sha256_hex(body) != recorded[member.name]["sha256"]:
+                issues.append(f"hash mismatch: {member.name}")
+                continue
             _validate_content(member.name, body, issues)
 
     return ImportCheckResult(
@@ -315,6 +323,12 @@ def import_apply(
                 continue
             dest.parent.mkdir(parents=True, exist_ok=True)
             body = tar.extractfile(member).read()  # type: ignore[union-attr]
+            # Re-verify the manifest sha256 at write time as defence in
+            # depth against a TOCTOU between import_check and this re-open
+            # of the tarball.
+            if sha256_hex(body) != recorded[member.name]["sha256"]:
+                skipped.append(member.name)
+                continue
             val_issues: list[str] = []
             _validate_content(member.name, body, val_issues)
             if val_issues:

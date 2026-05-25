@@ -15,6 +15,15 @@ All notable changes to vouch are documented here. Format follows
   the same tarball. `import_apply`, `import_check`, and `export_check`
   now validate every member path and raise on unsafe names.
 - Fix `vouch search` CLI: assign backend label per code path so substring fallback results are no longer mislabelled as `fts5`; update stale docstring to reflect multi-backend search surface (#52).
+- `bundle.import_check` and `bundle.import_apply` now verify each tar
+  member's `sha256` against `manifest.json` (#74). Previously the
+  per-file hash was only enforced by `export_check`; the import side
+  trusted any tar member whose path appeared in the manifest, so a
+  tampered tarball with an unchanged manifest could land
+  attacker-controlled content into the KB while the audit log
+  recorded a clean `bundle.import` event. `import_apply` re-verifies
+  at write time as defence in depth against a TOCTOU between
+  `import_check` and the apply re-open.
 
 ## [0.0.1] — 2026-05-17
 
