@@ -13,6 +13,7 @@ import os
 import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import asdict
 from pathlib import Path
 
 import click
@@ -22,6 +23,7 @@ from . import __version__, bundle, health
 from . import audit as audit_mod
 from . import lifecycle as life
 from . import sessions as sess_mod
+from . import sync as sync_mod
 from . import verify as verify_mod
 from .capabilities import capabilities as build_caps
 from .context import build_context_pack
@@ -870,6 +872,41 @@ def import_apply_cmd(bundle_path: str, on_conflict: str) -> None:
     _emit_json(r)
 
 
+# --- sync ------------------------------------------------------------------
+
+
+@cli.command("sync-check")
+@click.argument("source_path", type=click.Path(exists=True))
+def sync_check_cmd(source_path: str) -> None:
+    """Compare another .vouch directory or bundle without writing."""
+    store = _load_store()
+    try:
+        r = sync_mod.sync_check(store.kb_dir, Path(source_path))
+    except RuntimeError as e:
+        raise click.ClickException(str(e)) from e
+    _emit_json(asdict(r))
+
+
+@cli.command("sync-apply")
+@click.argument("source_path", type=click.Path(exists=True))
+@click.option("--on-conflict", default="fail", show_default=True,
+              type=click.Choice(["fail", "skip", "propose"]))
+def sync_apply_cmd(source_path: str, on_conflict: str) -> None:
+    """Apply non-conflicting files from another .vouch directory or bundle."""
+    store = _load_store()
+    try:
+        r = sync_mod.sync_apply(
+            store.kb_dir,
+            Path(source_path),
+            on_conflict=on_conflict,
+            actor=_whoami(),
+        )
+    except (RuntimeError, ValueError) as e:
+        raise click.ClickException(str(e)) from e
+    health.rebuild_index(store)
+    _emit_json(r)
+
+
 # --- diff -----------------------------------------------------------------
 
 
@@ -880,8 +917,6 @@ def import_apply_cmd(bundle_path: str, on_conflict: str) -> None:
               help="Emit the diff as JSON.")
 def diff(old_id: str, new_id: str, as_json: bool) -> None:
     """Show what changed between two claim or two page revisions."""
-    from dataclasses import asdict
-
     from .diff import diff_artifacts
     store = _load_store()
     with _cli_errors():

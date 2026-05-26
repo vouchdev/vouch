@@ -7,6 +7,9 @@ All notable changes to vouch are documented here. Format follows
 ## [Unreleased]
 
 ### Added
+- `vouch sync-check` and `vouch sync-apply` reconcile another `.vouch`
+  directory or bundle by importing only non-conflicting durable artifacts and
+  reporting conflicts without overwriting reviewed knowledge.
 - `vouch pending --json` emits pending proposals as structured JSON for shell
   scripts, CI checks, and multi-agent review dashboards.
 - `vouch diff <id-old> <id-new>` shows what changed between two claim revisions or two page revisions — field-level changes plus a line-diff of the long text/body. Auto-detects the artifact kind and hides always-churning metadata. Read-only; supports `--json`.

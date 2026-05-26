@@ -174,6 +174,8 @@ vouch export --out path.tar.gz
 vouch export-check path.tar.gz
 vouch import-check path.tar.gz
 vouch import-apply path.tar.gz [--on-conflict skip|overwrite|fail]
+vouch sync-check PATH_OR_BUNDLE
+vouch sync-apply PATH_OR_BUNDLE [--on-conflict fail|skip|propose]
 
 vouch serve [--transport stdio|jsonl]
 ```
