@@ -69,7 +69,9 @@ def _starter_config() -> dict[str, Any]:
         "version": 1,
         "review": {"require_human_approval": True},
         "retrieval": {
-            "backends": ["fts5", "substring"],
+            # auto = embedding -> fts5 -> substring; or pin one of
+            # embedding | fts5 | substring. See context._retrieve.
+            "backend": "auto",
             "default_limit": 10,
         },
         "agents": {

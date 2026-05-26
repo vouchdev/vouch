@@ -16,30 +16,77 @@ from __future__ import annotations
 import sqlite3
 from typing import Any, Literal, cast
 
+import yaml
+
 from . import index_db
 from .models import ContextItem, ContextPack, ContextQuality
 from .storage import ArtifactNotFoundError, KBStore
 
 ContextItemKind = Literal["claim", "page", "entity", "relation", "source"]
 
+_VALID_BACKENDS = ("auto", "embedding", "fts5", "substring")
+
+
+def _configured_backend(store: KBStore) -> str:
+    """Resolve the retrieval backend from `config.yaml`, defaulting to "auto".
+
+    Reads the singular `retrieval.backend` string. For KBs initialised
+    before this knob existed, a legacy `retrieval.backends` list is honoured
+    by taking its first recognised entry. Anything unreadable or unrecognised
+    falls back to "auto".
+    """
+    try:
+        loaded = yaml.safe_load(store.config_path.read_text())
+    except (OSError, yaml.YAMLError):
+        return "auto"
+    if not isinstance(loaded, dict):
+        return "auto"
+    retrieval = loaded.get("retrieval")
+    if not isinstance(retrieval, dict):
+        return "auto"
+    backend = retrieval.get("backend")
+    if isinstance(backend, str) and backend in _VALID_BACKENDS:
+        return backend
+    legacy = retrieval.get("backends")
+    if isinstance(legacy, list):
+        for entry in legacy:
+            if isinstance(entry, str) and entry in _VALID_BACKENDS:
+                return entry
+    return "auto"
+
 
 def _retrieve(store: KBStore, query: str, limit: int
               ) -> list[tuple[str, str, str, float, str]]:
     """Return list of (kind, id, summary, score, backend).
 
-    Dispatch order: embedding (semantic) -> FTS5 -> substring.
+    The backend is chosen by `retrieval.backend` in config.yaml:
+      - "auto" (default): embedding -> FTS5 -> substring
+      - "embedding": semantic search only
+      - "fts5": lexical FTS5 only
+      - "substring": substring scan only
     """
-    raw = index_db.search_semantic(store.kb_dir, query, limit=limit)
-    if raw:
-        return [(k, i, s, sc, "embedding") for k, i, s, sc in raw]
-    try:
-        hits = index_db.search(store.kb_dir, query, limit=limit)
-        if hits:
-            return [(k, i, s, sc, "fts5") for k, i, s, sc in hits]
-    except sqlite3.Error:
-        # FTS5 unavailable, db missing, or schema mismatch — fall through
-        # to substring scan. Other exceptions are real bugs and propagate.
-        pass
+    backend = _configured_backend(store)
+
+    if backend in ("auto", "embedding"):
+        raw = index_db.search_semantic(store.kb_dir, query, limit=limit)
+        if raw:
+            return [(k, i, s, sc, "embedding") for k, i, s, sc in raw]
+        if backend == "embedding":
+            return []
+
+    if backend in ("auto", "fts5"):
+        try:
+            hits = index_db.search(store.kb_dir, query, limit=limit)
+            if hits:
+                return [(k, i, s, sc, "fts5") for k, i, s, sc in hits]
+        except sqlite3.Error:
+            # FTS5 unavailable, db missing, or schema mismatch — fall through
+            # to substring scan (auto) or empty (explicit fts5). Other
+            # exceptions are real bugs and propagate.
+            pass
+        if backend == "fts5":
+            return []
+
     return [
         (k, i, s, sc, "substring")
         for k, i, s, sc in store.search_substring(query, limit=limit)

@@ -55,6 +55,12 @@ All notable changes to vouch are documented here. Format follows
   `session.crystallize` audit event now also includes the summary
   page id in `object_ids` when a page is written, so `vouch audit`
   truthfully attributes the write.
+- `context._retrieve` now honors `retrieval.backend` in `config.yaml`
+  instead of always running embeddings first (#92). Accepts `auto`
+  (default — embedding → FTS5 → substring), `embedding`, `fts5`, or
+  `substring`; a legacy `retrieval.backends` list is still read for
+  back-compat. `vouch init` now writes `retrieval.backend: auto`, and the
+  README/ROADMAP describe the actual behavior.
 - `vouch crystallize` now indexes its session-summary page into FTS5 so it
   surfaces from `vouch search` / `kb.search` / `kb.context` without a
   `vouch index` rebuild. Previously the summary was written via
