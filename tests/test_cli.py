@@ -101,6 +101,8 @@ def test_fsck_reports_dangling_chain_and_exits_nonzero(store: KBStore) -> None:
     result = CliRunner().invoke(cli, ["fsck"])
     assert result.exit_code == 1, result.output
     assert "dangling_supersedes" in result.output
+    # The affected object ids are surfaced inline so users can grep / pipe.
+    assert "(objects: c1, ghost)" in result.output
 
 
 def test_search_fts5_backend_label(

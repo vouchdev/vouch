@@ -194,7 +194,10 @@ def fsck() -> None:
     report = health.fsck(store)
     for f in report.findings:
         marker = {"error": "✗", "warning": "!", "info": "·"}.get(f.severity, "?")
-        click.echo(f"{marker} [{f.code}] {f.message}")
+        line = f"{marker} [{f.code}] {f.message}"
+        if f.object_ids:
+            line += f" (objects: {', '.join(f.object_ids)})"
+        click.echo(line)
     if not report.findings:
         click.echo("clean")
     sys.exit(0 if report.ok else 1)
