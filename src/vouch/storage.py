@@ -49,6 +49,7 @@ _embed_log = logging.getLogger("vouch.embeddings")
 
 KB_DIRNAME = ".vouch"
 CONFIG_FILENAME = "config.yaml"
+KB_FORMAT_VERSION = 1
 
 SUBDIRS = (
     "claims", "pages", "sources", "entities", "relations",
@@ -66,7 +67,7 @@ class ArtifactNotFoundError(KeyError):
 
 def _starter_config() -> dict[str, Any]:
     return {
-        "version": 1,
+        "version": KB_FORMAT_VERSION,
         "review": {"require_human_approval": True},
         "retrieval": {
             # auto = embedding -> fts5 -> substring; or pin one of

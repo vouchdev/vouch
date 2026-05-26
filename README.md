@@ -140,6 +140,7 @@ vouch capabilities                          # emit the JSON capabilities descrip
 vouch status [--json]                       # KB counts + pending proposals
 vouch lint [--stale-days N]                 # user-actionable problems
 vouch doctor                                # full sweep incl. source verification
+vouch migrate [--check] [--dry-run]         # upgrade .vouch/ format safely
 
 vouch pending                               # list pending proposals
 vouch review [--limit N] [--type KIND]      # guided proposal review queue

@@ -22,6 +22,7 @@ import yaml
 from . import __version__, bundle, health
 from . import audit as audit_mod
 from . import lifecycle as life
+from . import migrations as migrations_mod
 from . import sessions as sess_mod
 from . import sync as sync_mod
 from . import verify as verify_mod
@@ -62,7 +63,13 @@ def _cli_errors() -> Iterator[None]:
     # their own request envelopes.
     try:
         yield
-    except (ArtifactNotFoundError, ValueError, ProposalError, LifecycleError) as e:
+    except (
+        ArtifactNotFoundError,
+        ValueError,
+        ProposalError,
+        LifecycleError,
+        migrations_mod.MigrationError,
+    ) as e:
         raise click.ClickException(str(e)) from e
 
 
@@ -186,6 +193,62 @@ def doctor() -> None:
         click.echo(f"{marker} [{f.code}] {f.message}")
     click.echo(f"-- {report.counts}")
     sys.exit(0 if report.ok else 1)
+
+
+@cli.command()
+@click.option("--check", "check_only", is_flag=True, help="Only check whether migration is needed.")
+@click.option("--dry-run", is_flag=True, help="Show planned changes without writing.")
+@click.option("--to-version", type=int, default=None, help="Target KB format version.")
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON instead of text.")
+def migrate(
+    check_only: bool,
+    dry_run: bool,
+    to_version: int | None,
+    as_json: bool,
+) -> None:
+    """Upgrade the on-disk .vouch/ layout to the supported format."""
+    if check_only and dry_run:
+        raise click.ClickException("--check and --dry-run are mutually exclusive")
+
+    store = _load_store()
+    with _cli_errors():
+        result = migrations_mod.migrate(
+            store,
+            to_version=to_version,
+            dry_run=check_only or dry_run,
+        )
+        if as_json:
+            _emit_json(asdict(result))
+        else:
+            if result.steps:
+                click.echo(
+                    f"KB format: {result.from_version} -> {result.to_version} "
+                    f"({'dry run' if result.dry_run else 'applied'})"
+                )
+                for step in result.steps:
+                    click.echo(f"- {step}")
+                for change in result.changes:
+                    click.echo(f"  * {change}")
+            else:
+                click.echo(f"KB format: {result.from_version} (up to date)")
+
+        if result.applied:
+            health.rebuild_index(store)
+            audit_mod.log_event(
+                store.kb_dir,
+                event="kb.migrate",
+                actor=_whoami(),
+                reversible=False,
+                data={
+                    "from_version": result.from_version,
+                    "to_version": result.to_version,
+                    "steps": result.steps,
+                    "changes": result.changes,
+                },
+            )
+
+    if check_only and result.steps:
+        sys.exit(1)
 
 
 # --- proposals ------------------------------------------------------------

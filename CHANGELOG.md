@@ -15,6 +15,9 @@ All notable changes to vouch are documented here. Format follows
   (approve what you can, report the rest, exit non-zero on partial failure).
   One audit event is still recorded per approved artifact. Complements the
   interactive `vouch review` queue.
+- `vouch migrate` checks, dry-runs, and applies on-disk KB format migrations,
+  preserving audit history and rebuilding derived indexes after successful
+  upgrades.
 - `vouch sync-check` and `vouch sync-apply` reconcile another `.vouch`
   directory or bundle by importing only non-conflicting durable artifacts and
   reporting conflicts without overwriting reviewed knowledge.
