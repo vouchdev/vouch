@@ -110,3 +110,37 @@ def test_crystallize_collects_approval_failures(store):
     for f in result["failures"]:
         assert f["error"] == "storage full"
         assert f["error_type"] == "ValueError"
+
+
+def test_crystallize_retry_updates_existing_summary_page(store: KBStore) -> None:
+    from unittest.mock import patch
+
+    src = store.put_source(b"e")
+    sess = sess_mod.session_start(store, agent="a", task="retry")
+    propose_claim(store, text="first", evidence=[src.id], proposed_by="a", session_id=sess.id)
+    propose_claim(store, text="second", evidence=[src.id], proposed_by="a", session_id=sess.id)
+    sess_mod.session_end(store, sess.id)
+
+    real_approve = approve
+    calls = {"n": 0}
+
+    def flaky_approve(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise ValueError("transient")
+        return real_approve(*args, **kwargs)
+
+    with patch("vouch.sessions.approve", side_effect=flaky_approve):
+        first = sess_mod.crystallize(store, sess.id, approver="u")
+
+    assert len(first["approved"]) == 1
+    assert len(first["failures"]) == 1
+    assert first["summary_page_id"] is not None
+
+    second = sess_mod.crystallize(store, sess.id, approver="u")
+    assert len(second["approved"]) == 1
+    assert second["failures"] == []
+    assert second["summary_page_id"] == first["summary_page_id"]
+
+    summary = store.get_page(second["summary_page_id"])
+    assert sorted(summary.claims) == sorted([c.id for c in store.list_claims()])
