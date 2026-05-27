@@ -182,28 +182,20 @@ def rebuild_index(store: KBStore) -> dict:
 
 
 def _rebuild_embeddings(store: KBStore) -> None:
+    """Republish vectors into embedding_index after reset() cleared it.
+
+    Must use the same path as artifact writes (put_embedding + meta), not
+    the legacy `embeddings` table — search_semantic reads embedding_index.
+    """
     try:
-        from .embeddings import get_embedder
-        embedder = get_embedder()
-    except Exception:
+        from .embeddings.migration import backfill_embeddings
+    except ImportError:
         return
-    with index_db.open_db(store.kb_dir) as conn:
-        texts: list[tuple[str, str, str]] = []
-        for c in store.list_claims():
-            texts.append(("claim", c.id, c.text))
-        for p in store.list_pages():
-            texts.append(("page", p.id, f"{p.title} {p.body}"))
-        for e in store.list_entities():
-            texts.append(("entity", e.id, f"{e.name} {e.description or ''}"))
-        if not texts:
-            return
-        batch_size = 64
-        for i in range(0, len(texts), batch_size):
-            batch = texts[i:i + batch_size]
-            vecs = embedder.encode_batch([t[2] for t in batch])
-            for (kind, eid, _), row in zip(batch, vecs, strict=True):
-                index_db.index_embedding(conn, kind=kind, id=eid,
-                                         vec=row.tolist())
+    try:
+        backfill_embeddings(store, force=True)
+    except (KeyError, ImportError):
+        # No embedder registered or optional deps missing.
+        return
 
 
 # --- helpers used by `vouch discover` (CLI) -------------------------------

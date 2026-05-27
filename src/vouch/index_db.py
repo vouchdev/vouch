@@ -111,6 +111,7 @@ def reset(kb_dir: Path) -> None:
             "DELETE FROM pages_fts;"
             "DELETE FROM entities_fts;"
             "DELETE FROM embedding_index;"
+            "DELETE FROM embeddings;"
             "DELETE FROM query_embedding_cache;"
             "DELETE FROM embedding_dupes;"
             "DELETE FROM index_meta WHERE key LIKE 'embedding_%';"

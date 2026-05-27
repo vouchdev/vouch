@@ -57,6 +57,20 @@ def test_rebuild_index_emits_mismatch_audit_event(store: KBStore) -> None:
     assert "embedding.model_mismatch" in text
 
 
+def test_rebuild_index_restores_semantic_embeddings(store: KBStore) -> None:
+    """Regression: rebuild_index must repopulate embedding_index, not the
+    legacy embeddings table, so search_semantic works after `vouch index`."""
+    from vouch import health
+
+    src = store.put_source(b"e")
+    store.put_claim(Claim(id="c1", text="authentication tokens", evidence=[src.id]))
+    health.rebuild_index(store)
+    hits = index_db.search_semantic(store.kb_dir, "authentication tokens", limit=5)
+    assert hits, "expected semantic hits after rebuild_index"
+    assert hits[0][0] == "claim"
+    assert hits[0][1] == "c1"
+
+
 def test_backfill_re_encodes_all_artifacts(store: KBStore) -> None:
     src = store.put_source(b"e")
     store.put_claim(Claim(id="c1", text="alpha", evidence=[src.id]))

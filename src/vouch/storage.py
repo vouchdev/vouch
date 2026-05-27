@@ -350,6 +350,13 @@ class KBStore:
             return []
         return [_deserialize_page(p.read_text()) for p in sorted(pdir.glob("*.md"))]
 
+    def update_page(self, page: Page) -> Page:
+        if not self._page_path(page.id).exists():
+            raise ArtifactNotFoundError(f"page {page.id}")
+        self._page_path(page.id).write_text(_serialize_page(page))
+        self._embed_and_store(kind="page", id=page.id, text=f"{page.title}\n\n{page.body}")
+        return page
+
     # --- entities ----------------------------------------------------------
 
     def put_entity(self, entity: Entity) -> Entity:
