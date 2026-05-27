@@ -6,6 +6,9 @@ All notable changes to vouch are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+- Performance benchmark suite in `benchmarks/` covering search latency, proposal write throughput, bundle export/import/verify round-trips, and index rebuild time at 1k/10k claim sizes. Run with `pytest benchmarks/ --benchmark-only`.
+
 ## [0.1.0] — 2026-05-26
 
 ### Packaging
