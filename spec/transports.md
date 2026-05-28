@@ -117,27 +117,74 @@ before issuing other calls.
 
 ---
 
-## 3. Choosing a transport
+## 3. HTTP
 
-| | MCP stdio | JSONL |
-|---|---|---|
-| Wired by an LLM host | yes (Claude Code, Cursor, Codex) | no — bring your own client |
-| Resources / prompts | yes | no |
-| Spec dependency | full MCP | none |
-| Pipelining | per MCP semantics | yes |
-| Test ergonomics | requires MCP host | trivial — `echo` + `jq` |
+`vouch serve --transport http` exposes the same `kb.*` surface over a
+long-lived HTTP server, so several clients can share one KB without each
+spawning a subprocess. The method surface is identical — only framing
+differs.
 
-Use MCP when the consumer is an LLM agent inside a host. Use JSONL
-when the consumer is a script, a CI job, or another server.
+### Endpoints
+
+| Method & path        | Auth | Body                                                |
+|----------------------|------|-----------------------------------------------------|
+| `POST /rpc`          | yes* | JSONL envelope (§2) as request body **and** response body |
+| `GET /capabilities`  | no   | `kb.capabilities` JSON                              |
+| `GET /healthz`       | no   | `{"ok": true}` liveness probe                       |
+
+\* `/rpc` requires a bearer token only when one is configured (see Auth).
+
+```bash
+curl -s localhost:8731/rpc \
+  -d '{"id":"r1","method":"kb.search","params":{"query":"jwt"}}'
+# {"id":"r1","ok":true,"result":{"backend":"...","hits":[...]}}
+```
+
+### Bind policy
+
+Binds `127.0.0.1` by default. The server **refuses to bind a non-loopback
+host** unless both `--allow-public` and a token are supplied — so an
+unauthenticated KB can never be exposed to the network by accident.
+
+### Auth
+
+When a token is set (`--token` or `VOUCH_HTTP_TOKEN`), every `POST /rpc`
+must send `Authorization: Bearer <token>`; the comparison is
+constant-time. `GET /capabilities` and `/healthz` are always
+unauthenticated (they leak only the method list and liveness). There is
+no in-process TLS — terminate TLS at a reverse proxy for public
+deployments. The review gate is unchanged: HTTP clients file proposals
+exactly like every other transport, and `kb.approve` over HTTP is the
+same privileged operation it is everywhere.
+
+### Actor attribution
+
+The `X-Vouch-Agent` request header maps to the audit `actor` for that
+request (mirroring `VOUCH_AGENT` for stdio/JSONL). Absent header →
+`unknown-agent`.
 
 ---
 
-## 4. Future transports (non-normative)
+## 4. Choosing a transport
 
-HTTP is on the roadmap (see [ROADMAP.md](../ROADMAP.md), 0.1). The
-intended shape is one POST per call against `/rpc` with the JSONL
-envelope as request body and response body. Localhost-bound by default;
-auth story is `Authorization: Bearer <token>` from `config.yaml`.
+| | MCP stdio | JSONL | HTTP |
+|---|---|---|---|
+| Wired by an LLM host | yes (Claude Code, Cursor, Codex) | no | no |
+| Resources / prompts | yes | no | no |
+| Multiple clients, one process | no | no | yes |
+| Spec dependency | full MCP | none | none (plain HTTP) |
+| Test ergonomics | requires MCP host | trivial — `echo` + `jq` | trivial — `curl` |
 
-This isn't part of the current spec — it's a heads-up so implementers
-don't accidentally choose conflicting conventions in the meantime.
+Use MCP when the consumer is an LLM agent inside a host. Use JSONL when
+the consumer is a local script or CI job. Use HTTP when several clients
+(or a remote/self-hosted deployment) need to share one KB.
+
+---
+
+## 5. Future transports (non-normative)
+
+An MCP **streamable-HTTP** transport (as opposed to the bespoke
+JSONL-over-HTTP above) may follow if a hosted MCP client needs it; see
+[VEP-0004](../proposals/VEP-0004-http-transport.md). Not part of the
+current spec — a heads-up so implementers don't pick conflicting
+conventions in the meantime.

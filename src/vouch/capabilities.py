@@ -74,5 +74,5 @@ def capabilities() -> Capabilities:
         methods=METHODS,
         retrieval=retrieval,
         review_gated=True,
-        transports=["mcp", "jsonl"],
+        transports=["mcp", "jsonl", "http"],
     )

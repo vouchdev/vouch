@@ -773,15 +773,33 @@ def import_apply_cmd(bundle_path: str, on_conflict: str) -> None:
 
 @cli.command()
 @click.option("--transport", default="stdio", show_default=True,
-              type=click.Choice(["stdio", "jsonl"]))
-def serve(transport: str) -> None:
-    """Run the MCP server (stdio) or the JSONL tool server."""
+              type=click.Choice(["stdio", "jsonl", "http"]))
+@click.option("--host", default="127.0.0.1", show_default=True,
+              help="HTTP bind host (transport=http).")
+@click.option("--port", default=None, type=int,
+              help="HTTP bind port (transport=http; default 8731).")
+@click.option("--token", default=None, envvar="VOUCH_HTTP_TOKEN",
+              help="Bearer token for HTTP /rpc (or env VOUCH_HTTP_TOKEN). "
+                   "Required to bind a non-loopback host.")
+@click.option("--allow-public", is_flag=True,
+              help="Permit binding a non-loopback host (requires --token).")
+def serve(transport: str, host: str, port: int | None, token: str | None,
+          allow_public: bool) -> None:
+    """Run the MCP server (stdio), the JSONL tool server, or the HTTP server."""
     if transport == "stdio":
         from .server import run_stdio
         run_stdio()
-    else:
+    elif transport == "jsonl":
         from .jsonl_server import run_jsonl
         run_jsonl()
+    else:
+        from .http_server import DEFAULT_PORT, run_http
+        bind_port = port if port is not None else DEFAULT_PORT
+        try:
+            run_http(host, bind_port, token=token, allow_public=allow_public)
+        except RuntimeError as e:
+            # e.g. the non-loopback bind guard — show a clean Error: line.
+            raise click.ClickException(str(e)) from e
 
 
 if __name__ == "__main__":

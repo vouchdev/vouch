@@ -22,6 +22,7 @@ import os
 import sys
 import traceback
 from collections.abc import Callable
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
@@ -48,6 +49,13 @@ from .storage import (
     discover_root,
 )
 
+# Per-request actor override. The HTTP transport sets this from the
+# X-Vouch-Agent header so audit attribution is correct without mutating
+# process-wide env (each ThreadingHTTPServer request thread gets its own
+# context, so this is concurrency-safe). stdio/JSONL leave it unset and
+# fall back to VOUCH_AGENT.
+_actor: ContextVar[str | None] = ContextVar("vouch_actor", default=None)
+
 
 def _store() -> KBStore:
     try:
@@ -57,7 +65,7 @@ def _store() -> KBStore:
 
 
 def _agent() -> str:
-    return os.environ.get("VOUCH_AGENT", "unknown-agent")
+    return _actor.get() or os.environ.get("VOUCH_AGENT", "unknown-agent")
 
 
 # --- per-method handlers ---------------------------------------------------
