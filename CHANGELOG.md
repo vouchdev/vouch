@@ -57,6 +57,18 @@ All notable changes to vouch are documented here. Format follows
   a silent no-op. Existing Linux/macOS bundles are unchanged (their paths
   were already POSIX); Windows bundles produced before this fix should be
   re-exported.
+- `kb.context` no longer returns claims whose status is `archived`,
+  `superseded`, or `redacted` (#78). Two compounding bugs were combining
+  to leak retracted knowledge back to agents: `build_context_pack` had
+  no status filter, and `store.update_claim` only refreshed the
+  embedding cache without keeping `claims_fts.status` in sync — so even
+  after `lifecycle.archive` / `supersede` / `contradict`, the FTS5 row
+  kept its first-index status and `kb.search` / `kb.context` matched the
+  retracted claim. `update_claim` now re-indexes the FTS5 row (mirroring
+  what `proposals.approve` does on first index), and
+  `build_context_pack` drops retracted claims from the assembled pack.
+  `CONTESTED` claims continue to surface so contradictions remain
+  visible.
 - `bundle.import_check` and `bundle.import_apply` now verify each tar
   member's `sha256` against `manifest.json` (#74). Previously the
   per-file hash was only enforced by `export_check`; the import side

@@ -27,6 +27,7 @@ import hashlib
 import logging
 import os
 import re
+import sqlite3
 import stat
 from pathlib import Path
 from typing import Any
@@ -335,6 +336,24 @@ class KBStore:
         Claim.model_validate(claim.model_dump(mode="json"))
         self._claim_path(claim.id).write_text(_yaml_dump(claim.model_dump(mode="json")))
         self._embed_and_store(kind="claim", id=claim.id, text=claim.text)
+        # Keep the FTS5 row in sync with the on-disk claim so lifecycle
+        # mutations (archive, supersede, contradict, confirm) are reflected
+        # in retrieval immediately. Without this, claims_fts.status stays
+        # frozen at first-index time and retracted claims keep matching
+        # kb.search / kb.context.
+        from . import index_db as _index_db
+
+        try:
+            with _index_db.open_db(self.kb_dir) as conn:
+                _index_db.index_claim(
+                    conn, id=claim.id, text=claim.text,
+                    type=claim.type.value, status=claim.status.value,
+                    tags=list(claim.tags),
+                )
+        except sqlite3.Error as e:
+            _embed_log.warning(
+                "claim %s: FTS5 reindex skipped on update (%s)", claim.id, e,
+            )
         return claim
 
     # --- pages -------------------------------------------------------------

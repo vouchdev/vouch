@@ -19,8 +19,20 @@ from typing import Any, Literal, cast
 import yaml
 
 from . import index_db
-from .models import ContextItem, ContextPack, ContextQuality
+from .models import ClaimStatus, ContextItem, ContextPack, ContextQuality
 from .storage import ArtifactNotFoundError, KBStore
+
+# Claim statuses that have been explicitly retracted from active circulation.
+# Any retrieval surface that hands knowledge back to an agent must exclude
+# these — otherwise the archive/supersede/redact controls are decorative.
+# CONTESTED is intentionally not in this set: contested claims are still
+# part of the conversation, just disputed; lint / context callers can
+# decide what to do with them.
+_RETRACTED_CLAIM_STATUSES = frozenset({
+    ClaimStatus.ARCHIVED,
+    ClaimStatus.SUPERSEDED,
+    ClaimStatus.REDACTED,
+})
 
 ContextItemKind = Literal["claim", "page", "entity", "relation", "source"]
 
@@ -93,14 +105,6 @@ def _retrieve(store: KBStore, query: str, limit: int
     ]
 
 
-def _citations_for_claim(store: KBStore, claim_id: str) -> list[str]:
-    try:
-        claim = store.get_claim(claim_id)
-    except ArtifactNotFoundError:
-        return []
-    return list(claim.evidence)
-
-
 def _enrich_summary(store: KBStore, kind: str, artifact_id: str, summary: str) -> str:
     """Return a non-empty summary, falling back to the stored artifact text."""
     if summary:
@@ -136,7 +140,18 @@ def build_context_pack(
     for kind, hid, summary, score, backend in hits:
         cites: list[str] = []
         if kind == "claim":
-            cites = _citations_for_claim(store, hid)
+            # Exclude retracted claims even if the underlying index still
+            # matches them (the FTS5 row's status column can lag — see #78
+            # and the companion update_claim reindex). A missing claim is
+            # also treated as retracted: the YAML may have been deleted
+            # while the index row survived.
+            try:
+                claim = store.get_claim(hid)
+            except ArtifactNotFoundError:
+                continue
+            if claim.status in _RETRACTED_CLAIM_STATUSES:
+                continue
+            cites = list(claim.evidence)
         summary = _enrich_summary(store, kind, hid, summary)
         items.append(
             ContextItem(
