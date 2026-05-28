@@ -8,13 +8,13 @@ or return no hits.
 ## Install
 
 ```bash
-pip install vouch[embeddings]
+pip install vouch-kb[embeddings]
 ```
 
 Alternative (no torch):
 
 ```bash
-pip install vouch[embeddings-fast]
+pip install vouch-kb[embeddings-fast]
 ```
 
 ## Usage

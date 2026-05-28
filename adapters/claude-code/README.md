@@ -8,7 +8,7 @@ Wires `vouch serve` (MCP, stdio) into [Claude Code][cc].
 
 ```bash
 pip install -e '/path/to/vouch[dev]'
-# or, once on PyPI: pipx install vouch
+# or from PyPI (package vouch-kb): pipx install vouch-kb
 ```
 
 Make sure `vouch` is on the `PATH` Claude Code will see.

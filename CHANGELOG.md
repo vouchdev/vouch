@@ -6,6 +6,10 @@ All notable changes to vouch are documented here. Format follows
 
 ## [Unreleased]
 
+### Fixed
+- Correct PyPI install examples to use the published package name `vouch-kb`
+  in getting-started, embeddings, and Claude Code adapter docs.
+
 ## [0.1.0] — 2026-05-26
 
 ### Packaging
