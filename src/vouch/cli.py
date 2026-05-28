@@ -27,7 +27,12 @@ from .capabilities import capabilities as build_caps
 from .context import build_context_pack
 from .lifecycle import LifecycleError
 from .models import ProposalStatus
-from .onboarding import seed_starter_kb
+from .onboarding import (
+    DEFAULT_TEMPLATE,
+    TEMPLATES,
+    available_templates,
+    seed_starter_kb,
+)
 from .proposals import (
     ProposalError,
     propose_claim,
@@ -99,19 +104,39 @@ def cli() -> None:
 
 @cli.command()
 @click.option("--path", default=".", type=click.Path(file_okay=False), show_default=True)
-def init(path: str) -> None:
+@click.option("--template", default=DEFAULT_TEMPLATE, show_default=True,
+              help="Starter pack to seed (e.g. gittensor for SN74 context).")
+def init(path: str, template: str) -> None:
     """Initialise a .vouch/ knowledge base at PATH."""
+    if template not in available_templates():
+        raise click.ClickException(
+            f"unknown template '{template}' "
+            f"(available: {', '.join(available_templates())})"
+        )
     root = Path(path).resolve()
     root.mkdir(parents=True, exist_ok=True)
     store = KBStore.init(root)
-    seed = seed_starter_kb(store, approved_by=_whoami())
-    health.rebuild_index(store)
-    audit_mod.log_event(store.kb_dir, event="kb.init", actor=_whoami())
-    click.echo(f"Initialised KB at {store.kb_dir}")
-    if seed.created_anything:
-        click.echo(f"Seeded starter claim: {seed.claim_id}")
+    if template == DEFAULT_TEMPLATE:
+        seed = seed_starter_kb(store, approved_by=_whoami())
+        health.rebuild_index(store)
+        audit_mod.log_event(store.kb_dir, event="kb.init", actor=_whoami())
+        click.echo(f"Initialised KB at {store.kb_dir}")
+        if seed.created_anything:
+            click.echo(f"Seeded starter claim: {seed.claim_id}")
+        else:
+            click.echo("Starter claim already present.")
     else:
-        click.echo("Starter claim already present.")
+        result = TEMPLATES[template](store, approved_by=_whoami())
+        health.rebuild_index(store)
+        audit_mod.log_event(store.kb_dir, event="kb.init", actor=_whoami())
+        click.echo(f"Initialised KB at {store.kb_dir}")
+        if result.created_anything:
+            click.echo(
+                f"Seeded {result.template} template: "
+                f"{len(result.created)} artifact(s)"
+            )
+        else:
+            click.echo(f"{result.template} template already present.")
     click.echo("Next steps:")
     click.echo("  vouch status")
     click.echo("  vouch search agent")
