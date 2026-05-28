@@ -152,16 +152,14 @@ next review; you can remove the entries with `git rm` afterwards.
 Update your local `.gitignore` so it stops happening.
 
 **Q: Can I approve in bulk?**
-Yes. Review the proposals first, then pass the reviewed ids:
+Yes. Review proposals, then approve them together:
 
 ```bash
 vouch approve <id> <id> --reason "reviewed together"
 ```
 
-By default, every id is validated before any are written, so a typo or
-already-decided id aborts the batch without approving anything. Add
-`--keep-going` for best-effort approval (approve what you can, report the
-rest, exit non-zero on partial failure).
+Default is all-or-nothing: if any id is invalid or already decided,
+nothing is approved. Use `--keep-going` for best-effort approval.
 
 **Q: What if I want a *softer* gate — "warn, don't block"?**
 You don't. If you want soft, use a tool without a gate. vouch's
