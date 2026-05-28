@@ -27,6 +27,7 @@ All notable changes to vouch are documented here. Format follows
   or dry-running pending proposals without bypassing the review gate.
 
 ### Fixed
+- `bundle.import_check` / `import_apply` and `sync.sync_check` / `sync_apply` now enforce the Source content-addressing invariant: a `sources/<sha>/content` member must hash to `<sha>`, and a `sources/<sha>/meta.yaml` must carry a matching `id`/`hash`. Previously the import side trusted the bundle's directory layout, so a manifest-consistent bundle could land a Source whose content did not match its claimed id — `verify_source` would report `stored_ok=False` only after the import had already succeeded with a clean `bundle.import` audit event. The per-file sha256 gate (#74) only proves bytes match the manifest; this closes the write-time counterpart of the `verify.verify_source` detection.
 - Add `put_relation_idempotent()` to `KBStore` and use it in `supersede()` and `contradict()` so retrying after a partial failure converges to a consistent state instead of raising `ValueError`.
 - Raise `ProposalError("forbidden_self_approval")` in `proposals.approve()` when `approved_by == proposal.proposed_by`, enforcing the review-gate guarantee documented in the README and CONTRIBUTING.
 - `crystallize()` now sets `review.approver_role: trusted-agent` context so single-agent sessions can be crystallized without hitting the `forbidden_self_approval` guard (#47).

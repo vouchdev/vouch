@@ -129,3 +129,33 @@ def test_sync_check_cli_outputs_report(
     payload = json.loads(result.output)
     assert payload["source_type"] == "kb"
     assert "claims/c1.yaml" in payload["new_files"]
+
+
+def test_sync_rejects_source_content_address_mismatch(tmp_path: Path) -> None:
+    """Sync walks the same per-file validation as bundle import, so a
+    source directory whose content does not hash to its name must be
+    rejected by sync_check and refused by sync_apply. The dangling source
+    is hand-written (bypassing put_source, which would recompute the id)
+    to model an attacker-supplied or corrupted sync source."""
+    import yaml
+
+    incoming = _store(tmp_path / "incoming")
+    dir_id = "a" * 64  # not the hash of the content below
+    sdir = incoming.kb_dir / "sources" / dir_id
+    sdir.mkdir(parents=True)
+    (sdir / "content").write_bytes(b"attacker-controlled bytes")
+    (sdir / "meta.yaml").write_text(yaml.safe_dump({
+        "id": dir_id, "type": "file", "locator": "x.txt", "title": "t",
+        "hash": dir_id, "immutable": True, "scope": "project",
+        "byte_size": 25, "media_type": "text/plain",
+        "created_at": "2026-05-27T00:00:00+00:00", "metadata": {}, "tags": [],
+    }, sort_keys=False))
+
+    dest = _store(tmp_path / "dest")
+    report = sync.sync_check(dest.kb_dir, incoming.root)
+    assert not report.ok
+    assert any("content-address mismatch" in i for i in report.issues), report.issues
+
+    with pytest.raises(RuntimeError, match="content-address mismatch"):
+        sync.sync_apply(dest.kb_dir, incoming.root)
+    assert not (dest.kb_dir / "sources" / dir_id / "content").exists()

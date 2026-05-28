@@ -408,3 +408,138 @@ def test_import_check_passes_when_member_matches_manifest(store: KBStore, tmp_pa
 
     diff = bundle.import_check(store.kb_dir, bundle_path)
     assert not any("hash mismatch" in i for i in diff.issues), diff.issues
+
+
+# --- source content-addressing on the bundle path ------------------------
+#
+# A Source's id is the sha256 of its content (README: "content-addressed
+# by sha256"). import_apply writes sources/<sha>/{meta.yaml,content}
+# straight from the tarball, so a manifest-consistent bundle could ship a
+# source whose content does NOT hash to its claimed id. The per-file sha256
+# gate (#74) only proves bytes match the manifest, not the content-address.
+
+
+def _write_source_bundle(
+    bundle_path: Path, *, dir_id: str, content: bytes,
+    meta_id: str | None = None, meta_hash: str | None = "__dir__",
+) -> None:
+    """Build a one-source bundle with full control over the (lying) ids.
+
+    `meta_id` / `meta_hash` default to the directory id so an honest
+    bundle is the default; pass explicit values to model an attack.
+    The manifest always records each member's real sha256, so the #74
+    per-file integrity check passes and the content-address check is the
+    only thing that can catch the lie.
+    """
+    import hashlib as _hashlib
+
+    import yaml as _yaml
+
+    if meta_id is None:
+        meta_id = dir_id
+    if meta_hash == "__dir__":
+        meta_hash = dir_id
+    meta = {
+        "id": meta_id, "type": "file", "locator": "x.txt", "title": "t",
+        "hash": meta_hash, "immutable": True, "scope": "project",
+        "byte_size": len(content), "media_type": "text/plain",
+        "created_at": "2026-05-27T00:00:00+00:00", "metadata": {}, "tags": [],
+    }
+    meta_bytes = _yaml.safe_dump(meta, sort_keys=False).encode()
+    members = {
+        f"sources/{dir_id}/meta.yaml": meta_bytes,
+        f"sources/{dir_id}/content": content,
+    }
+    files = [
+        {"path": p, "size": len(b), "sha256": _hashlib.sha256(b).hexdigest()}
+        for p, b in members.items()
+    ]
+    manifest = {
+        "spec": bundle.SPEC_VERSION, "bundle_id": "deadbeef",
+        "files": files, "counts": {},
+        "safety": {"has_proposed": False, "has_state_db": False,
+                   "has_audit_log": False},
+    }
+    with tarfile.open(bundle_path, "w:gz") as tar:
+        for name, body in members.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(body)
+            tar.addfile(info, io.BytesIO(body))
+        mf_bytes = json.dumps(manifest).encode()
+        mf_info = tarfile.TarInfo(bundle.MANIFEST_NAME)
+        mf_info.size = len(mf_bytes)
+        tar.addfile(mf_info, io.BytesIO(mf_bytes))
+
+
+def test_import_rejects_source_content_address_mismatch(
+    store: KBStore, tmp_path: Path
+) -> None:
+    """A source whose content does not hash to its claimed id is rejected.
+    Without this the KB lands internally inconsistent (verify_source would
+    report stored_ok=False) while the import logs a clean bundle.import."""
+    dir_id = "a" * 64  # well-formed hex, but not the hash of `content`
+    bundle_path = tmp_path / "lying-source.tar.gz"
+    _write_source_bundle(bundle_path, dir_id=dir_id, content=b"not-the-hashed-bytes")
+
+    diff = bundle.import_check(store.kb_dir, bundle_path)
+    assert not diff.ok
+    assert any("content-address mismatch" in i for i in diff.issues), diff.issues
+
+    with pytest.raises(RuntimeError, match="content-address mismatch"):
+        bundle.import_apply(store.kb_dir, bundle_path)
+    assert not (store.kb_dir / "sources" / dir_id / "content").exists()
+
+
+def test_import_rejects_source_meta_id_mismatch(
+    store: KBStore, tmp_path: Path
+) -> None:
+    """meta.yaml's id must equal its content-address directory."""
+    content = b"real content"
+    dir_id = hashlib.sha256(content).hexdigest()
+    bundle_path = tmp_path / "meta-id-lie.tar.gz"
+    # Content honestly hashes to dir_id, but meta claims a different id.
+    _write_source_bundle(
+        bundle_path, dir_id=dir_id, content=content,
+        meta_id="b" * 64, meta_hash="b" * 64,
+    )
+
+    diff = bundle.import_check(store.kb_dir, bundle_path)
+    assert not diff.ok
+    assert any("source id mismatch" in i for i in diff.issues), diff.issues
+
+    with pytest.raises(RuntimeError, match="source id mismatch"):
+        bundle.import_apply(store.kb_dir, bundle_path)
+
+
+def test_import_accepts_honest_content_addressed_source(
+    store: KBStore, tmp_path: Path
+) -> None:
+    """A source whose content hashes to its id imports cleanly — the new
+    check must not reject legitimate bundles produced by `vouch export`."""
+    content = b"genuine source bytes"
+    dir_id = hashlib.sha256(content).hexdigest()
+    bundle_path = tmp_path / "honest.tar.gz"
+    _write_source_bundle(bundle_path, dir_id=dir_id, content=content)
+
+    diff = bundle.import_check(store.kb_dir, bundle_path)
+    assert not any("content-address" in i or "source id" in i for i in diff.issues), diff.issues
+    result = bundle.import_apply(store.kb_dir, bundle_path)
+    assert f"sources/{dir_id}/content" in result["written"]
+    assert store.read_source_content(dir_id) == content
+
+
+def test_export_then_import_roundtrip_passes_content_address_check(
+    store: KBStore, tmp_path: Path
+) -> None:
+    """End-to-end: a real bundle from `vouch export` imports without
+    tripping the content-address check (guards against false positives)."""
+    src = store.put_source(b"round-trip bytes", title="doc")
+    store.put_claim(Claim(id="c1", text="alpha", evidence=[src.id]))
+    bundle_path = tmp_path / "out.tar.gz"
+    bundle.export(store.kb_dir, dest=bundle_path)
+
+    dest = KBStore.init(tmp_path / "dest")
+    diff = bundle.import_check(dest.kb_dir, bundle_path)
+    assert diff.ok, diff.issues
+    bundle.import_apply(dest.kb_dir, bundle_path)
+    assert dest.read_source_content(src.id) == b"round-trip bytes"

@@ -207,6 +207,7 @@ def _validation_issues_for_source(src: _SyncSource) -> list[str]:
             issues.append(f"hash mismatch: {path}")
             continue
         bundle._validate_content(path, data, issues)
+        bundle._check_source_content_address(path, data, issues)
     return issues
 
 
