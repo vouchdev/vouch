@@ -13,6 +13,7 @@ import os
 import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import asdict
 from pathlib import Path
 
 import click
@@ -22,14 +23,16 @@ from . import __version__, bundle, health
 from . import audit as audit_mod
 from . import lifecycle as life
 from . import sessions as sess_mod
+from . import sync as sync_mod
 from . import verify as verify_mod
 from .capabilities import capabilities as build_caps
 from .context import build_context_pack
 from .lifecycle import LifecycleError
-from .models import ProposalStatus
+from .models import Proposal, ProposalKind, ProposalStatus
 from .onboarding import seed_starter_kb
 from .proposals import (
     ProposalError,
+    check_approvable,
     propose_claim,
     propose_entity,
     propose_page,
@@ -189,10 +192,14 @@ def doctor() -> None:
 
 
 @cli.command()
-def pending() -> None:
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON instead of text.")
+def pending(as_json: bool) -> None:
     """List proposals awaiting review."""
     store = _load_store()
     pending = store.list_proposals(ProposalStatus.PENDING)
+    if as_json:
+        _emit_json([pr.model_dump(mode="json") for pr in pending])
+        return
     if not pending:
         click.echo("no pending proposals")
         return
@@ -207,6 +214,104 @@ def pending() -> None:
         click.echo(f"    {str(preview).strip()[:120]}")
 
 
+def _proposal_preview(pr: Proposal) -> str:
+    preview = (
+        pr.payload.get("text")
+        or pr.payload.get("title")
+        or pr.payload.get("name")
+        or pr.payload.get("id")
+        or "-"
+    )
+    return str(preview).strip()
+
+
+def _show_review_proposal(pr: Proposal, index: int, total: int) -> None:
+    click.echo(f"\n[{index}/{total}] {pr.id}  [{pr.kind.value}]  by {pr.proposed_by}")
+    click.echo(_proposal_preview(pr))
+    if pr.rationale:
+        click.echo(f"rationale: {pr.rationale}")
+    click.echo()
+    click.echo(yaml.safe_dump(pr.model_dump(mode="json"), sort_keys=False).rstrip())
+
+
+@cli.command()
+@click.option(
+    "--limit",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Review at most N proposals.",
+)
+@click.option(
+    "--type",
+    "kind",
+    type=click.Choice([k.value for k in ProposalKind]),
+    default=None,
+    help="Only review proposals of this kind.",
+)
+@click.option("--dry-run", is_flag=True, help="Show decisions without mutating proposals.")
+def review(limit: int | None, kind: str | None, dry_run: bool) -> None:
+    """Walk pending proposals one at a time for approval or rejection."""
+    store = _load_store()
+    proposals = store.list_proposals(ProposalStatus.PENDING)
+    if kind is not None:
+        proposals = [pr for pr in proposals if pr.kind.value == kind]
+    if limit is not None:
+        proposals = proposals[:limit]
+    if not proposals:
+        click.echo("no pending proposals")
+        return
+
+    decided = 0
+    skipped = 0
+    actor = _whoami()
+    total = len(proposals)
+    for index, pr in enumerate(proposals, start=1):
+        _show_review_proposal(pr, index, total)
+        action = click.prompt(
+            "Action [a=approve, r=reject, s=skip, q=quit]",
+            type=click.Choice(["a", "r", "s", "q"], case_sensitive=False),
+            default="s",
+            show_choices=False,
+        ).lower()
+        if action == "q":
+            click.echo("Stopped review")
+            break
+        if action == "s":
+            click.echo(f"Skipped {pr.id}")
+            skipped += 1
+            continue
+        if action == "r":
+            reason = click.prompt("Rejection reason").strip()
+            with _cli_errors():
+                if not reason:
+                    raise ProposalError("rejection must include a reason (future agent context)")
+                if not dry_run:
+                    do_reject(store, pr.id, rejected_by=actor, reason=reason)
+            if dry_run:
+                click.echo(f"Would reject {pr.id}")
+            else:
+                click.echo(f"Rejected {pr.id}")
+            decided += 1
+            continue
+
+        reason = (
+            click.prompt("Approval reason", default="", show_default=False).strip()
+            or None
+        )
+        if dry_run:
+            click.echo(f"Would approve {pr.id}")
+        else:
+            with _cli_errors():
+                artifact = do_approve(store, pr.id, approved_by=actor, reason=reason)
+            click.echo(f"Approved -> {type(artifact).__name__.lower()}/{artifact.id}")
+        decided += 1
+
+    if dry_run:
+        click.echo(f"Review complete: {decided} selected, {skipped} skipped, no changes made")
+    else:
+        click.echo(f"Review complete: {decided} decided, {skipped} skipped")
+
+
 @cli.command()
 @click.argument("proposal_id")
 def show(proposal_id: str) -> None:
@@ -218,14 +323,60 @@ def show(proposal_id: str) -> None:
 
 
 @cli.command()
-@click.argument("proposal_id")
+@click.argument("proposal_ids", nargs=-1, required=True)
 @click.option("--reason", default=None)
-def approve(proposal_id: str, reason: str | None) -> None:
-    """Approve a proposal — converts it into a durable artifact."""
+@click.option(
+    "--keep-going", is_flag=True,
+    help="Best-effort: approve every id that can be approved and report the "
+         "rest, instead of the default all-or-nothing precheck.",
+)
+def approve(proposal_ids: tuple[str, ...], reason: str | None, keep_going: bool) -> None:
+    """Approve one or more proposals — converts each into a durable artifact.
+
+    Pass several ids to approve a batch in one call (useful for CI and
+    clearing a review backlog). One audit event is recorded per approved
+    artifact.
+
+    Semantics:
+
+    \b
+    - default (all-or-nothing): every id is validated as an approvable
+      pending proposal before any is written; a typo or already-decided id
+      aborts the whole batch and nothing is approved.
+    - --keep-going (best-effort): approve each id independently, report the
+      failures, and exit non-zero if any failed.
+    """
     store = _load_store()
-    with _cli_errors():
-        artifact = do_approve(store, proposal_id, approved_by=_whoami(), reason=reason)
-    click.echo(f"Approved → {type(artifact).__name__.lower()}/{artifact.id}")
+    approver = _whoami()
+
+    if not keep_going:
+        blocked = [
+            (pid, reason_blocked)
+            for pid in proposal_ids
+            if (reason_blocked := check_approvable(store, pid, approved_by=approver))
+        ]
+        if blocked:
+            for pid, why in blocked:
+                click.echo(f"✗ {pid}: {why}", err=True)
+            raise click.ClickException(
+                f"refusing to approve: {len(blocked)} of {len(proposal_ids)} not "
+                "approvable — nothing was approved (use --keep-going for best-effort)"
+            )
+
+    failures = 0
+    for pid in proposal_ids:
+        try:
+            artifact = do_approve(store, pid, approved_by=approver, reason=reason)
+        except (ArtifactNotFoundError, ValueError, ProposalError, LifecycleError) as e:
+            failures += 1
+            click.echo(f"✗ {pid}: {e}", err=True)
+            continue
+        click.echo(f"Approved → {type(artifact).__name__.lower()}/{artifact.id}")
+
+    if failures:
+        raise click.ClickException(
+            f"{failures} of {len(proposal_ids)} proposal(s) failed to approve"
+        )
 
 
 @cli.command()
@@ -766,6 +917,71 @@ def import_apply_cmd(bundle_path: str, on_conflict: str) -> None:
     # Rebuild the index after a bulk import so search picks up new claims.
     health.rebuild_index(store)
     _emit_json(r)
+
+
+# --- sync ------------------------------------------------------------------
+
+
+@cli.command("sync-check")
+@click.argument("source_path", type=click.Path(exists=True))
+def sync_check_cmd(source_path: str) -> None:
+    """Compare another .vouch directory or bundle without writing."""
+    store = _load_store()
+    try:
+        r = sync_mod.sync_check(store.kb_dir, Path(source_path))
+    except RuntimeError as e:
+        raise click.ClickException(str(e)) from e
+    _emit_json(asdict(r))
+
+
+@cli.command("sync-apply")
+@click.argument("source_path", type=click.Path(exists=True))
+@click.option("--on-conflict", default="fail", show_default=True,
+              type=click.Choice(["fail", "skip", "propose"]))
+def sync_apply_cmd(source_path: str, on_conflict: str) -> None:
+    """Apply non-conflicting files from another .vouch directory or bundle."""
+    store = _load_store()
+    try:
+        r = sync_mod.sync_apply(
+            store.kb_dir,
+            Path(source_path),
+            on_conflict=on_conflict,
+            actor=_whoami(),
+        )
+    except (RuntimeError, ValueError) as e:
+        raise click.ClickException(str(e)) from e
+    health.rebuild_index(store)
+    _emit_json(r)
+
+
+# --- diff -----------------------------------------------------------------
+
+
+@cli.command()
+@click.argument("old_id")
+@click.argument("new_id")
+@click.option("--json", "as_json", is_flag=True, default=False,
+              help="Emit the diff as JSON.")
+def diff(old_id: str, new_id: str, as_json: bool) -> None:
+    """Show what changed between two claim or two page revisions."""
+    from .diff import diff_artifacts
+    store = _load_store()
+    with _cli_errors():
+        d = diff_artifacts(store, old_id, new_id)
+    if as_json:
+        _emit_json(asdict(d))
+        return
+    if not d.changes and not d.text_diff:
+        click.echo("no differences")
+        return
+    click.echo(f"diff {d.kind} {d.old_id} → {d.new_id}")
+    for c in d.changes:
+        click.echo(f"  {c.field}: {c.old} → {c.new}")
+    if d.text_diff:
+        label = "body" if d.kind == "page" else "text"
+        click.echo(f"  {label}:")
+        for line in d.text_diff:
+            click.echo(f"    {line}")
 
 
 # --- serve ----------------------------------------------------------------

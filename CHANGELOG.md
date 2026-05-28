@@ -7,11 +7,30 @@ All notable changes to vouch are documented here. Format follows
 ## [Unreleased]
 
 ### Added
+- `vouch approve <id1> <id2> …` approves multiple proposals in one
+  non-interactive call for CI and backlog clearing (#93). Default is
+  all-or-nothing: every id is validated as an approvable pending proposal
+  before any is written, so a typo or already-decided id aborts the batch
+  without approving anything. `--keep-going` switches to best-effort
+  (approve what you can, report the rest, exit non-zero on partial failure).
+  One audit event is still recorded per approved artifact. Complements the
+  interactive `vouch review` queue.
+- `vouch sync-check` and `vouch sync-apply` reconcile another `.vouch`
+  directory or bundle by importing only non-conflicting durable artifacts and
+  reporting conflicts without overwriting reviewed knowledge.
+- `vouch pending --json` emits pending proposals as structured JSON for shell
+  scripts, CI checks, and multi-agent review dashboards.
+- `vouch diff <id-old> <id-new>` shows what changed between two claim revisions or two page revisions — field-level changes plus a line-diff of the long text/body. Auto-detects the artifact kind and hides always-churning metadata. Read-only; supports `--json`.
 - Seed a cited starter source and claim during `vouch init`, print first-run
   next steps, and document a 30-second onboarding tour (#54).
+- Add `vouch review`, a guided CLI queue for approving, rejecting, skipping,
+  or dry-running pending proposals without bypassing the review gate.
 
 ### Fixed
+- Add `put_relation_idempotent()` to `KBStore` and use it in `supersede()` and `contradict()` so retrying after a partial failure converges to a consistent state instead of raising `ValueError`.
 - Raise `ProposalError("forbidden_self_approval")` in `proposals.approve()` when `approved_by == proposal.proposed_by`, enforcing the review-gate guarantee documented in the README and CONTRIBUTING.
+- `crystallize()` now sets `review.approver_role: trusted-agent` context so single-agent sessions can be crystallized without hitting the `forbidden_self_approval` guard (#47).
+- Narrow `except Exception` to `except ArtifactNotFoundError` in `propose_claim()` evidence validation so I/O and parse errors propagate with their original type instead of being masked as `unknown source/evidence id` (#48).
 - Bundle import rejects tar members whose path escapes `kb_dir`
   (CVE-2007-4559, #9). Previously a crafted `.tar.gz` with a member
   named `../../evil.txt` could write outside `.vouch/`; the manifest
@@ -19,6 +38,12 @@ All notable changes to vouch are documented here. Format follows
   the same tarball. `import_apply`, `import_check`, and `export_check`
   now validate every member path and raise on unsafe names.
 - Fix `vouch search` CLI: assign backend label per code path so substring fallback results are no longer mislabelled as `fts5`; update stale docstring to reflect multi-backend search surface (#52).
+- `context._retrieve` now honors `retrieval.backend` in `config.yaml`
+  instead of always running embeddings first (#92). Accepts `auto`
+  (default — embedding → FTS5 → substring), `embedding`, `fts5`, or
+  `substring`; a legacy `retrieval.backends` list is still read for
+  back-compat. `vouch init` now writes `retrieval.backend: auto`, and the
+  README/ROADMAP describe the actual behavior.
 - `vouch crystallize` now indexes its session-summary page into FTS5 so it
   surfaces from `vouch search` / `kb.search` / `kb.context` without a
   `vouch index` rebuild. Previously the summary was written via
@@ -32,6 +57,18 @@ All notable changes to vouch are documented here. Format follows
   a silent no-op. Existing Linux/macOS bundles are unchanged (their paths
   were already POSIX); Windows bundles produced before this fix should be
   re-exported.
+- `kb.context` no longer returns claims whose status is `archived`,
+  `superseded`, or `redacted` (#78). Two compounding bugs were combining
+  to leak retracted knowledge back to agents: `build_context_pack` had
+  no status filter, and `store.update_claim` only refreshed the
+  embedding cache without keeping `claims_fts.status` in sync — so even
+  after `lifecycle.archive` / `supersede` / `contradict`, the FTS5 row
+  kept its first-index status and `kb.search` / `kb.context` matched the
+  retracted claim. `update_claim` now re-indexes the FTS5 row (mirroring
+  what `proposals.approve` does on first index), and
+  `build_context_pack` drops retracted claims from the assembled pack.
+  `CONTESTED` claims continue to surface so contradictions remain
+  visible.
 - `bundle.import_check` and `bundle.import_apply` now verify each tar
   member's `sha256` against `manifest.json` (#74). Previously the
   per-file hash was only enforced by `export_check`; the import side
@@ -43,6 +80,37 @@ All notable changes to vouch are documented here. Format follows
   with between `import_check` and the apply re-open is rejected
   before anything reaches disk and the audit log does not record
   a `bundle.import` event.
+- `Claim.evidence` now enforces "at least one citation" at the model
+  layer via a `@field_validator` (#81). Previously the
+  README-documented guarantee ("Claims must cite sources … a claim
+  without at least one Source/Evidence id is a validation error")
+  was enforced only in `proposals.propose_claim`, so every other
+  write path — direct `store.put_claim`, `store.update_claim`, and
+  `bundle.import_apply` via `_validate_content` — silently accepted
+  `evidence: []` and landed an uncited claim. The validator closes
+  all three paths at once; `store.update_claim` additionally
+  re-validates via `Claim.model_validate(...)` before persisting so
+  in-place mutation (`c.evidence = []; store.update_claim(c)`)
+  also raises before the YAML hits disk. **Migration note:** because
+  the validator also fires when claims are read back, a KB that
+  already has an uncited `claims/<id>.yaml` on disk from before this
+  fix would otherwise crash `vouch lint` / `vouch doctor` with a
+  `pydantic.ValidationError`. `vouch lint` now iterates `claims/`
+  per-file and surfaces unparseable / uncited YAMLs as
+  `invalid_claim` findings ("edit the YAML to add a citation, or
+  delete the file") instead of bailing out — so existing KBs get a
+  clean repair list rather than a traceback.
+- Close the review-gate bypass in `sessions.crystallize` (#76). The
+  durable session-summary page wrote `sess.task`, `sess.note`, and
+  `sess.agent` verbatim into rendered markdown, letting an agent
+  land arbitrary content into `pages/` by calling
+  `kb.session_start(task=...)` and getting any one claim approved
+  via crystallize. The summary body now contains only fields the
+  proposing agent cannot influence (session id, server-clock
+  timestamps, list of approved artifact ids). The
+  `session.crystallize` audit event now also includes the summary
+  page id in `object_ids` when a page is written, so `vouch audit`
+  truthfully attributes the write.
 
 ## [0.0.1] — 2026-05-17
 

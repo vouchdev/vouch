@@ -34,8 +34,19 @@ def supersede(
         raise LifecycleError("a claim cannot supersede itself")
     old = store.get_claim(old_claim_id)
     new = store.get_claim(new_claim_id)
+    rel = Relation(
+        id=f"{new.id}--supersedes--{old.id}",
+        source=new.id,
+        relation=RelationType.SUPERSEDES,
+        target=old.id,
+    )
     if old.status == ClaimStatus.SUPERSEDED and old.superseded_by == new.id:
-        return old, new  # idempotent
+        if old.id not in new.supersedes:
+            new.supersedes = sorted({*new.supersedes, old.id})
+            new.updated_at = datetime.now(UTC)
+            store.update_claim(new)
+        store.put_relation_idempotent(rel)
+        return old, new  # idempotent + convergent retry
     old.status = ClaimStatus.SUPERSEDED
     old.superseded_by = new.id
     old.updated_at = datetime.now(UTC)
@@ -44,13 +55,7 @@ def supersede(
     store.update_claim(old)
     store.update_claim(new)
     # Mirror the supersedes link into the graph for graph-traversal queries.
-    rel = Relation(
-        id=f"{new.id}--supersedes--{old.id}",
-        source=new.id,
-        relation=RelationType.SUPERSEDES,
-        target=old.id,
-    )
-    store.put_relation(rel)
+    store.put_relation_idempotent(rel)
     audit.log_event(
         store.kb_dir, event="claim.supersede", actor=actor,
         object_ids=[old.id, new.id, rel.id],
@@ -81,7 +86,7 @@ def contradict(
         relation=RelationType.CONTRADICTS,
         target=b.id,
     )
-    store.put_relation(rel)
+    store.put_relation_idempotent(rel)
     audit.log_event(
         store.kb_dir, event="claim.contradict", actor=actor,
         object_ids=[a.id, b.id, rel.id],

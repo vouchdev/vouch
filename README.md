@@ -142,6 +142,7 @@ vouch lint [--stale-days N]                 # user-actionable problems
 vouch doctor                                # full sweep incl. source verification
 
 vouch pending                               # list pending proposals
+vouch review [--limit N] [--type KIND]      # guided proposal review queue
 vouch show <proposal-id>
 vouch approve <proposal-id> [--reason ...]
 vouch reject <proposal-id> --reason "..."
@@ -173,6 +174,8 @@ vouch export --out path.tar.gz
 vouch export-check path.tar.gz
 vouch import-check path.tar.gz
 vouch import-apply path.tar.gz [--on-conflict skip|overwrite|fail]
+vouch sync-check PATH_OR_BUNDLE
+vouch sync-apply PATH_OR_BUNDLE [--on-conflict fail|skip|propose]
 
 vouch serve [--transport stdio|jsonl]
 ```
@@ -255,7 +258,7 @@ vouch import-apply kb.tar.gz --on-conflict skip  # apply (default skip; never de
 | Tool servers | MCP over stdio + JSONL over stdin/stdout, same `kb.*` surface across both transports, capabilities + knowledge-capability descriptor |
 | Schemas | 13 JSON Schemas (Draft 2020-12) generated from pydantic in [schemas/](schemas/), plus hand-maintained `bundle.manifest` and `jsonl-envelope` schemas |
 | Write safety | review-gated writes via [proposed/](spec/review-gate.md), `dry_run:true` previews, host trust required for `approve`/`reject`, atomic exclusive-create storage, path-traversal blocked on source intake and bundle import |
-| Retrieval | SQLite FTS5 + substring fallback; optional semantic backends (`all-mpnet-base-v2`, `MiniLM-L6`, fastembed-BGE) behind install extras; context packs with citations + quality gate |
+| Retrieval | `retrieval.backend` in `config.yaml` selects the path: `auto` (default — embedding → FTS5 → substring), `embedding`, `fts5`, or `substring`. Semantic backends (`all-mpnet-base-v2`, `MiniLM-L6`, fastembed-BGE) ship behind install extras; `auto` degrades to FTS5 when they aren't installed. Context packs with citations + quality gate |
 | Lifecycle | `supersede`, `contradict`, `archive`, `confirm`, `cite` — direct mutations, all audited |
 | Portability | tar.gz bundles with per-file sha256 `manifest.json`, `export-check`, `import-check`, `import-apply` with skip/overwrite/fail conflict modes |
 | Audit | append-only `audit.log.jsonl`, per-event actor (`VOUCH_AGENT`), object ids, dry-run flag, reversible flag |
@@ -265,7 +268,7 @@ vouch import-apply kb.tar.gz --on-conflict skip  # apply (default skip; never de
 
 ## Status
 
-Pre-1.0. What's *not* in this implementation: vector embeddings (BM25/FTS5 only), per-runtime adapter templates, benchmark fixtures, multi-agent sync, scopes beyond a single field on Claim/Source. If a hole matters to you, file an issue.
+Pre-1.0. What's *not* in this implementation: per-runtime adapter templates, benchmark fixtures, multi-agent sync, scopes beyond a single field on Claim/Source. If a hole matters to you, file an issue.
 
 ## License
 

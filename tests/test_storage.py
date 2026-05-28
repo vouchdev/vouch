@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from vouch import audit, lifecycle
 from vouch.models import (
@@ -106,6 +107,44 @@ def test_claim_can_be_updated(store: KBStore) -> None:
     c.status = ClaimStatus.STABLE
     store.update_claim(c)
     assert store.get_claim("c1").status == ClaimStatus.STABLE
+
+
+def test_claim_model_rejects_empty_evidence() -> None:
+    """Regression for #81: the 'claims must cite sources' guarantee
+    (README §'Why this exists' point 3; CONTRIBUTING §'Things we
+    won't merge') is now enforced on the Claim model itself, so
+    every write path inherits the check instead of relying on
+    proposals.propose_claim alone."""
+    with pytest.raises(ValidationError, match="cite at least one"):
+        Claim(id="c1", text="uncited", evidence=[])
+
+
+def test_put_claim_rejects_empty_evidence(store: KBStore) -> None:
+    """Regression for #81: store.put_claim is a direct write path
+    that used to silently accept Claim(evidence=[]) because the
+    only existence-check loop iterated zero times. The model-level
+    validator now fires before put_claim is even called."""
+    with pytest.raises(ValidationError, match="cite at least one"):
+        store.put_claim(Claim(id="c1", text="uncited", evidence=[]))
+    assert not (store.kb_dir / "claims" / "c1.yaml").exists()
+
+
+def test_update_claim_rejects_empty_evidence(store: KBStore) -> None:
+    """Regression for #81: a previously-cited claim cannot be mutated
+    down to evidence=[] and silently re-persisted. The model's field
+    validator only fires at construction time, so update_claim
+    re-validates via Claim.model_validate(claim.model_dump()) before
+    writing — otherwise in-place mutation would bypass the gate."""
+    src = store.put_source(b"e")
+    store.put_claim(Claim(id="c1", text="cited", evidence=[src.id]))
+    persisted_before = (store.kb_dir / "claims" / "c1.yaml").read_text()
+
+    c = store.get_claim("c1")
+    c.evidence = []  # in-place mutation alone doesn't trigger validation
+
+    with pytest.raises(ValidationError, match="cite at least one"):
+        store.update_claim(c)
+    assert (store.kb_dir / "claims" / "c1.yaml").read_text() == persisted_before
 
 
 # --- pages ----------------------------------------------------------------

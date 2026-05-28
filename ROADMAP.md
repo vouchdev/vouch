@@ -6,8 +6,11 @@ promise. Items marked **[VEP]** require a written proposal in
 
 ## 0.1 — surface stabilises (next)
 
-- Vector embeddings as an *optional* retrieval backend alongside FTS5.
-  Default stays FTS5; embeddings opt-in via `config.yaml`. **[VEP]**
+- Vector embeddings as a retrieval backend alongside FTS5 (shipped).
+  Retrieval is controlled by `retrieval.backend` in `config.yaml`:
+  `auto` (default) tries embedding → FTS5 → substring, gracefully
+  degrading to FTS5 when the embeddings extras aren't installed; set
+  `embedding`, `fts5`, or `substring` to pin a single path.
 - `vouch diff <id-old> <id-new>` for claim/page revisions.
 - `vouch approve --batch` for reviewing N proposals in one transaction.
 - HTTP transport (`vouch serve --transport http`) behind a localhost

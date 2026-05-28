@@ -136,6 +136,34 @@ def test_status_includes_metrics_keys(store: KBStore) -> None:
         assert key in result
 
 
+def test_lint_surfaces_legacy_uncited_claim_yaml_without_crashing(
+    store: KBStore,
+) -> None:
+    src = store.put_source(b"e")
+    store.put_claim(Claim(id="good", text="t", evidence=[src.id]))
+
+    legacy_uncited = (
+        "id: legacy\n"
+        'text: "shipped before the validator existed"\n'
+        "type: fact\n"
+        "status: stable\n"
+        "confidence: 1.0\n"
+        "evidence: []\n"
+    )
+    (store.kb_dir / "claims" / "legacy.yaml").write_text(legacy_uncited)
+
+    report = health.lint(store)
+    codes = {f.code for f in report.findings}
+    assert "invalid_claim" in codes, [f.message for f in report.findings]
+    invalid = next(f for f in report.findings if f.code == "invalid_claim")
+    assert "legacy" in invalid.object_ids
+    assert "delete the file" in invalid.message or "add a citation" in invalid.message
+    assert report.ok is False
+
+    good_findings = [f for f in report.findings if "good" in f.object_ids]
+    assert all(f.severity != "error" for f in good_findings), good_findings
+
+
 def test_list_claims_filtered_by_status(store: KBStore) -> None:
     src = store.put_source(b"e")
     store.put_claim(Claim(id="c1", text="x", evidence=[src.id], status=ClaimStatus.STABLE))

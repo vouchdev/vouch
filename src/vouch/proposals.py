@@ -91,10 +91,10 @@ def propose_claim(
     for eid in evidence:
         try:
             store.get_source(eid)
-        except Exception:
+        except ArtifactNotFoundError:
             try:
                 store.get_evidence(eid)
-            except Exception as e:
+            except ArtifactNotFoundError as e:
                 raise ProposalError(f"unknown source/evidence id: {eid}") from e
     payload = {
         "id": slug_hint or _slugify(text),
@@ -210,23 +210,17 @@ def propose_relation(
 # --- decisions ------------------------------------------------------------
 
 
-def approve(
-    store: KBStore,
-    proposal_id: str,
-    *,
-    approved_by: str,
-    reason: str | None = None,
-) -> Claim | Page | Entity | Relation:
-    """Approve a pending proposal and write it as a durable artifact.
+def _approval_block_reason(
+    store: KBStore, proposal: Proposal, approved_by: str
+) -> str | None:
+    """Why `approved_by` cannot approve `proposal` right now, or None.
 
-    Raises ProposalError if the proposal is not pending or if
-    approved_by matches proposed_by (forbidden_self_approval).
+    Covers the deterministic pre-write gates — not-pending and
+    forbidden_self_approval. Shared by `approve()` and `check_approvable()`
+    so the single-approve path and the batch CLI's precheck never drift.
     """
-    proposal = store.get_proposal(proposal_id)
     if proposal.status != ProposalStatus.PENDING:
-        raise ProposalError(
-            f"proposal {proposal_id} is {proposal.status.value}, not pending"
-        )
+        return f"proposal {proposal.id} is {proposal.status.value}, not pending"
     if approved_by == proposal.proposed_by:
         cfg: dict[str, Any] = {}
         try:
@@ -241,10 +235,45 @@ def approve(
             review_cfg.get("approver_role") if isinstance(review_cfg, dict) else None
         )
         if approver_role != "trusted-agent":
-            raise ProposalError(
+            return (
                 f"forbidden_self_approval: {approved_by} cannot approve their own "
                 "proposal (set review.approver_role: trusted-agent in config.yaml to opt out)"
             )
+    return None
+
+
+def check_approvable(
+    store: KBStore, proposal_id: str, *, approved_by: str
+) -> str | None:
+    """Return why `proposal_id` can't be approved by `approved_by`, or None.
+
+    Read-only. `None` means the deterministic gates pass; the actual write in
+    `approve()` can still fail on a pre-existing artifact or an I/O error.
+    Used by the batch CLI to validate a whole set before mutating anything.
+    """
+    try:
+        proposal = store.get_proposal(proposal_id)
+    except ArtifactNotFoundError:
+        return f"proposal {proposal_id} not found"
+    return _approval_block_reason(store, proposal, approved_by)
+
+
+def approve(
+    store: KBStore,
+    proposal_id: str,
+    *,
+    approved_by: str,
+    reason: str | None = None,
+) -> Claim | Page | Entity | Relation:
+    """Approve a pending proposal and write it as a durable artifact.
+
+    Raises ProposalError if the proposal is not pending or if
+    approved_by matches proposed_by (forbidden_self_approval).
+    """
+    proposal = store.get_proposal(proposal_id)
+    block = _approval_block_reason(store, proposal, approved_by)
+    if block:
+        raise ProposalError(block)
     payload = dict(proposal.payload)
     # Refuse to overwrite an existing artifact. Without this guard a retry
     # after a crash between put_<kind>() and move_proposal_to_decided() would

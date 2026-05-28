@@ -353,6 +353,52 @@ def test_import_treats_missing_manifest_sha256_as_mismatch(store: KBStore, tmp_p
     assert not (store.kb_dir / "claims" / "c1.yaml").exists()
 
 
+def test_import_rejects_uncited_claim(store: KBStore, tmp_path: Path) -> None:
+    """Regression for #81: a bundle whose claim YAML has evidence: []
+    must be rejected by import_check / import_apply because the Claim
+    model now enforces the 'must cite at least one' invariant. Before
+    this fix, _validate_content deferred to pydantic, which accepted
+    evidence=[] and silently landed an uncited claim."""
+    uncited_yaml = (
+        b"id: bundle-uncited\n"
+        b'text: "shipped via bundle, no citations"\n'
+        b"type: fact\n"
+        b"status: stable\n"
+        b"confidence: 1.0\n"
+        b"evidence: []\n"
+    )
+    bundle_path = tmp_path / "uncited.tar.gz"
+    manifest = {
+        "spec": bundle.SPEC_VERSION,
+        "bundle_id": "deadbeef",
+        "files": [
+            {
+                "path": "claims/bundle-uncited.yaml",
+                "size": len(uncited_yaml),
+                "sha256": hashlib.sha256(uncited_yaml).hexdigest(),
+            }
+        ],
+        "counts": {},
+        "safety": {"has_proposed": False, "has_state_db": False, "has_audit_log": False},
+    }
+    with tarfile.open(bundle_path, "w:gz") as tar:
+        info = tarfile.TarInfo("claims/bundle-uncited.yaml")
+        info.size = len(uncited_yaml)
+        tar.addfile(info, io.BytesIO(uncited_yaml))
+        mf_bytes = json.dumps(manifest).encode()
+        mf_info = tarfile.TarInfo(bundle.MANIFEST_NAME)
+        mf_info.size = len(mf_bytes)
+        tar.addfile(mf_info, io.BytesIO(mf_bytes))
+
+    diff = bundle.import_check(store.kb_dir, bundle_path)
+    assert not diff.ok
+    assert any("schema validation failed" in i for i in diff.issues), diff.issues
+
+    with pytest.raises(RuntimeError, match="schema validation failed"):
+        bundle.import_apply(store.kb_dir, bundle_path)
+    assert not (store.kb_dir / "claims" / "bundle-uncited.yaml").exists()
+
+
 def test_import_check_passes_when_member_matches_manifest(store: KBStore, tmp_path: Path) -> None:
     """The hash check is positive too: a member that matches manifest
     sha256 should not be reported as `hash mismatch`."""
