@@ -14,6 +14,14 @@ All notable changes to vouch are documented here. Format follows
   `proposal.expire` audit events, and honors `review.expire_pending_after_days`
   in `config.yaml` (default 90; `0` disables). `kb.expire` on MCP/JSONL.
 - `vouch init --template <name>` seeds a domain starter pack. The default `starter` template is unchanged; the new `gittensor` template seeds a small, cited, approved KB about Gittensor (SN74) contribution scoring (1 source, 1 entity, 7 claims — merged-PR rewards, PAT verification, scoring factors, sybil-resistance, repo allow-list policy, issue-solving multiplier, and emission split) so a fresh KB in a Gittensor repo has retrievable context on day one. Templates are an in-code registry — future packs plug in the same way.
+- `vouch conformance [SERVER_CMD]` — runnable conformance suite that
+  exercises the documented `kb.*` method surface against any JSONL server
+  and asserts SPEC §5 / §6 / §9 response shapes. Read-only checks are safe
+  against any KB; `--mutating` provisions a throwaway KB and runs the
+  review-gate path end-to-end (`propose_claim` → `list_pending` →
+  `approve` → `list_claims`, plus `reject`). Output is human-readable by
+  default or `--json` for machine consumption; exits non-zero on any
+  failure. Importable as `vouch.conformance` for pytest-style use (#98).
 
 ## [0.1.0] — 2026-05-26
 

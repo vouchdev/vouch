@@ -1184,5 +1184,69 @@ def serve(transport: str) -> None:
         run_jsonl()
 
 
+# --- conformance ----------------------------------------------------------
+
+
+@cli.command(context_settings={"ignore_unknown_options": True})
+@click.argument("server_cmd", nargs=-1)
+@click.option("--mutating/--no-mutating", default=False,
+              help=("Run write/approve/reject checks against a throwaway KB. "
+                    "Off by default — read-only checks are safe against any KB."))
+@click.option("--json", "as_json", is_flag=True,
+              help="Emit the report as JSON instead of a human-readable table.")
+def conformance(server_cmd: tuple[str, ...], mutating: bool, as_json: bool) -> None:
+    """Run the kb.* conformance suite against a JSONL server.
+
+    SERVER_CMD is the executable and its arguments as separate argv tokens —
+    your shell still needs to quote paths containing spaces so each path stays
+    one token. If omitted, `vouch serve --transport jsonl` runs in the current
+    working directory. Examples:
+
+      vouch conformance
+      vouch conformance python -m my_kb.server
+      vouch conformance -- "/path/with spaces/server" --flag value
+
+    Exits non-zero if any check fails.
+    """
+    import shutil
+    import tempfile
+
+    from . import conformance as conf
+
+    cmd = list(server_cmd) if server_cmd else None
+
+    target: Path | None = None
+    tmp_root: Path | None = None
+    if mutating:
+        # Mutating checks need a throwaway KB. Spin one up so the user's
+        # real .vouch/ is never touched, and so a `trusted-agent` config
+        # lets approve checks run end-to-end without a second VOUCH_AGENT
+        # to play the human approver.
+        tmp_root = Path(tempfile.mkdtemp(prefix="vouch-conformance-"))
+        KBStore.init(tmp_root)
+        cfg_path = tmp_root / ".vouch" / "config.yaml"
+        cfg = yaml.safe_load(cfg_path.read_text()) or {}
+        cfg.setdefault("review", {})["approver_role"] = "trusted-agent"
+        cfg_path.write_text(yaml.safe_dump(cfg))
+        target = tmp_root
+
+    try:
+        env = {"VOUCH_AGENT": "conformance-approver"} if mutating else None
+        report = conf.run_default(
+            server_cmd=cmd, target=target, mutating=mutating, env=env,
+        )
+    finally:
+        if tmp_root is not None:
+            shutil.rmtree(tmp_root, ignore_errors=True)
+
+    if as_json:
+        _emit_json(report.to_dict())
+    else:
+        click.echo(conf.format_report(report))
+
+    if not report.ok:
+        sys.exit(1)
+
+
 if __name__ == "__main__":
     cli()
