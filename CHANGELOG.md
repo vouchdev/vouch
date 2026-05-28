@@ -15,8 +15,23 @@ All notable changes to vouch are documented here. Format follows
   Trusted Publishing (OIDC).
 
 ### Added
+- Friendlier CLI output (#54, track 2): colourised `vouch status` / `lint` /
+  `doctor` / `search` (honours `NO_COLOR`, `FORCE_COLOR`, and TTY detection);
+  `--json` on `vouch lint` and `vouch search` for machine-readable output
+  while the default stays human-readable; progress callbacks on the long ops
+  (`rebuild_index`, `doctor`, bundle `export`/`import_apply`) surfaced as
+  status lines on interactive terminals; and `vouch index` / `vouch export`
+  now report a clean `Error:` instead of a traceback on a malformed artifact.
+- `vouch sync-check` and `vouch sync-apply` reconcile another `.vouch`
+  directory or bundle by importing only non-conflicting durable artifacts and
+  reporting conflicts without overwriting reviewed knowledge.
+- `vouch pending --json` emits pending proposals as structured JSON for shell
+  scripts, CI checks, and multi-agent review dashboards.
+- `vouch diff <id-old> <id-new>` shows what changed between two claim revisions or two page revisions — field-level changes plus a line-diff of the long text/body. Auto-detects the artifact kind and hides always-churning metadata. Read-only; supports `--json`.
 - Seed a cited starter source and claim during `vouch init`, print first-run
   next steps, and document a 30-second onboarding tour (#54).
+- Add `vouch review`, a guided CLI queue for approving, rejecting, skipping,
+  or dry-running pending proposals without bypassing the review gate.
 
 ### Fixed
 - Add `put_relation_idempotent()` to `KBStore` and use it in `supersede()` and `contradict()` so retrying after a partial failure converges to a consistent state instead of raising `ValueError`.

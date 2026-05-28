@@ -11,9 +11,11 @@ import getpass
 import json
 import os
 import sys
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from dataclasses import asdict
 from pathlib import Path
+from typing import Any
 
 import click
 import yaml
@@ -22,11 +24,12 @@ from . import __version__, bundle, health
 from . import audit as audit_mod
 from . import lifecycle as life
 from . import sessions as sess_mod
+from . import sync as sync_mod
 from . import verify as verify_mod
 from .capabilities import capabilities as build_caps
 from .context import build_context_pack
 from .lifecycle import LifecycleError
-from .models import ProposalStatus
+from .models import Proposal, ProposalKind, ProposalStatus
 from .onboarding import seed_starter_kb
 from .proposals import (
     ProposalError,
@@ -86,6 +89,55 @@ def _whoami() -> str:
 
 def _emit_json(obj) -> None:
     click.echo(json.dumps(obj, indent=2, default=str, sort_keys=True))
+
+
+def _color_enabled() -> bool:
+    # Honour the de-facto conventions: NO_COLOR disables, FORCE_COLOR forces,
+    # otherwise colour only when stdout is an interactive terminal. Keeps pipes,
+    # CI, and `--json` output clean while still being pretty in a shell.
+    if os.environ.get("NO_COLOR"):
+        return False
+    if os.environ.get("FORCE_COLOR"):
+        return True
+    return sys.stdout.isatty()
+
+
+def _style(text: str, **kwargs: Any) -> str:
+    return click.style(text, **kwargs) if _color_enabled() else text
+
+
+def _echo(message: str = "", *, err: bool = False) -> None:
+    # click.echo strips ANSI when the stream isn't a TTY unless told otherwise;
+    # pass an explicit color flag so FORCE_COLOR into a pipe keeps the styling
+    # and NO_COLOR / plain pipes stay clean.
+    click.echo(message, err=err, color=_color_enabled())
+
+
+_SEVERITY_STYLE = {
+    "error": {"marker": "✗", "fg": "red"},
+    "warning": {"marker": "!", "fg": "yellow"},
+    "info": {"marker": "·", "fg": "cyan"},
+}
+
+
+def _print_findings(findings: list) -> None:
+    for f in findings:
+        style = _SEVERITY_STYLE.get(f.severity, {"marker": "?", "fg": None})
+        line = f"{style['marker']} [{f.code}] {f.message}"
+        _echo(_style(line, fg=style["fg"]))
+
+
+def _progress_cb(verb: str) -> Callable[[str], None] | None:
+    # Progress is for humans watching a terminal; stay silent in pipes/CI/tests
+    # so machine output and captured test stdout aren't polluted. Writes to
+    # stderr so it never lands in piped stdout.
+    if not sys.stderr.isatty():
+        return None
+
+    def cb(step: str) -> None:
+        click.echo(_style(f"  … {verb} {step}", fg="cyan"), err=True)
+
+    return cb
 
 
 @click.group()
@@ -148,39 +200,62 @@ def status(as_json: bool) -> None:
     if as_json:
         _emit_json(s)
         return
-    click.echo(f"KB at {s['kb_dir']}")
-    click.echo(
-        f"  durable: {s['claims']} claims  •  {s['pages']} pages  •  "
-        f"{s['sources']} sources  •  {s['entities']} entities  •  "
-        f"{s['relations']} relations"
+    _echo(f"KB at {_style(str(s['kb_dir']), bold=True)}")
+    _echo(
+        f"  durable: {_style(str(s['claims']), fg='cyan')} claims  •  "
+        f"{_style(str(s['pages']), fg='cyan')} pages  •  "
+        f"{_style(str(s['sources']), fg='cyan')} sources  •  "
+        f"{_style(str(s['entities']), fg='cyan')} entities  •  "
+        f"{_style(str(s['relations']), fg='cyan')} relations"
     )
-    click.echo(f"  pending: {s['pending_proposals']} proposals")
-    click.echo(f"  audit:   {s['audit_events']} events  •  "
-               f"index: {'present' if s['index_present'] else 'missing'}")
+    pending = s["pending_proposals"]
+    pending_str = _style(str(pending), fg="yellow" if pending else "green")
+    _echo(f"  pending: {pending_str} proposals")
+    present = s["index_present"]
+    index_str = (
+        _style("present", fg="green") if present else _style("missing", fg="red")
+    )
+    _echo(f"  audit:   {_style(str(s['audit_events']), fg='cyan')} events  •  "
+          f"index: {index_str}")
+
+
+def _findings_json(report) -> list[dict[str, Any]]:
+    return [
+        {"severity": f.severity, "code": f.code, "message": f.message,
+         "object_ids": list(getattr(f, "object_ids", []) or [])}
+        for f in report.findings
+    ]
 
 
 @cli.command()
 @click.option("--stale-days", default=180, show_default=True, type=int)
-def lint(stale_days: int) -> None:
+@click.option("--json", "as_json", is_flag=True, help="Emit findings as JSON.")
+def lint(stale_days: int, as_json: bool) -> None:
     """Surface user-actionable problems: broken citations, stale claims, dangling refs."""
     store = _load_store()
     report = health.lint(store, stale_after_days=stale_days)
-    for f in report.findings:
-        marker = {"error": "✗", "warning": "!", "info": "·"}.get(f.severity, "?")
-        click.echo(f"{marker} [{f.code}] {f.message}")
+    if as_json:
+        _emit_json({"ok": report.ok, "findings": _findings_json(report)})
+        sys.exit(0 if report.ok else 1)
+    _print_findings(report.findings)
     if not report.findings:
-        click.echo("clean")
+        _echo(_style("clean", fg="green"))
     sys.exit(0 if report.ok else 1)
 
 
 @cli.command()
-def doctor() -> None:
+@click.option("--json", "as_json", is_flag=True, help="Emit findings as JSON.")
+def doctor(as_json: bool) -> None:
     """Full health sweep: lint + source verification + index check."""
     store = _load_store()
-    report = health.doctor(store)
-    for f in report.findings:
-        marker = {"error": "✗", "warning": "!", "info": "·"}.get(f.severity, "?")
-        click.echo(f"{marker} [{f.code}] {f.message}")
+    report = health.doctor(store, on_progress=_progress_cb("verifying"))
+    if as_json:
+        _emit_json({
+            "ok": report.ok, "counts": report.counts,
+            "findings": _findings_json(report),
+        })
+        sys.exit(0 if report.ok else 1)
+    _print_findings(report.findings)
     click.echo(f"-- {report.counts}")
     sys.exit(0 if report.ok else 1)
 
@@ -189,10 +264,14 @@ def doctor() -> None:
 
 
 @cli.command()
-def pending() -> None:
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON instead of text.")
+def pending(as_json: bool) -> None:
     """List proposals awaiting review."""
     store = _load_store()
     pending = store.list_proposals(ProposalStatus.PENDING)
+    if as_json:
+        _emit_json([pr.model_dump(mode="json") for pr in pending])
+        return
     if not pending:
         click.echo("no pending proposals")
         return
@@ -205,6 +284,104 @@ def pending() -> None:
         )
         click.echo(f"• {pr.id}  [{pr.kind.value}]  by {pr.proposed_by}")
         click.echo(f"    {str(preview).strip()[:120]}")
+
+
+def _proposal_preview(pr: Proposal) -> str:
+    preview = (
+        pr.payload.get("text")
+        or pr.payload.get("title")
+        or pr.payload.get("name")
+        or pr.payload.get("id")
+        or "-"
+    )
+    return str(preview).strip()
+
+
+def _show_review_proposal(pr: Proposal, index: int, total: int) -> None:
+    click.echo(f"\n[{index}/{total}] {pr.id}  [{pr.kind.value}]  by {pr.proposed_by}")
+    click.echo(_proposal_preview(pr))
+    if pr.rationale:
+        click.echo(f"rationale: {pr.rationale}")
+    click.echo()
+    click.echo(yaml.safe_dump(pr.model_dump(mode="json"), sort_keys=False).rstrip())
+
+
+@cli.command()
+@click.option(
+    "--limit",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Review at most N proposals.",
+)
+@click.option(
+    "--type",
+    "kind",
+    type=click.Choice([k.value for k in ProposalKind]),
+    default=None,
+    help="Only review proposals of this kind.",
+)
+@click.option("--dry-run", is_flag=True, help="Show decisions without mutating proposals.")
+def review(limit: int | None, kind: str | None, dry_run: bool) -> None:
+    """Walk pending proposals one at a time for approval or rejection."""
+    store = _load_store()
+    proposals = store.list_proposals(ProposalStatus.PENDING)
+    if kind is not None:
+        proposals = [pr for pr in proposals if pr.kind.value == kind]
+    if limit is not None:
+        proposals = proposals[:limit]
+    if not proposals:
+        click.echo("no pending proposals")
+        return
+
+    decided = 0
+    skipped = 0
+    actor = _whoami()
+    total = len(proposals)
+    for index, pr in enumerate(proposals, start=1):
+        _show_review_proposal(pr, index, total)
+        action = click.prompt(
+            "Action [a=approve, r=reject, s=skip, q=quit]",
+            type=click.Choice(["a", "r", "s", "q"], case_sensitive=False),
+            default="s",
+            show_choices=False,
+        ).lower()
+        if action == "q":
+            click.echo("Stopped review")
+            break
+        if action == "s":
+            click.echo(f"Skipped {pr.id}")
+            skipped += 1
+            continue
+        if action == "r":
+            reason = click.prompt("Rejection reason").strip()
+            with _cli_errors():
+                if not reason:
+                    raise ProposalError("rejection must include a reason (future agent context)")
+                if not dry_run:
+                    do_reject(store, pr.id, rejected_by=actor, reason=reason)
+            if dry_run:
+                click.echo(f"Would reject {pr.id}")
+            else:
+                click.echo(f"Rejected {pr.id}")
+            decided += 1
+            continue
+
+        reason = (
+            click.prompt("Approval reason", default="", show_default=False).strip()
+            or None
+        )
+        if dry_run:
+            click.echo(f"Would approve {pr.id}")
+        else:
+            with _cli_errors():
+                artifact = do_approve(store, pr.id, approved_by=actor, reason=reason)
+            click.echo(f"Approved -> {type(artifact).__name__.lower()}/{artifact.id}")
+        decided += 1
+
+    if dry_run:
+        click.echo(f"Review complete: {decided} selected, {skipped} skipped, no changes made")
+    else:
+        click.echo(f"Review complete: {decided} decided, {skipped} skipped")
 
 
 @cli.command()
@@ -503,6 +680,7 @@ def crystallize(session_id: str, no_page: bool) -> None:
 @click.option("--rerank/--no-rerank", default=False)
 @click.option("--hyde/--no-hyde", default=False)
 @click.option("--explain/--no-explain", default=False)
+@click.option("--json", "as_json", is_flag=True, help="Emit hits as JSON.")
 def search(
     query: str,
     limit: int,
@@ -513,6 +691,7 @@ def search(
     rerank: bool,
     hyde: bool,
     explain: bool,
+    as_json: bool,
 ) -> None:
     """Search the KB."""
     from . import index_db
@@ -558,11 +737,25 @@ def search(
             click.echo("warning: rerank extras not installed; skipping rerank",
                        err=True)
 
+    if as_json:
+        _emit_json({
+            "backend": used,
+            "hits": [
+                {"kind": k, "id": i, "snippet": snip, "score": score,
+                 "backend": used}
+                for k, i, snip, score in hits
+            ],
+        })
+        return
+
+    label = _style(f"({used})", fg="green")
     for k, i, snip, score in hits:
+        loc = _style(f"{k}/{i}", fg="cyan")
         if explain:
-            click.echo(f"[{used}] {k}/{i}\tscore={score:.4f}\t{snip}  ({used})")
+            sc = _style(f"score={score:.4f}", dim=True)
+            _echo(f"{label} {loc}\t{sc}\t{snip}")
         else:
-            click.echo(f"{k}/{i}\t{snip}  ({used})")
+            _echo(f"{loc}\t{snip}  {label}")
 
 
 @cli.command()
@@ -586,7 +779,8 @@ def context(task: str, limit: int, max_chars: int | None,
 def index() -> None:
     """Rebuild state.db from durable files."""
     store = _load_store()
-    stats = health.rebuild_index(store)
+    with _cli_errors():
+        stats = health.rebuild_index(store, on_progress=_progress_cb("indexing"))
     click.echo(f"indexed: {stats}")
 
 
@@ -716,7 +910,11 @@ def audit(tail: int, as_json: bool) -> None:
 def export(out_path: str) -> None:
     """Bundle the durable KB into a portable .tar.gz."""
     store = _load_store()
-    manifest = bundle.export(store.kb_dir, dest=Path(out_path), actor=_whoami())
+    with _cli_errors():
+        manifest = bundle.export(
+            store.kb_dir, dest=Path(out_path), actor=_whoami(),
+            on_progress=_progress_cb("exporting"),
+        )
     _emit_json({
         "bundle_id": manifest["bundle_id"],
         "files": len(manifest["files"]),
@@ -760,12 +958,78 @@ def import_apply_cmd(bundle_path: str, on_conflict: str) -> None:
         r = bundle.import_apply(
             store.kb_dir, Path(bundle_path),
             on_conflict=on_conflict, actor=_whoami(),
+            on_progress=_progress_cb("importing"),
         )
     except RuntimeError as e:
         raise click.ClickException(str(e)) from e
     # Rebuild the index after a bulk import so search picks up new claims.
+    health.rebuild_index(store, on_progress=_progress_cb("indexing"))
+    _emit_json(r)
+
+
+# --- sync ------------------------------------------------------------------
+
+
+@cli.command("sync-check")
+@click.argument("source_path", type=click.Path(exists=True))
+def sync_check_cmd(source_path: str) -> None:
+    """Compare another .vouch directory or bundle without writing."""
+    store = _load_store()
+    try:
+        r = sync_mod.sync_check(store.kb_dir, Path(source_path))
+    except RuntimeError as e:
+        raise click.ClickException(str(e)) from e
+    _emit_json(asdict(r))
+
+
+@cli.command("sync-apply")
+@click.argument("source_path", type=click.Path(exists=True))
+@click.option("--on-conflict", default="fail", show_default=True,
+              type=click.Choice(["fail", "skip", "propose"]))
+def sync_apply_cmd(source_path: str, on_conflict: str) -> None:
+    """Apply non-conflicting files from another .vouch directory or bundle."""
+    store = _load_store()
+    try:
+        r = sync_mod.sync_apply(
+            store.kb_dir,
+            Path(source_path),
+            on_conflict=on_conflict,
+            actor=_whoami(),
+        )
+    except (RuntimeError, ValueError) as e:
+        raise click.ClickException(str(e)) from e
     health.rebuild_index(store)
     _emit_json(r)
+
+
+# --- diff -----------------------------------------------------------------
+
+
+@cli.command()
+@click.argument("old_id")
+@click.argument("new_id")
+@click.option("--json", "as_json", is_flag=True, default=False,
+              help="Emit the diff as JSON.")
+def diff(old_id: str, new_id: str, as_json: bool) -> None:
+    """Show what changed between two claim or two page revisions."""
+    from .diff import diff_artifacts
+    store = _load_store()
+    with _cli_errors():
+        d = diff_artifacts(store, old_id, new_id)
+    if as_json:
+        _emit_json(asdict(d))
+        return
+    if not d.changes and not d.text_diff:
+        click.echo("no differences")
+        return
+    click.echo(f"diff {d.kind} {d.old_id} → {d.new_id}")
+    for c in d.changes:
+        click.echo(f"  {c.field}: {c.old} → {c.new}")
+    if d.text_diff:
+        label = "body" if d.kind == "page" else "text"
+        click.echo(f"  {label}:")
+        for line in d.text_diff:
+            click.echo(f"    {line}")
 
 
 # --- serve ----------------------------------------------------------------

@@ -10,6 +10,7 @@ which slipped past the except and surfaced as a traceback.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -18,6 +19,7 @@ from click.testing import CliRunner
 
 from vouch import sessions as sess_mod
 from vouch.cli import cli
+from vouch.models import ProposalStatus
 from vouch.proposals import propose_claim
 from vouch.storage import KBStore
 
@@ -80,6 +82,148 @@ def test_propose_entity_empty_name_shows_clean_error(store: KBStore) -> None:
 def test_show_missing_proposal_shows_clean_error(store: KBStore) -> None:
     result = CliRunner().invoke(cli, ["show", "no-such-proposal"])
     _assert_clean_error(result, "proposal no-such-proposal")
+
+
+def test_pending_json_empty_queue(store: KBStore) -> None:
+    result = CliRunner().invoke(cli, ["pending", "--json"])
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output) == []
+
+
+def test_pending_json_lists_pending_proposals(store: KBStore) -> None:
+    src = store.put_source(b"e")
+    pr = propose_claim(store, text="pending json claim", evidence=[src.id], proposed_by="agent")
+
+    result = CliRunner().invoke(cli, ["pending", "--json"])
+
+    assert result.exit_code == 0, result.output
+    rows = json.loads(result.output)
+    assert len(rows) == 1
+    assert rows[0]["id"] == pr.id
+    assert rows[0]["kind"] == "claim"
+    assert rows[0]["proposed_by"] == "agent"
+    assert rows[0]["status"] == "pending"
+    assert rows[0]["payload"]["text"] == "pending json claim"
+
+
+def test_pending_human_output_remains_text(store: KBStore) -> None:
+    src = store.put_source(b"e")
+    pr = propose_claim(store, text="pending text claim", evidence=[src.id], proposed_by="agent")
+
+    result = CliRunner().invoke(cli, ["pending"])
+
+    assert result.exit_code == 0, result.output
+    assert pr.id in result.output
+    assert "[claim]  by agent" in result.output
+    assert "pending text claim" in result.output
+
+
+def test_review_approves_pending_proposal(
+    store: KBStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("VOUCH_AGENT", raising=False)
+    monkeypatch.setenv("VOUCH_USER", "reviewer")
+    src = store.put_source(b"e")
+    pr = propose_claim(
+        store,
+        text="review can approve",
+        evidence=[src.id],
+        proposed_by="agent",
+    )
+
+    result = CliRunner().invoke(cli, ["review"], input="a\n\n")
+
+    assert result.exit_code == 0, result.output
+    assert "Approved -> claim/review-can-approve" in result.output
+    assert store.get_claim("review-can-approve").text == "review can approve"
+    assert store.get_proposal(pr.id).status == ProposalStatus.APPROVED
+
+
+def test_review_rejects_with_reason(
+    store: KBStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("VOUCH_AGENT", raising=False)
+    monkeypatch.setenv("VOUCH_USER", "reviewer")
+    src = store.put_source(b"e")
+    pr = propose_claim(
+        store,
+        text="review can reject",
+        evidence=[src.id],
+        proposed_by="agent",
+    )
+
+    result = CliRunner().invoke(cli, ["review"], input="r\nnot true\n")
+
+    assert result.exit_code == 0, result.output
+    assert f"Rejected {pr.id}" in result.output
+    decided = store.get_proposal(pr.id)
+    assert decided.status == ProposalStatus.REJECTED
+    assert decided.decision_reason == "not true"
+
+
+def test_review_skip_and_quit_leave_proposals_pending(store: KBStore) -> None:
+    src = store.put_source(b"e")
+    first = propose_claim(
+        store,
+        text="review can skip",
+        evidence=[src.id],
+        proposed_by="agent",
+    )
+    second = propose_claim(
+        store,
+        text="review can quit",
+        evidence=[src.id],
+        proposed_by="agent",
+    )
+
+    result = CliRunner().invoke(cli, ["review"], input="s\nq\n")
+
+    assert result.exit_code == 0, result.output
+    assert "Skipped " in result.output
+    assert "Stopped review" in result.output
+    assert store.get_proposal(first.id).status == ProposalStatus.PENDING
+    assert store.get_proposal(second.id).status == ProposalStatus.PENDING
+
+
+def test_review_dry_run_does_not_mutate(
+    store: KBStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("VOUCH_AGENT", raising=False)
+    monkeypatch.setenv("VOUCH_USER", "reviewer")
+    src = store.put_source(b"e")
+    pr = propose_claim(
+        store,
+        text="review dry run",
+        evidence=[src.id],
+        proposed_by="agent",
+    )
+
+    result = CliRunner().invoke(cli, ["review", "--dry-run"], input="a\n\n")
+
+    assert result.exit_code == 0, result.output
+    assert f"Would approve {pr.id}" in result.output
+    assert store.get_proposal(pr.id).status == ProposalStatus.PENDING
+    with pytest.raises(KeyError):
+        store.get_claim("review-dry-run")
+
+
+def test_review_dry_run_reject_does_not_mutate(store: KBStore) -> None:
+    src = store.put_source(b"e")
+    pr = propose_claim(
+        store,
+        text="review dry run reject",
+        evidence=[src.id],
+        proposed_by="agent",
+    )
+
+    result = CliRunner().invoke(cli, ["review", "--dry-run"], input="r\nnot true\n")
+
+    assert result.exit_code == 0, result.output
+    assert f"Would reject {pr.id}" in result.output
+    pending = store.get_proposal(pr.id)
+    assert pending.status == ProposalStatus.PENDING
+    assert pending.decision_reason is None
 
 
 def test_search_fts5_backend_label(

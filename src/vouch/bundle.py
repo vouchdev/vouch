@@ -21,6 +21,7 @@ import hashlib
 import io
 import json
 import tarfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -101,11 +102,16 @@ def build_manifest(kb_dir: Path) -> dict[str, Any]:
     }
 
 
-def export(kb_dir: Path, *, dest: Path, actor: str = "vouch-export") -> dict[str, Any]:
+def export(
+    kb_dir: Path, *, dest: Path, actor: str = "vouch-export",
+    on_progress: Callable[[str], None] | None = None,
+) -> dict[str, Any]:
     manifest = build_manifest(kb_dir)
     dest.parent.mkdir(parents=True, exist_ok=True)
     with tarfile.open(dest, "w:gz") as tar:
         for rel, abs_path in _iter_export_files(kb_dir):
+            if on_progress is not None:
+                on_progress(rel.as_posix())
             tar.add(abs_path, arcname=rel.as_posix())
         manifest_bytes = json.dumps(manifest, indent=2, sort_keys=True).encode()
         info = tarfile.TarInfo(MANIFEST_NAME)
@@ -292,6 +298,7 @@ def import_apply(
     *,
     on_conflict: str = "skip",
     actor: str = "vouch-import",
+    on_progress: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """Apply a bundle. `on_conflict` ∈ {"skip", "overwrite", "fail"}.
 
@@ -347,6 +354,8 @@ def import_apply(
                 continue
             dest.write_bytes(body)
             written.append(member.name)
+            if on_progress is not None:
+                on_progress(member.name)
     result = {
         "bundle_id": check.bundle_id,
         "written": written,

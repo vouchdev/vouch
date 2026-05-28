@@ -145,6 +145,7 @@ vouch lint [--stale-days N]                 # user-actionable problems
 vouch doctor                                # full sweep incl. source verification
 
 vouch pending                               # list pending proposals
+vouch review [--limit N] [--type KIND]      # guided proposal review queue
 vouch show <proposal-id>
 vouch approve <proposal-id> [--reason ...]
 vouch reject <proposal-id> --reason "..."
@@ -176,6 +177,8 @@ vouch export --out path.tar.gz
 vouch export-check path.tar.gz
 vouch import-check path.tar.gz
 vouch import-apply path.tar.gz [--on-conflict skip|overwrite|fail]
+vouch sync-check PATH_OR_BUNDLE
+vouch sync-apply PATH_OR_BUNDLE [--on-conflict fail|skip|propose]
 
 vouch serve [--transport stdio|jsonl]
 ```
