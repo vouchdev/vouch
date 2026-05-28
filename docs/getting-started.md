@@ -11,7 +11,8 @@ source .venv/bin/activate
 pip install -e '/path/to/vouch[dev]'
 ```
 
-(Once vouch is published to PyPI: `pipx install vouch`.)
+(From PyPI, published as `vouch-kb`; the CLI command is still `vouch`:
+`pipx install vouch-kb`.)
 
 Confirm:
 
