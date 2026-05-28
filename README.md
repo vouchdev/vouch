@@ -262,13 +262,13 @@ vouch import-apply kb.tar.gz --on-conflict skip  # apply (default skip; never de
 | Lifecycle | `supersede`, `contradict`, `archive`, `confirm`, `cite` — direct mutations, all audited |
 | Portability | tar.gz bundles with per-file sha256 `manifest.json`, `export-check`, `import-check`, `import-apply` with skip/overwrite/fail conflict modes |
 | Audit | append-only `audit.log.jsonl`, per-event actor (`VOUCH_AGENT`), object ids, dry-run flag, reversible flag |
-| Adapters | Claude Code wiring documented via `.mcp.json` + `VOUCH_AGENT` env; per-runtime adapter templates not yet shipped |
+| Adapters | Drop-in templates shipped under [adapters/](adapters/) (Claude Code, Cursor, Codex, Continue, generic MCP, JSONL shell), plus `.mcp.json` + `VOUCH_AGENT` guidance |
 | Validation | pytest suite (storage, FTS5, audit, source-verify, review-gate, bundle, JSONL), ruff + mypy gates, GitHub CI |
 | Specification | dated snapshots under [spec/](spec/), JSON Schemas in [schemas/](schemas/), generator script at [scripts/gen_schemas.py](scripts/gen_schemas.py) |
 
 ## Status
 
-Pre-1.0. What's *not* in this implementation: vector embeddings (BM25/FTS5 only), per-runtime adapter templates, benchmark fixtures, multi-agent sync, scopes beyond a single field on Claim/Source. If a hole matters to you, file an issue.
+Pre-1.0. What's *not* in this implementation: benchmark fixtures, multi-agent sync, scopes beyond a single field on Claim/Source. If a hole matters to you, file an issue.
 
 ## License
 
