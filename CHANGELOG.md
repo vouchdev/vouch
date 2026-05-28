@@ -6,6 +6,10 @@ All notable changes to vouch are documented here. Format follows
 
 ## [Unreleased]
 
+### Fixed
+- Point contributor, security, and package metadata URLs at `vouchdev/vouch`
+  instead of stale `plind-junior/vouch` paths.
+
 ## [0.1.0] — 2026-05-26
 
 ### Packaging

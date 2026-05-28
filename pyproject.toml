@@ -49,8 +49,8 @@ rerank = [
 vouch = "vouch.cli:cli"
 
 [project.urls]
-Homepage = "https://github.com/plind-junior/vouch"
-Issues = "https://github.com/plind-junior/vouch/issues"
+Homepage = "https://github.com/vouchdev/vouch"
+Issues = "https://github.com/vouchdev/vouch/issues"
 
 [build-system]
 requires = ["hatchling>=1.21"]

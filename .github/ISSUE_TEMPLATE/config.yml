@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: Security issue
-    url: https://github.com/plind-junior/vouch/security/advisories/new
+    url: https://github.com/vouchdev/vouch/security/advisories/new
     about: Please report security issues privately via GitHub Security Advisories, not as a public issue. See SECURITY.md.
   - name: Question
-    url: https://github.com/plind-junior/vouch/discussions
+    url: https://github.com/vouchdev/vouch/discussions
     about: General questions, ideas, and discussions belong in Discussions, not Issues.

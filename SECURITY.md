@@ -10,7 +10,7 @@ this section will list a support window.
 **Do not open a public issue.** Use one of:
 
 1. **GitHub Security Advisories** (preferred):
-   <https://github.com/plind-junior/vouch/security/advisories/new>
+   <https://github.com/vouchdev/vouch/security/advisories/new>
 2. Email the maintainers (placeholder: `security@vouch.invalid`).
 
 Please include:

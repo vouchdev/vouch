@@ -7,7 +7,7 @@ usually save everyone time.
 ## Dev setup
 
 ```bash
-git clone https://github.com/plind-junior/vouch
+git clone https://github.com/vouchdev/vouch
 cd vouch
 python -m venv .venv && source .venv/bin/activate
 pip install -e '.[dev]'
