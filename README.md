@@ -64,6 +64,7 @@ vouch show <id>                  # full details
 vouch approve <id>               # → durable artifact
 vouch approve <id> <id> ...    # approve several reviewed proposals at once
 vouch reject <id> --reason "..."
+vouch expire --apply                  # optional: clear stale pending proposals
 
 # 4. commit
 git add .vouch/ && git commit -m "kb: approve auth-uses-jwt"
@@ -150,6 +151,7 @@ vouch review [--limit N] [--type KIND]      # guided proposal review queue
 vouch show <proposal-id>
 vouch approve <proposal-id>... [--reason ...] [--keep-going]
 vouch reject <proposal-id> --reason "..."
+vouch expire [--apply] [--days N] [--json]   # GC stale pending proposals
 
 vouch propose-claim --text ... --source ... [--type ...] [--confidence X]
 vouch propose-page --title ... [--body -] [--claim ID ...]

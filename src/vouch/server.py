@@ -25,8 +25,10 @@ from .capabilities import capabilities as build_caps
 from .context import build_context_pack
 from .models import ProposalStatus
 from .proposals import (
+    EXPIRE_ACTOR,
     ProposalError,
     approve,
+    expire_pending,
     propose_claim,
     propose_entity,
     propose_page,
@@ -419,6 +421,24 @@ def kb_reject(proposal_id: str, reason: str) -> dict[str, Any]:
     except (ArtifactNotFoundError, ValueError, ProposalError) as e:
         raise ValueError(str(e)) from e
     return {"proposal_id": proposal_id, "status": "rejected", "reason": reason}
+
+
+@mcp.tool()
+def kb_expire(apply: bool = False, days: int | None = None) -> dict[str, Any]:
+    """Expire stale pending proposals (dry-run unless apply=True)."""
+    try:
+        result = expire_pending(
+            _store(), apply=apply, expired_by=EXPIRE_ACTOR, days=days,
+        )
+    except (ArtifactNotFoundError, ValueError, ProposalError) as e:
+        raise ValueError(str(e)) from e
+    return {
+        "threshold_days": result.threshold_days,
+        "enabled": result.threshold_days > 0,
+        "dry_run": not apply,
+        "would_expire": [p.id for p in result.would_expire],
+        "expired": [p.id for p in result.expired],
+    }
 
 
 # === lifecycle ============================================================

@@ -67,7 +67,10 @@ class ArtifactNotFoundError(KeyError):
 def _starter_config() -> dict[str, Any]:
     return {
         "version": 1,
-        "review": {"require_human_approval": True},
+        "review": {
+            "require_human_approval": True,
+            "expire_pending_after_days": 90,
+        },
         "retrieval": {
             # auto = embedding -> fts5 -> substring; or pin one of
             # embedding | fts5 | substring. See context._retrieve.
