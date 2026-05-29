@@ -23,6 +23,7 @@ from . import sessions as sess_mod
 from . import verify as verify_mod
 from .capabilities import capabilities as build_caps
 from .context import build_context_pack
+from .logging_config import configure_logging
 from .models import ProposalStatus
 from .proposals import (
     ProposalError,
@@ -662,4 +663,5 @@ def _current_model_name() -> str:
 
 def run_stdio() -> None:
     """Entry point used by `vouch serve`."""
+    configure_logging()
     mcp.run()

@@ -31,6 +31,7 @@ from . import sessions as sess_mod
 from . import verify as verify_mod
 from .capabilities import capabilities as build_caps
 from .context import build_context_pack
+from .logging_config import configure_logging
 from .models import ProposalStatus
 from .proposals import (
     ProposalError,
@@ -551,6 +552,7 @@ def handle_request(envelope: dict) -> dict:
 
 def run_jsonl(stdin=None, stdout=None) -> None:
     """Read one request per line, write one response per line."""
+    configure_logging()
     stdin = stdin or sys.stdin
     stdout = stdout or sys.stdout
     for line in stdin:

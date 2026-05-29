@@ -29,6 +29,7 @@ from . import verify as verify_mod
 from .capabilities import capabilities as build_caps
 from .context import build_context_pack
 from .lifecycle import LifecycleError
+from .logging_config import configure_logging
 from .models import Proposal, ProposalKind, ProposalStatus
 from .onboarding import (
     DEFAULT_TEMPLATE,
@@ -150,6 +151,7 @@ def _progress_cb(verb: str) -> Callable[[str], None] | None:
 @click.version_option(__version__, prog_name="vouch")
 def cli() -> None:
     """vouch — git-native, review-gated knowledge base for LLM agents."""
+    configure_logging()
 
 
 # --- bootstrap ------------------------------------------------------------
