@@ -144,15 +144,67 @@ def test_import_apply_rejects_absolute_path(store: KBStore, tmp_path: Path) -> N
     assert not target.exists()
 
 
+def test_import_check_rejects_manifest_listing_missing_file(store: KBStore, tmp_path: Path) -> None:
+    """Manifest entries without a matching tar member must be flagged."""
+    bundle_path = tmp_path / "missing.tar.gz"
+    manifest = {
+        "spec": bundle.SPEC_VERSION,
+        "bundle_id": "deadbeef",
+        "files": [
+            {
+                "path": "claims/c1.yaml",
+                "size": 16,
+                "sha256": hashlib.sha256(b"text: any\n").hexdigest(),
+            },
+        ],
+        "counts": {},
+        "safety": {"has_proposed": False, "has_state_db": False, "has_audit_log": False},
+    }
+    with tarfile.open(bundle_path, "w:gz") as tar:
+        mf_bytes = json.dumps(manifest).encode()
+        mf_info = tarfile.TarInfo(bundle.MANIFEST_NAME)
+        mf_info.size = len(mf_bytes)
+        tar.addfile(mf_info, io.BytesIO(mf_bytes))
+
+    result = bundle.import_check(store.kb_dir, bundle_path)
+    assert not result.ok
+    assert any("missing file" in i for i in result.issues)
+
+
+def test_import_apply_rejects_bundle_with_missing_manifest_file(
+    store: KBStore, tmp_path: Path
+) -> None:
+    """import_apply must refuse a bundle whose manifest lists a file absent from the tarball."""
+    bundle_path = tmp_path / "missing.tar.gz"
+    manifest = {
+        "spec": bundle.SPEC_VERSION,
+        "bundle_id": "deadbeef",
+        "files": [
+            {
+                "path": "claims/c1.yaml",
+                "size": 16,
+                "sha256": hashlib.sha256(b"text: any\n").hexdigest(),
+            },
+        ],
+        "counts": {},
+        "safety": {"has_proposed": False, "has_state_db": False, "has_audit_log": False},
+    }
+    with tarfile.open(bundle_path, "w:gz") as tar:
+        mf_bytes = json.dumps(manifest).encode()
+        mf_info = tarfile.TarInfo(bundle.MANIFEST_NAME)
+        mf_info.size = len(mf_bytes)
+        tar.addfile(mf_info, io.BytesIO(mf_bytes))
+
+    with pytest.raises(RuntimeError, match="missing file"):
+        bundle.import_apply(store.kb_dir, bundle_path)
+
+
 def test_import_check_flags_path_traversal(store: KBStore, tmp_path: Path) -> None:
     bundle_path = tmp_path / "evil.tar.gz"
     _write_malicious_bundle(bundle_path, "../../evil.txt", b"pwned")
     result = bundle.import_check(store.kb_dir, bundle_path)
     assert not result.ok
-    assert any(
-        "traversal" in i or "unsafe" in i or "absolute path" in i
-        for i in result.issues
-    )
+    assert any("traversal" in i or "unsafe" in i or "absolute path" in i for i in result.issues)
 
 
 def _write_hash_mismatched_bundle(
@@ -188,9 +240,7 @@ def _write_hash_mismatched_bundle(
         tar.addfile(mf_info, io.BytesIO(mf_bytes))
 
 
-def test_import_rejects_member_with_mismatched_sha256(
-    store: KBStore, tmp_path: Path
-) -> None:
+def test_import_rejects_member_with_mismatched_sha256(store: KBStore, tmp_path: Path) -> None:
     """Regression for #74: a tar member whose body does not hash to the
     sha256 the manifest claims is a documented integrity violation —
     export_check flags it, so import_check and import_apply must too."""
@@ -208,17 +258,13 @@ def test_import_rejects_member_with_mismatched_sha256(
     assert not (store.kb_dir / "claims" / "c1.yaml").exists()
 
 
-def test_import_rejects_source_content_mismatch(
-    store: KBStore, tmp_path: Path
-) -> None:
+def test_import_rejects_source_content_mismatch(store: KBStore, tmp_path: Path) -> None:
     """`_validate_content` skips `sources/*/content` files, so the manifest
     sha256 is the only thing that can detect substituted source bytes."""
     legitimate = b"original source bytes"
     tampered = b"attacker-controlled bytes"
     bundle_path = tmp_path / "tampered.tar.gz"
-    _write_hash_mismatched_bundle(
-        bundle_path, "sources/deadbeef/content", legitimate, tampered
-    )
+    _write_hash_mismatched_bundle(bundle_path, "sources/deadbeef/content", legitimate, tampered)
 
     diff = bundle.import_check(store.kb_dir, bundle_path)
     assert not diff.ok
@@ -242,16 +288,24 @@ def test_import_apply_raises_on_write_time_hash_mismatch(
     tampered = b"text: TAMPERED\n"
     bundle_path = tmp_path / "tampered.tar.gz"
     _write_hash_mismatched_bundle(
-        bundle_path, "claims/c1.yaml", legitimate, tampered,
+        bundle_path,
+        "claims/c1.yaml",
+        legitimate,
+        tampered,
     )
 
     # Force the pre-write check to look clean so the apply path reaches
     # the write-time re-verify branch.
     monkeypatch.setattr(
-        bundle, "import_check",
+        bundle,
+        "import_check",
         lambda *_a, **_k: bundle.ImportCheckResult(
-            ok=True, bundle_id="deadbeef",
-            new_files=["claims/c1.yaml"], conflicts=[], identical=[], issues=[],
+            ok=True,
+            bundle_id="deadbeef",
+            new_files=["claims/c1.yaml"],
+            conflicts=[],
+            identical=[],
+            issues=[],
         ),
     )
 
@@ -263,9 +317,7 @@ def test_import_apply_raises_on_write_time_hash_mismatch(
     assert "bundle.import" not in audit_text, audit_text
 
 
-def test_import_treats_missing_manifest_sha256_as_mismatch(
-    store: KBStore, tmp_path: Path
-) -> None:
+def test_import_treats_missing_manifest_sha256_as_mismatch(store: KBStore, tmp_path: Path) -> None:
     """Regression for #74 review feedback: a hand-crafted manifest entry
     without a `sha256` field used to raise a bare KeyError in import_check
     and import_apply. Treat the missing field as a hash mismatch so the
@@ -278,7 +330,9 @@ def test_import_treats_missing_manifest_sha256_as_mismatch(
         "files": [{"path": "claims/c1.yaml", "size": len(payload)}],
         "counts": {},
         "safety": {
-            "has_proposed": False, "has_state_db": False, "has_audit_log": False,
+            "has_proposed": False,
+            "has_state_db": False,
+            "has_audit_log": False,
         },
     }
     with tarfile.open(bundle_path, "w:gz") as tar:
@@ -317,14 +371,15 @@ def test_import_rejects_uncited_claim(store: KBStore, tmp_path: Path) -> None:
     manifest = {
         "spec": bundle.SPEC_VERSION,
         "bundle_id": "deadbeef",
-        "files": [{
-            "path": "claims/bundle-uncited.yaml",
-            "size": len(uncited_yaml),
-            "sha256": hashlib.sha256(uncited_yaml).hexdigest(),
-        }],
+        "files": [
+            {
+                "path": "claims/bundle-uncited.yaml",
+                "size": len(uncited_yaml),
+                "sha256": hashlib.sha256(uncited_yaml).hexdigest(),
+            }
+        ],
         "counts": {},
-        "safety": {"has_proposed": False, "has_state_db": False,
-                   "has_audit_log": False},
+        "safety": {"has_proposed": False, "has_state_db": False, "has_audit_log": False},
     }
     with tarfile.open(bundle_path, "w:gz") as tar:
         info = tarfile.TarInfo("claims/bundle-uncited.yaml")
@@ -344,9 +399,7 @@ def test_import_rejects_uncited_claim(store: KBStore, tmp_path: Path) -> None:
     assert not (store.kb_dir / "claims" / "bundle-uncited.yaml").exists()
 
 
-def test_import_check_passes_when_member_matches_manifest(
-    store: KBStore, tmp_path: Path
-) -> None:
+def test_import_check_passes_when_member_matches_manifest(store: KBStore, tmp_path: Path) -> None:
     """The hash check is positive too: a member that matches manifest
     sha256 should not be reported as `hash mismatch`."""
     payload = b"text: original\n"

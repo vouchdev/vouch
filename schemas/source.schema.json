@@ -26,12 +26,35 @@
       ],
       "title": "SourceType",
       "type": "string"
+    },
+    "Visibility": {
+      "enum": [
+        "private",
+        "project",
+        "team",
+        "public"
+      ],
+      "title": "Visibility",
+      "type": "string"
     }
   },
   "$id": "https://vouch.dev/schemas/source.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "Immutable input material \u2014 file, URL, transcript, commit, etc.\n\nIdentified by sha256 of content (when content is captured locally).\n`locator` retains the human-facing path/URL.",
   "properties": {
+    "agent": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "agent that produced this source",
+      "title": "Agent"
+    },
     "byte_size": {
       "default": 0,
       "title": "Byte Size",
@@ -80,6 +103,19 @@
       "title": "Metadata",
       "type": "object"
     },
+    "project": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "project slug this source belongs to",
+      "title": "Project"
+    },
     "scope": {
       "$ref": "#/$defs/Scope",
       "default": "project"
@@ -106,6 +142,17 @@
     "type": {
       "$ref": "#/$defs/SourceType",
       "default": "file"
+    },
+    "visibility": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Visibility"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     }
   },
   "required": [

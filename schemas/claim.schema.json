@@ -35,12 +35,35 @@
       ],
       "title": "Scope",
       "type": "string"
+    },
+    "Visibility": {
+      "enum": [
+        "private",
+        "project",
+        "team",
+        "public"
+      ],
+      "title": "Visibility",
+      "type": "string"
     }
   },
   "$id": "https://vouch.dev/schemas/claim.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "Atomic durable assertion.\n\nThe smallest thing that can be cited, contradicted, superseded,\nreinforced, decayed, or archived.",
   "properties": {
+    "agent": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "agent that produced this claim",
+      "title": "Agent"
+    },
     "approved_by": {
       "anyOf": [
         {
@@ -105,6 +128,19 @@
       "default": null,
       "title": "Last Confirmed At"
     },
+    "project": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "project slug this claim belongs to",
+      "title": "Project"
+    },
     "scope": {
       "$ref": "#/$defs/Scope",
       "default": "project"
@@ -151,6 +187,17 @@
       "format": "date-time",
       "title": "Updated At",
       "type": "string"
+    },
+    "visibility": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Visibility"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     }
   },
   "required": [

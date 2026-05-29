@@ -59,23 +59,17 @@ def test_reject_empty_reason_shows_clean_error(store: KBStore) -> None:
 
 def test_propose_claim_empty_text_shows_clean_error(store: KBStore) -> None:
     src = store.put_source(b"e")
-    result = CliRunner().invoke(
-        cli, ["propose-claim", "--text", "   ", "--source", src.id]
-    )
+    result = CliRunner().invoke(cli, ["propose-claim", "--text", "   ", "--source", src.id])
     _assert_clean_error(result, "claim text")
 
 
 def test_propose_claim_unknown_source_shows_clean_error(store: KBStore) -> None:
-    result = CliRunner().invoke(
-        cli, ["propose-claim", "--text", "ok", "--source", "deadbeef"]
-    )
+    result = CliRunner().invoke(cli, ["propose-claim", "--text", "ok", "--source", "deadbeef"])
     _assert_clean_error(result, "unknown source")
 
 
 def test_propose_entity_empty_name_shows_clean_error(store: KBStore) -> None:
-    result = CliRunner().invoke(
-        cli, ["propose-entity", "--name", "   ", "--type", "project"]
-    )
+    result = CliRunner().invoke(cli, ["propose-entity", "--name", "   ", "--type", "project"])
     _assert_clean_error(result, "entity name")
 
 
@@ -283,16 +277,9 @@ def test_crystallize_cli_all_failures_exits_1(store: KBStore) -> None:
     assert "all 2 proposal(s) failed" in result.stderr
 
 
-def test_crystallize_cli_partial_failures_shows_warning(
-    store: KBStore, monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_crystallize_cli_partial_failures_shows_warning(store: KBStore) -> None:
     from vouch.proposals import approve as real_approve
 
-    # Approve as a distinct reviewer so the second (real) approval isn't blocked
-    # by the self-approval guard. Without this the approver defaults to the OS
-    # user via _whoami(), which on a machine whose login happens to be "a"
-    # collides with the session agent and makes the test environment-dependent.
-    monkeypatch.setenv("VOUCH_AGENT", "human-reviewer")
     with patch.object(KBStore, "_embed_and_store"):
         src = store.put_source(b"e")
     sess = sess_mod.session_start(store, agent="a", task="t")
@@ -387,3 +374,23 @@ def test_approve_batch_keep_going_best_effort(
     pending = {p.id for p in store.list_proposals(ProposalStatus.PENDING)}
     assert good[0] not in pending
     assert good[1] not in pending
+
+
+def test_propose_claim_corrupt_source_surfaces_real_error(store: KBStore) -> None:
+    """Corrupt meta.yaml must surface a parse error, not 'unknown source/evidence id'."""
+    import pytest
+
+    from vouch.proposals import ProposalError, propose_claim
+
+    src = store.put_source(b"evidence content")
+    meta = store.kb_dir / "sources" / src.id / "meta.yaml"
+    meta.write_text("{ invalid: yaml: [")
+
+    with pytest.raises(Exception) as excinfo:
+        propose_claim(
+            store, text="some claim", evidence=[src.id], proposed_by="agent"
+        )
+    assert not (
+        isinstance(excinfo.value, ProposalError)
+        and "unknown source/evidence id" in str(excinfo.value)
+    ), f"real parse error was masked: {excinfo.value}"

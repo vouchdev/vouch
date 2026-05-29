@@ -551,6 +551,8 @@ def handle_request(envelope: dict) -> dict:
 
 def run_jsonl(stdin=None, stdout=None) -> None:
     """Read one request per line, write one response per line."""
+    from .logging_config import configure_logging
+    configure_logging()
     stdin = stdin or sys.stdin
     stdout = stdout or sys.stdout
     for line in stdin:

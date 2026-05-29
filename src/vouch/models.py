@@ -67,6 +67,13 @@ class Scope(StrEnum):
     PUBLIC = "public"
 
 
+class Visibility(StrEnum):
+    PRIVATE = "private"
+    PROJECT = "project"
+    TEAM = "team"
+    PUBLIC = "public"
+
+
 class EntityType(StrEnum):
     PERSON = "person"
     PROJECT = "project"
@@ -139,6 +146,9 @@ class Source(BaseModel):
     )
     immutable: bool = True
     scope: Scope = Scope.PROJECT
+    visibility: Visibility | None = None
+    project: str | None = Field(default=None, description="project slug this source belongs to")
+    agent: str | None = Field(default=None, description="agent that produced this source")
     byte_size: int = 0
     media_type: str = "text/plain"
     created_at: datetime = Field(default_factory=utcnow)
@@ -201,6 +211,7 @@ class Claim(BaseModel):
                 "(README §'Object model'; CONTRIBUTING §'Things we won't merge')"
             )
         return v
+
     entities: list[str] = Field(default_factory=list)
     supersedes: list[str] = Field(default_factory=list)
     superseded_by: str | None = None
@@ -209,6 +220,9 @@ class Claim(BaseModel):
         description="vouch: claim ids this contradicts",
     )
     scope: Scope = Scope.PROJECT
+    visibility: Visibility | None = None
+    project: str | None = Field(default=None, description="project slug this claim belongs to")
+    agent: str | None = Field(default=None, description="agent that produced this claim")
     tags: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)

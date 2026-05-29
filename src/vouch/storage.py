@@ -27,6 +27,7 @@ import hashlib
 import logging
 import os
 import re
+import sqlite3
 import stat
 from pathlib import Path
 from typing import Any
@@ -51,8 +52,15 @@ KB_DIRNAME = ".vouch"
 CONFIG_FILENAME = "config.yaml"
 
 SUBDIRS = (
-    "claims", "pages", "sources", "entities", "relations",
-    "evidence", "sessions", "proposed", "decided",
+    "claims",
+    "pages",
+    "sources",
+    "entities",
+    "relations",
+    "evidence",
+    "sessions",
+    "proposed",
+    "decided",
 )
 
 
@@ -151,9 +159,7 @@ class KBStore:
         # fstat + S_ISREG rejects directories / special files atomically.
         resolved = Path(path).resolve()
         if not resolved.is_relative_to(self.root):
-            raise ValueError(
-                f"path must be inside project root ({self.root}): {resolved}"
-            )
+            raise ValueError(f"path must be inside project root ({self.root}): {resolved}")
         if resolved.is_dir():
             raise ValueError(f"not a regular file: {resolved}")
         flags = os.O_RDONLY
@@ -239,6 +245,9 @@ class KBStore:
         media_type: str = "text/plain",
         tags: list[str] | None = None,
         metadata: dict[str, Any] | None = None,
+        visibility: str | None = None,
+        project: str | None = None,
+        agent: str | None = None,
     ) -> Source:
         sid = sha256_hex(content)
         sdir = self._source_dir(sid)
@@ -249,6 +258,8 @@ class KBStore:
         meta_path = sdir / "meta.yaml"
         if meta_path.exists():
             return Source.model_validate(_yaml_load(meta_path.read_text()))
+        from .models import Visibility as _Visibility
+
         src = Source(
             id=sid,
             type=source_type,  # type: ignore[arg-type]
@@ -259,6 +270,9 @@ class KBStore:
             media_type=media_type,
             tags=tags or [],
             metadata=metadata or {},
+            visibility=_Visibility(visibility) if visibility else None,
+            project=project,
+            agent=agent,
         )
         meta_path.write_text(_yaml_dump(src.model_dump(mode="json")))
         self._embed_and_store(kind="source", id=src.id, text=src.title or src.locator or "")
@@ -276,7 +290,13 @@ class KBStore:
             raise ArtifactNotFoundError(f"source content {source_id}")
         return p.read_bytes()
 
-    def list_sources(self) -> list[Source]:
+    def list_sources(
+        self,
+        *,
+        visibility: str | None = None,
+        project: str | None = None,
+        agent: str | None = None,
+    ) -> list[Source]:
         out: list[Source] = []
         sources_dir = self.kb_dir / "sources"
         if not sources_dir.is_dir():
@@ -285,6 +305,12 @@ class KBStore:
             meta = sdir / "meta.yaml"
             if meta.exists():
                 out.append(Source.model_validate(_yaml_load(meta.read_text())))
+        if visibility is not None:
+            out = [s for s in out if s.visibility is not None and s.visibility.value == visibility]
+        if project is not None:
+            out = [s for s in out if s.project == project]
+        if agent is not None:
+            out = [s for s in out if s.agent == agent]
         return out
 
     # --- claims ------------------------------------------------------------
@@ -296,16 +322,12 @@ class KBStore:
                 continue
             if self._evidence_path(cid_or_sid).exists():
                 continue
-            raise ValueError(
-                f"claim {claim.id} cites unknown source/evidence {cid_or_sid}"
-            )
+            raise ValueError(f"claim {claim.id} cites unknown source/evidence {cid_or_sid}")
         try:
             with self._claim_path(claim.id).open("x") as f:
                 f.write(_yaml_dump(claim.model_dump(mode="json")))
         except FileExistsError as e:
-            raise ValueError(
-                f"claim {claim.id} already exists -- use update_claim()"
-            ) from e
+            raise ValueError(f"claim {claim.id} already exists -- use update_claim()") from e
         self._embed_and_store(kind="claim", id=claim.id, text=claim.text)
         return claim
 
@@ -315,14 +337,28 @@ class KBStore:
             raise ArtifactNotFoundError(f"claim {claim_id}")
         return Claim.model_validate(_yaml_load(p.read_text()))
 
-    def list_claims(self) -> list[Claim]:
+    def list_claims(
+        self,
+        *,
+        visibility: str | None = None,
+        project: str | None = None,
+        agent: str | None = None,
+    ) -> list[Claim]:
         cdir = self.kb_dir / "claims"
         if not cdir.is_dir():
             return []
-        return [
-            Claim.model_validate(_yaml_load(p.read_text()))
-            for p in sorted(cdir.glob("*.yaml"))
+        claims = [
+            Claim.model_validate(_yaml_load(p.read_text())) for p in sorted(cdir.glob("*.yaml"))
         ]
+        if visibility is not None:
+            claims = [
+                c for c in claims if c.visibility is not None and c.visibility.value == visibility
+            ]
+        if project is not None:
+            claims = [c for c in claims if c.project == project]
+        if agent is not None:
+            claims = [c for c in claims if c.agent == agent]
+        return claims
 
     def update_claim(self, claim: Claim) -> Claim:
         if not self._claim_path(claim.id).exists():
@@ -335,6 +371,29 @@ class KBStore:
         Claim.model_validate(claim.model_dump(mode="json"))
         self._claim_path(claim.id).write_text(_yaml_dump(claim.model_dump(mode="json")))
         self._embed_and_store(kind="claim", id=claim.id, text=claim.text)
+        # Keep the FTS5 row in sync with the on-disk claim so lifecycle
+        # mutations (archive, supersede, contradict, confirm) are reflected
+        # in retrieval immediately. Without this, claims_fts.status stays
+        # frozen at first-index time and retracted claims keep matching
+        # kb.search / kb.context.
+        from . import index_db as _index_db
+
+        try:
+            with _index_db.open_db(self.kb_dir) as conn:
+                _index_db.index_claim(
+                    conn,
+                    id=claim.id,
+                    text=claim.text,
+                    type=claim.type.value,
+                    status=claim.status.value,
+                    tags=list(claim.tags),
+                )
+        except sqlite3.Error as e:
+            _embed_log.warning(
+                "claim %s: FTS5 reindex skipped on update (%s)",
+                claim.id,
+                e,
+            )
         return claim
 
     # --- pages -------------------------------------------------------------
@@ -347,9 +406,7 @@ class KBStore:
             with self._page_path(page.id).open("x") as f:
                 f.write(_serialize_page(page))
         except FileExistsError as e:
-            raise ValueError(
-                f"page {page.id} already exists -- choose a different slug"
-            ) from e
+            raise ValueError(f"page {page.id} already exists -- choose a different slug") from e
         self._embed_and_store(kind="page", id=page.id, text=f"{page.title}\n\n{page.body}")
         return page
 
@@ -372,11 +429,10 @@ class KBStore:
             with self._entity_path(entity.id).open("x") as f:
                 f.write(_yaml_dump(entity.model_dump(mode="json")))
         except FileExistsError as e:
-            raise ValueError(
-                f"entity {entity.id} already exists -- choose a different slug"
-            ) from e
+            raise ValueError(f"entity {entity.id} already exists -- choose a different slug") from e
         self._embed_and_store(
-            kind="entity", id=entity.id,
+            kind="entity",
+            id=entity.id,
             text=f"{entity.name}\n\n{entity.description or ''}",
         )
         return entity
@@ -391,8 +447,7 @@ class KBStore:
         d = self.kb_dir / "entities"
         if not d.is_dir():
             return []
-        return [Entity.model_validate(_yaml_load(p.read_text()))
-                for p in sorted(d.glob("*.yaml"))]
+        return [Entity.model_validate(_yaml_load(p.read_text())) for p in sorted(d.glob("*.yaml"))]
 
     # --- relations ---------------------------------------------------------
 
@@ -401,11 +456,10 @@ class KBStore:
             with self._relation_path(rel.id).open("x") as f:
                 f.write(_yaml_dump(rel.model_dump(mode="json")))
         except FileExistsError as e:
-            raise ValueError(
-                f"relation {rel.id} already exists -- choose a different slug"
-            ) from e
+            raise ValueError(f"relation {rel.id} already exists -- choose a different slug") from e
         self._embed_and_store(
-            kind="relation", id=rel.id,
+            kind="relation",
+            id=rel.id,
             text=f"{rel.source} {rel.relation.value} {rel.target}",
         )
         return rel
@@ -420,7 +474,8 @@ class KBStore:
         path = self._relation_path(rel.id)
         if path.exists():
             self._embed_and_store(
-                kind="relation", id=rel.id,
+                kind="relation",
+                id=rel.id,
                 text=f"{rel.source} {rel.relation.value} {rel.target}",
             )
             return rel
@@ -429,12 +484,14 @@ class KBStore:
                 f.write(_yaml_dump(rel.model_dump(mode="json")))
         except FileExistsError:
             self._embed_and_store(
-                kind="relation", id=rel.id,
+                kind="relation",
+                id=rel.id,
                 text=f"{rel.source} {rel.relation.value} {rel.target}",
             )
             return rel  # lost the race — already written, that's fine
         self._embed_and_store(
-            kind="relation", id=rel.id,
+            kind="relation",
+            id=rel.id,
             text=f"{rel.source} {rel.relation.value} {rel.target}",
         )
         return rel
@@ -449,8 +506,9 @@ class KBStore:
         d = self.kb_dir / "relations"
         if not d.is_dir():
             return []
-        return [Relation.model_validate(_yaml_load(p.read_text()))
-                for p in sorted(d.glob("*.yaml"))]
+        return [
+            Relation.model_validate(_yaml_load(p.read_text())) for p in sorted(d.glob("*.yaml"))
+        ]
 
     def relations_from(self, node_id: str) -> list[Relation]:
         return [r for r in self.list_relations() if r.source == node_id]
@@ -467,9 +525,7 @@ class KBStore:
             with self._evidence_path(ev.id).open("x") as f:
                 f.write(_yaml_dump(ev.model_dump(mode="json")))
         except FileExistsError as e:
-            raise ValueError(
-                f"evidence {ev.id} already exists -- choose a different slug"
-            ) from e
+            raise ValueError(f"evidence {ev.id} already exists -- choose a different slug") from e
         self._embed_and_store(kind="evidence", id=ev.id, text=ev.quote or "")
         return ev
 
@@ -483,8 +539,9 @@ class KBStore:
         d = self.kb_dir / "evidence"
         if not d.is_dir():
             return []
-        return [Evidence.model_validate(_yaml_load(p.read_text()))
-                for p in sorted(d.glob("*.yaml"))]
+        return [
+            Evidence.model_validate(_yaml_load(p.read_text())) for p in sorted(d.glob("*.yaml"))
+        ]
 
     # --- sessions ----------------------------------------------------------
 
@@ -493,9 +550,7 @@ class KBStore:
             with self._session_path(sess.id).open("x") as f:
                 f.write(_yaml_dump(sess.model_dump(mode="json")))
         except FileExistsError as e:
-            raise ValueError(
-                f"session {sess.id} already exists -- choose a different id"
-            ) from e
+            raise ValueError(f"session {sess.id} already exists -- choose a different id") from e
         return sess
 
     def update_session(self, sess: Session) -> Session:
@@ -517,14 +572,11 @@ class KBStore:
         d = self.kb_dir / "sessions"
         if not d.is_dir():
             return []
-        return [Session.model_validate(_yaml_load(p.read_text()))
-                for p in sorted(d.glob("*.yaml"))]
+        return [Session.model_validate(_yaml_load(p.read_text())) for p in sorted(d.glob("*.yaml"))]
 
     # --- embedding hook ------------------------------------------------------
 
-    def _embed_and_store(
-        self, *, kind: str, id: str, text: str, force: bool = False
-    ) -> None:
+    def _embed_and_store(self, *, kind: str, id: str, text: str, force: bool = False) -> None:
         """Compute and persist an embedding for an artifact.
 
         Skipped only if (kind, id) already has an embedding produced by
@@ -564,13 +616,20 @@ class KBStore:
             vec = embedder.encode(text)
             with _index_db.open_db(self.kb_dir) as conn:
                 _index_db.put_embedding(
-                    conn, kind=kind, id=id, vec=vec, content_hash=h,
-                    model=embedder.name, model_version=embedder.version,
+                    conn,
+                    kind=kind,
+                    id=id,
+                    vec=vec,
+                    content_hash=h,
+                    model=embedder.name,
+                    model_version=embedder.version,
                     dim=embedder.dim,
                 )
             _index_db.set_embedding_meta(
-                self.kb_dir, model=embedder.name,
-                version=embedder.version, dim=embedder.dim,
+                self.kb_dir,
+                model=embedder.name,
+                version=embedder.version,
+                dim=embedder.dim,
             )
         except Exception as e:
             _embed_log.debug("embedding write failed for %s/%s: %s", kind, id, e)
@@ -581,6 +640,7 @@ class KBStore:
             from .embeddings.dedup import (  # type: ignore[import-not-found,import-untyped,unused-ignore]
                 check_and_log,
             )
+
             check_and_log(self.kb_dir, kind=kind, id=id, vec=vec)
         except ImportError:
             pass
@@ -623,8 +683,7 @@ class KBStore:
 
     # --- substring search (fallback when state.db is absent) --------------
 
-    def search_substring(self, query: str, *, limit: int = 10
-                         ) -> list[tuple[str, str, str, float]]:
+    def search_substring(self, query: str, *, limit: int = 10) -> list[tuple[str, str, str, float]]:
         q = query.strip().lower()
         if not q:
             return []
@@ -640,8 +699,7 @@ class KBStore:
         for entity in self.list_entities():
             text = (entity.name + " " + (entity.description or "")).lower()
             if q in text:
-                hits.append(("entity", entity.id, entity.name,
-                             float(text.count(q))))
+                hits.append(("entity", entity.id, entity.name, float(text.count(q))))
         hits.sort(key=lambda h: h[3], reverse=True)
         return hits[:limit]
 

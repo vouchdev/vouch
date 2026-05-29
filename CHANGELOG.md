@@ -7,24 +7,7 @@ All notable changes to vouch are documented here. Format follows
 ## [Unreleased]
 
 ### Added
-- `vouch init --template <name>` seeds a domain starter pack. The default `starter` template is unchanged; the new `gittensor` template seeds a small, cited, approved KB about Gittensor (SN74) contribution scoring (1 source, 1 entity, 7 claims — merged-PR rewards, PAT verification, scoring factors, sybil-resistance, repo allow-list policy, issue-solving multiplier, and emission split) so a fresh KB in a Gittensor repo has retrievable context on day one. Templates are an in-code registry — future packs plug in the same way.
-
-## [0.1.0] — 2026-05-26
-
-### Packaging
-- Published to PyPI as `vouch-kb` (the `vouch` name was already taken by an
-  unrelated project); the installed command is still `vouch`. Install with
-  `pipx install vouch-kb`. A tag-triggered release workflow publishes via PyPI
-  Trusted Publishing (OIDC).
-
-### Added
-- Friendlier CLI output (#54, track 2): colourised `vouch status` / `lint` /
-  `doctor` / `search` (honours `NO_COLOR`, `FORCE_COLOR`, and TTY detection);
-  `--json` on `vouch lint` and `vouch search` for machine-readable output
-  while the default stays human-readable; progress callbacks on the long ops
-  (`rebuild_index`, `doctor`, bundle `export`/`import_apply`) surfaced as
-  status lines on interactive terminals; and `vouch index` / `vouch export`
-  now report a clean `Error:` instead of a traceback on a malformed artifact.
+- `VOUCH_LOG_FORMAT=json` emits one JSON object per log line (level, time, logger, message). Default (unset or "text") keeps the existing human-readable format. Controlled via `src/vouch/logging_config.py`; called at startup from the CLI, MCP stdio server, and JSONL server.
 - `vouch approve <id1> <id2> …` approves multiple proposals in one
   non-interactive call for CI and backlog clearing (#93). Default is
   all-or-nothing: every id is validated as an approvable pending proposal
@@ -48,6 +31,7 @@ All notable changes to vouch are documented here. Format follows
 - Add `put_relation_idempotent()` to `KBStore` and use it in `supersede()` and `contradict()` so retrying after a partial failure converges to a consistent state instead of raising `ValueError`.
 - Raise `ProposalError("forbidden_self_approval")` in `proposals.approve()` when `approved_by == proposal.proposed_by`, enforcing the review-gate guarantee documented in the README and CONTRIBUTING.
 - `crystallize()` now sets `review.approver_role: trusted-agent` context so single-agent sessions can be crystallized without hitting the `forbidden_self_approval` guard (#47).
+- Narrow `except Exception` to `except ArtifactNotFoundError` in `propose_claim()` evidence validation so I/O and parse errors propagate with their original type instead of being masked as `unknown source/evidence id` (#48).
 - Bundle import rejects tar members whose path escapes `kb_dir`
   (CVE-2007-4559, #9). Previously a crafted `.tar.gz` with a member
   named `../../evil.txt` could write outside `.vouch/`; the manifest
@@ -55,17 +39,6 @@ All notable changes to vouch are documented here. Format follows
   the same tarball. `import_apply`, `import_check`, and `export_check`
   now validate every member path and raise on unsafe names.
 - Fix `vouch search` CLI: assign backend label per code path so substring fallback results are no longer mislabelled as `fts5`; update stale docstring to reflect multi-backend search surface (#52).
-- Close the review-gate bypass in `sessions.crystallize` (#76). The
-  durable session-summary page wrote `sess.task`, `sess.note`, and
-  `sess.agent` verbatim into rendered markdown, letting an agent
-  land arbitrary content into `pages/` by calling
-  `kb.session_start(task=...)` and getting any one claim approved
-  via crystallize. The summary body now contains only fields the
-  proposing agent cannot influence (session id, server-clock
-  timestamps, list of approved artifact ids). The
-  `session.crystallize` audit event now also includes the summary
-  page id in `object_ids` when a page is written, so `vouch audit`
-  truthfully attributes the write.
 - `context._retrieve` now honors `retrieval.backend` in `config.yaml`
   instead of always running embeddings first (#92). Accepts `auto`
   (default — embedding → FTS5 → substring), `embedding`, `fts5`, or
@@ -85,6 +58,18 @@ All notable changes to vouch are documented here. Format follows
   a silent no-op. Existing Linux/macOS bundles are unchanged (their paths
   were already POSIX); Windows bundles produced before this fix should be
   re-exported.
+- `kb.context` no longer returns claims whose status is `archived`,
+  `superseded`, or `redacted` (#78). Two compounding bugs were combining
+  to leak retracted knowledge back to agents: `build_context_pack` had
+  no status filter, and `store.update_claim` only refreshed the
+  embedding cache without keeping `claims_fts.status` in sync — so even
+  after `lifecycle.archive` / `supersede` / `contradict`, the FTS5 row
+  kept its first-index status and `kb.search` / `kb.context` matched the
+  retracted claim. `update_claim` now re-indexes the FTS5 row (mirroring
+  what `proposals.approve` does on first index), and
+  `build_context_pack` drops retracted claims from the assembled pack.
+  `CONTESTED` claims continue to surface so contradictions remain
+  visible.
 - `bundle.import_check` and `bundle.import_apply` now verify each tar
   member's `sha256` against `manifest.json` (#74). Previously the
   per-file hash was only enforced by `export_check`; the import side
@@ -116,6 +101,25 @@ All notable changes to vouch are documented here. Format follows
   `invalid_claim` findings ("edit the YAML to add a citation, or
   delete the file") instead of bailing out — so existing KBs get a
   clean repair list rather than a traceback.
+- Close the review-gate bypass in `sessions.crystallize` (#76). The
+  durable session-summary page wrote `sess.task`, `sess.note`, and
+  `sess.agent` verbatim into rendered markdown, letting an agent
+  land arbitrary content into `pages/` by calling
+  `kb.session_start(task=...)` and getting any one claim approved
+  via crystallize. The summary body now contains only fields the
+  proposing agent cannot influence (session id, server-clock
+  timestamps, list of approved artifact ids). The
+  `session.crystallize` audit event now also includes the summary
+  page id in `object_ids` when a page is written, so `vouch audit`
+  truthfully attributes the write.
+
+## [0.1.0] — 2026-05-26
+
+### Packaging
+- Published to PyPI as `vouch-kb` (the `vouch` name was already taken by an
+  unrelated project); the installed command is still `vouch`. Install with
+  `pipx install vouch-kb`. A tag-triggered release workflow publishes via PyPI
+  Trusted Publishing (OIDC).
 
 ## [0.0.1] — 2026-05-17
 
@@ -143,6 +147,5 @@ Initial alpha. Surface intentionally small; expect breaking changes pre-1.0.
 - Claim validation: at least one source/evidence citation required.
 - Per-agent attribution via `VOUCH_AGENT` env var.
 
-[Unreleased]: https://github.com/vouchdev/vouch/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/vouchdev/vouch/compare/v0.0.1...v0.1.0
-[0.0.1]: https://github.com/vouchdev/vouch/releases/tag/v0.0.1
+[Unreleased]: https://github.com/plind-junior/vouch/compare/v0.0.1...HEAD
+[0.0.1]: https://github.com/plind-junior/vouch/releases/tag/v0.0.1
