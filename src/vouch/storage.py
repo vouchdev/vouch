@@ -47,6 +47,17 @@ from .models import (
 
 _embed_log = logging.getLogger("vouch.embeddings")
 
+
+def _unsafe_artifact_id_reason(obj_id: str) -> str | None:
+    if not obj_id or not obj_id.strip():
+        return "empty artifact id"
+    if "/" in obj_id or "\\" in obj_id or "\x00" in obj_id:
+        return f"invalid artifact id: {obj_id!r}"
+    if ".." in Path(obj_id).parts:
+        return f"path traversal in artifact id: {obj_id!r}"
+    return None
+
+
 KB_DIRNAME = ".vouch"
 CONFIG_FILENAME = "config.yaml"
 
@@ -188,15 +199,35 @@ class KBStore:
         return self.kb_dir / CONFIG_FILENAME
 
     def _yaml(self, sub: str, obj_id: str) -> Path:
+        self._assert_safe_artifact_id(sub, obj_id)
         return self.kb_dir / sub / f"{obj_id}.yaml"
+
+    def _assert_safe_artifact_id(self, sub: str, obj_id: str) -> None:
+        reason = _unsafe_artifact_id_reason(obj_id)
+        if reason is not None:
+            raise ValueError(reason)
+        target = (self.kb_dir / sub / f"{obj_id}.yaml").resolve()
+        base = (self.kb_dir / sub).resolve()
+        if not target.is_relative_to(base):
+            raise ValueError(f"artifact id escapes kb directory: {obj_id!r}")
 
     def _claim_path(self, claim_id: str) -> Path:
         return self._yaml("claims", claim_id)
 
     def _page_path(self, page_id: str) -> Path:
+        self._assert_safe_artifact_id("pages", page_id)
+        target = (self.kb_dir / "pages" / f"{page_id}.md").resolve()
+        base = (self.kb_dir / "pages").resolve()
+        if not target.is_relative_to(base):
+            raise ValueError(f"artifact id escapes kb directory: {page_id!r}")
         return self.kb_dir / "pages" / f"{page_id}.md"
 
     def _source_dir(self, source_id: str) -> Path:
+        self._assert_safe_artifact_id("sources", source_id)
+        target = (self.kb_dir / "sources" / source_id).resolve()
+        base = (self.kb_dir / "sources").resolve()
+        if not target.is_relative_to(base):
+            raise ValueError(f"artifact id escapes kb directory: {source_id!r}")
         return self.kb_dir / "sources" / source_id
 
     def _entity_path(self, eid: str) -> Path:

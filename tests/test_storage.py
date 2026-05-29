@@ -222,6 +222,21 @@ def test_double_approve_rejected(store: KBStore) -> None:
         approve(store, pr.id, approved_by="u")
 
 
+def test_slug_hint_path_traversal_rejected_on_approve(store: KBStore) -> None:
+    src = store.put_source(b"e")
+    pr = propose_claim(
+        store,
+        text="malicious",
+        evidence=[src.id],
+        proposed_by="agent",
+        slug_hint="../../../pwned",
+    )
+    canary = store.root / "pwned.yaml"
+    with pytest.raises((ValueError, ProposalError)):
+        approve(store, pr.id, approved_by="reviewer")
+    assert not canary.exists()
+
+
 def test_approve_refuses_to_overwrite_existing_artifact(store: KBStore) -> None:
     # Regression for #11: approve() wrote the artifact before moving the
     # proposal to decided/. A crash between the two steps would leave the
