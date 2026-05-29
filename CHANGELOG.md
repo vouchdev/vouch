@@ -7,6 +7,10 @@ All notable changes to vouch are documented here. Format follows
 ## [Unreleased]
 
 ### Added
+- `vouch expire` garbage-collects stale pending proposals: dry-run by default,
+  `--apply` moves them to `decided/` with `decision_reason: expired`, emits
+  `proposal.expire` audit events, and honors `review.expire_pending_after_days`
+  in `config.yaml` (default 90; `0` disables). `kb.expire` on MCP/JSONL.
 - `vouch init --template <name>` seeds a domain starter pack. The default `starter` template is unchanged; the new `gittensor` template seeds a small, cited, approved KB about Gittensor (SN74) contribution scoring (1 source, 1 entity, 7 claims — merged-PR rewards, PAT verification, scoring factors, sybil-resistance, repo allow-list policy, issue-solving multiplier, and emission split) so a fresh KB in a Gittensor repo has retrievable context on day one. Templates are an in-code registry — future packs plug in the same way.
 
 ## [0.1.0] — 2026-05-26

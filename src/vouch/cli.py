@@ -37,8 +37,10 @@ from .onboarding import (
     seed_starter_kb,
 )
 from .proposals import (
+    EXPIRE_ACTOR,
     ProposalError,
     check_approvable,
+    expire_pending,
     propose_claim,
     propose_entity,
     propose_page,
@@ -486,6 +488,68 @@ def reject(proposal_id: str, reason: str) -> None:
     with _cli_errors():
         do_reject(store, proposal_id, rejected_by=_whoami(), reason=reason)
     click.echo(f"Rejected {proposal_id}")
+
+
+def _expire_row(proposal: Proposal) -> dict[str, Any]:
+    return {
+        "id": proposal.id,
+        "kind": proposal.kind.value,
+        "proposed_by": proposal.proposed_by,
+        "proposed_at": proposal.proposed_at.isoformat(),
+    }
+
+
+@cli.command()
+@click.option("--apply", is_flag=True, help="Expire stale proposals (default is dry-run).")
+@click.option("--days", type=int, default=None,
+              help="Override review.expire_pending_after_days for this run.")
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON instead of text.")
+def expire(apply: bool, days: int | None, as_json: bool) -> None:
+    """Garbage-collect pending proposals older than the configured threshold."""
+    store = _load_store()
+    result = expire_pending(
+        store, apply=apply, expired_by=EXPIRE_ACTOR, days=days,
+    )
+    if as_json:
+        payload: dict[str, Any] = {
+            "threshold_days": result.threshold_days,
+            "enabled": result.threshold_days > 0,
+            "dry_run": not apply,
+            "would_expire": [_expire_row(p) for p in result.would_expire],
+            "expired": [_expire_row(p) for p in result.expired],
+        }
+        _emit_json(payload)
+        return
+
+    if result.threshold_days <= 0:
+        click.echo("expire disabled (review.expire_pending_after_days is 0)")
+        return
+
+    if not result.would_expire:
+        click.echo(
+            f"no stale pending proposals (threshold: {result.threshold_days} days)"
+        )
+        return
+
+    if not apply:
+        click.echo(
+            f"dry-run: {len(result.would_expire)} proposal(s) would expire "
+            f"(threshold: {result.threshold_days} days)"
+        )
+        for pr in result.would_expire:
+            click.echo(
+                f"  {pr.id}  [{pr.kind.value}]  by {pr.proposed_by}  "
+                f"proposed {pr.proposed_at.date().isoformat()}"
+            )
+        click.echo("rerun with --apply to expire")
+        return
+
+    click.echo(
+        f"expired {len(result.expired)} proposal(s) "
+        f"(threshold: {result.threshold_days} days)"
+    )
+    for pr in result.expired:
+        click.echo(f"  {pr.id}  [{pr.kind.value}]")
 
 
 # --- proposal-from-CLI shortcuts -----------------------------------------
