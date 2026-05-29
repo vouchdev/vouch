@@ -250,15 +250,20 @@ def reject(proposal_id: str, reason: str) -> None:
 @click.option("--confidence", default=0.7, show_default=True, type=float)
 @click.option("--rationale", default=None)
 @click.option("--tag", "tags", multiple=True)
+@click.option("--visibility", default=None, help="private|project|team|public")
+@click.option("--project", default=None, help="Project slug")
+@click.option("--agent", default=None, help="Agent id")
 def propose_claim_cmd(text: str, sources: tuple[str, ...], claim_type: str,
                       confidence: float, rationale: str | None,
-                      tags: tuple[str, ...]) -> None:
+                      tags: tuple[str, ...], visibility: str | None,
+                      project: str | None, agent: str | None) -> None:
     store = _load_store()
     with _cli_errors():
         pr = propose_claim(
             store, text=text, evidence=list(sources),
             proposed_by=_whoami(), claim_type=claim_type,
             confidence=confidence, tags=list(tags), rationale=rationale,
+            visibility=visibility, project=project, agent=agent,
         )
     click.echo(pr.id)
 
@@ -327,8 +332,12 @@ def source() -> None:
 @click.option("--title", default=None)
 @click.option("--url", default=None)
 @click.option("--type", "source_type", default="file", show_default=True)
+@click.option("--visibility", default=None, help="private|project|team|public")
+@click.option("--project", default=None, help="Project slug")
+@click.option("--agent", default=None, help="Agent id")
 def source_add(path: str, title: str | None, url: str | None,
-               source_type: str) -> None:
+               source_type: str, visibility: str | None,
+               project: str | None, agent: str | None) -> None:
     """Register a file as a Source; prints its sha256 id."""
     store = _load_store()
     data = Path(path).read_bytes()
@@ -339,6 +348,9 @@ def source_add(path: str, title: str | None, url: str | None,
             url=url,
             locator=str(Path(path).resolve()),
             source_type=source_type,
+            visibility=visibility,
+            project=project,
+            agent=agent,
         )
     audit_mod.log_event(
         store.kb_dir, event="source.add", actor=_whoami(), object_ids=[src.id],

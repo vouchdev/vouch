@@ -88,6 +88,7 @@ def kb_search(
     "embedding", "fts5", "substring", or "hybrid".
     """
     from . import index_db
+
     store = _store()
     hits: list[tuple[str, str, str, float]] = []
 
@@ -102,7 +103,10 @@ def kb_search(
 
     if backend in ("auto", "embedding"):
         hits = index_db.search_semantic(
-            store.kb_dir, query, limit=limit, min_score=min_score,
+            store.kb_dir,
+            query,
+            limit=limit,
+            min_score=min_score,
         )
         if hits:
             return _to_dicts(hits, "embedding")
@@ -127,11 +131,15 @@ def kb_search(
         from .embeddings.fusion import (  # type: ignore[import-not-found,import-untyped,unused-ignore]
             rrf_fuse,
         )
+
         # Hybrid must honour min_score (the embedding side can return
         # low-relevance noise otherwise) and survive FTS failures the same
         # way the dedicated fts5 branch does.
         emb = index_db.search_semantic(
-            store.kb_dir, query, limit=limit * 2, min_score=min_score,
+            store.kb_dir,
+            query,
+            limit=limit * 2,
+            min_score=min_score,
         )
         try:
             fts = index_db.search(store.kb_dir, query, limit=limit * 2)
@@ -153,8 +161,12 @@ def kb_context(
 ) -> dict[str, Any]:
     """Build a ContextPack ready to inject into an agent prompt."""
     return build_context_pack(  # type: ignore[return-value]
-        _store(), query=task, limit=limit, max_chars=max_chars,
-        min_items=min_items, require_citations=require_citations,
+        _store(),
+        query=task,
+        limit=limit,
+        max_chars=max_chars,
+        min_items=min_items,
+        require_citations=require_citations,
     )
 
 
@@ -230,8 +242,13 @@ def kb_list_relations(node_id: str | None = None) -> list[dict[str, Any]]:
 @mcp.tool()
 def kb_list_sources() -> list[dict[str, Any]]:
     return [
-        {"id": s.id, "title": s.title, "type": s.type.value,
-         "locator": s.locator, "byte_size": s.byte_size}
+        {
+            "id": s.id,
+            "title": s.title,
+            "type": s.type.value,
+            "locator": s.locator,
+            "byte_size": s.byte_size,
+        }
         for s in _store().list_sources()
     ]
 
@@ -239,10 +256,7 @@ def kb_list_sources() -> list[dict[str, Any]]:
 @mcp.tool()
 def kb_list_pending() -> list[dict[str, Any]]:
     """List proposals awaiting human review."""
-    return [
-        p.model_dump(mode="json")
-        for p in _store().list_proposals(ProposalStatus.PENDING)
-    ]
+    return [p.model_dump(mode="json") for p in _store().list_proposals(ProposalStatus.PENDING)]
 
 
 # === write tools — gated (produce proposals) =============================
@@ -255,33 +269,50 @@ def kb_register_source(
     url: str | None = None,
     source_type: str = "file",
     media_type: str = "text/plain",
+    visibility: str | None = None,
+    project: str | None = None,
+    agent: str | None = None,
 ) -> dict[str, Any]:
     """Register a source. Evidence intake is NOT gated (registering raw
     evidence is harmless and de-duplicates by content hash)."""
     src = _store().put_source(
         content.encode("utf-8"),
-        title=title, url=url,
+        title=title,
+        url=url,
         locator=url or title or "inline",
         source_type=source_type,
         media_type=media_type,
+        visibility=visibility,
+        project=project,
+        agent=agent,
     )
-    audit.log_event(_store().kb_dir, event="source.add", actor=_agent(),
-                    object_ids=[src.id])
+    audit.log_event(_store().kb_dir, event="source.add", actor=_agent(), object_ids=[src.id])
     return src.model_dump(mode="json")
 
 
 @mcp.tool()
-def kb_register_source_from_path(path: str, title: str | None = None,
-                                 url: str | None = None,
-                                 source_type: str = "file") -> dict[str, Any]:
+def kb_register_source_from_path(
+    path: str,
+    title: str | None = None,
+    url: str | None = None,
+    source_type: str = "file",
+    visibility: str | None = None,
+    project: str | None = None,
+    agent: str | None = None,
+) -> dict[str, Any]:
     s = _store()
     p, body = s.read_under_root(path)
     src = s.put_source(
-        body, title=title or p.name, url=url,
-        locator=str(p), source_type=source_type,
+        body,
+        title=title or p.name,
+        url=url,
+        locator=str(p),
+        source_type=source_type,
+        visibility=visibility,
+        project=project,
+        agent=agent,
     )
-    audit.log_event(s.kb_dir, event="source.add", actor=_agent(),
-                    object_ids=[src.id])
+    audit.log_event(s.kb_dir, event="source.add", actor=_agent(), object_ids=[src.id])
     return src.model_dump(mode="json")
 
 
@@ -297,15 +328,28 @@ def kb_propose_claim(
     slug_hint: str | None = None,
     session_id: str | None = None,
     dry_run: bool = False,
+    visibility: str | None = None,
+    project: str | None = None,
+    agent: str | None = None,
 ) -> dict[str, Any]:
     """Propose a new claim. Becomes durable only after `kb_approve`."""
     try:
         pr = propose_claim(
-            _store(), text=text, evidence=evidence,
-            claim_type=claim_type, confidence=confidence,
-            entities=entities, tags=tags, rationale=rationale,
-            slug_hint=slug_hint, session_id=session_id,
-            dry_run=dry_run, proposed_by=_agent(),
+            _store(),
+            text=text,
+            evidence=evidence,
+            claim_type=claim_type,
+            confidence=confidence,
+            entities=entities,
+            tags=tags,
+            rationale=rationale,
+            slug_hint=slug_hint,
+            session_id=session_id,
+            dry_run=dry_run,
+            proposed_by=_agent(),
+            visibility=visibility,
+            project=project,
+            agent=agent,
         )
     except (ProposalError, ArtifactNotFoundError, ValueError) as e:
         raise ValueError(str(e)) from e
@@ -327,10 +371,18 @@ def kb_propose_page(
 ) -> dict[str, Any]:
     try:
         pr = propose_page(
-            _store(), title=title, body=body, page_type=page_type,
-            claim_ids=claim_ids, entity_ids=entity_ids, source_ids=source_ids,
-            rationale=rationale, slug_hint=slug_hint, session_id=session_id,
-            dry_run=dry_run, proposed_by=_agent(),
+            _store(),
+            title=title,
+            body=body,
+            page_type=page_type,
+            claim_ids=claim_ids,
+            entity_ids=entity_ids,
+            source_ids=source_ids,
+            rationale=rationale,
+            slug_hint=slug_hint,
+            session_id=session_id,
+            dry_run=dry_run,
+            proposed_by=_agent(),
         )
     except (ProposalError, ArtifactNotFoundError, ValueError) as e:
         raise ValueError(str(e)) from e
@@ -350,10 +402,15 @@ def kb_propose_entity(
 ) -> dict[str, Any]:
     try:
         pr = propose_entity(
-            _store(), name=name, entity_type=entity_type,
-            aliases=aliases, description=description,
-            rationale=rationale, slug_hint=slug_hint,
-            session_id=session_id, dry_run=dry_run,
+            _store(),
+            name=name,
+            entity_type=entity_type,
+            aliases=aliases,
+            description=description,
+            rationale=rationale,
+            slug_hint=slug_hint,
+            session_id=session_id,
+            dry_run=dry_run,
             proposed_by=_agent(),
         )
     except (ProposalError, ArtifactNotFoundError, ValueError) as e:
@@ -374,10 +431,16 @@ def kb_propose_relation(
 ) -> dict[str, Any]:
     try:
         pr = propose_relation(
-            _store(), src=src, relation=relation, target=target,
-            confidence=confidence, evidence=evidence,
-            rationale=rationale, session_id=session_id,
-            dry_run=dry_run, proposed_by=_agent(),
+            _store(),
+            src=src,
+            relation=relation,
+            target=target,
+            confidence=confidence,
+            evidence=evidence,
+            rationale=rationale,
+            session_id=session_id,
+            dry_run=dry_run,
+            proposed_by=_agent(),
         )
     except (ProposalError, ArtifactNotFoundError, ValueError) as e:
         raise ValueError(str(e)) from e
@@ -392,7 +455,8 @@ def _proposal_response(pr, dry_run: bool) -> dict[str, Any]:
         "dry_run": dry_run,
         "note": (
             "dry run — not written"
-            if dry_run else "pending human approval via `vouch approve <id>`"
+            if dry_run
+            else "pending human approval via `vouch approve <id>`"
         ),
     }
 
@@ -405,8 +469,7 @@ def _proposal_response(pr, dry_run: bool) -> dict[str, Any]:
 def kb_approve(proposal_id: str, reason: str | None = None) -> dict[str, Any]:
     """Approve a proposal → durable artifact. Use carefully."""
     try:
-        artifact = approve(_store(), proposal_id, approved_by=_agent(),
-                           reason=reason)
+        artifact = approve(_store(), proposal_id, approved_by=_agent(), reason=reason)
     except (ArtifactNotFoundError, ValueError, ProposalError) as e:
         raise ValueError(str(e)) from e
     return {"kind": type(artifact).__name__.lower(), "id": artifact.id}
@@ -427,7 +490,9 @@ def kb_reject(proposal_id: str, reason: str) -> dict[str, Any]:
 @mcp.tool()
 def kb_supersede(old_claim_id: str, new_claim_id: str) -> dict[str, Any]:
     old, new = life.supersede(
-        _store(), old_claim_id=old_claim_id, new_claim_id=new_claim_id,
+        _store(),
+        old_claim_id=old_claim_id,
+        new_claim_id=new_claim_id,
         actor=_agent(),
     )
     return {"old": old.id, "new": new.id, "status": old.status.value}
@@ -435,8 +500,7 @@ def kb_supersede(old_claim_id: str, new_claim_id: str) -> dict[str, Any]:
 
 @mcp.tool()
 def kb_contradict(claim_a: str, claim_b: str) -> dict[str, Any]:
-    a, b, rel = life.contradict(_store(), claim_a=claim_a, claim_b=claim_b,
-                                actor=_agent())
+    a, b, rel = life.contradict(_store(), claim_a=claim_a, claim_b=claim_b, actor=_agent())
     return {"a": a.id, "b": b.id, "relation_id": rel.id}
 
 
@@ -496,11 +560,12 @@ def kb_session_end(session_id: str, note: str | None = None) -> dict[str, Any]:
 
 
 @mcp.tool()
-def kb_crystallize(session_id: str, write_summary_page: bool = True
-                   ) -> dict[str, Any]:
+def kb_crystallize(session_id: str, write_summary_page: bool = True) -> dict[str, Any]:
     """Approve every pending proposal in `session_id` (host must trust the agent)."""
     return sess_mod.crystallize(
-        _store(), session_id, approver=_agent(),
+        _store(),
+        session_id,
+        approver=_agent(),
         write_summary_page=write_summary_page,
     )
 
@@ -520,8 +585,12 @@ def kb_lint(stale_days: int = 180) -> dict[str, Any]:
     return {
         "ok": report.ok,
         "findings": [
-            {"severity": f.severity, "code": f.code,
-             "message": f.message, "object_ids": f.object_ids}
+            {
+                "severity": f.severity,
+                "code": f.code,
+                "message": f.message,
+                "object_ids": f.object_ids,
+            }
             for f in report.findings
         ],
         "counts": report.counts,
@@ -534,8 +603,12 @@ def kb_doctor() -> dict[str, Any]:
     return {
         "ok": report.ok,
         "findings": [
-            {"severity": f.severity, "code": f.code,
-             "message": f.message, "object_ids": f.object_ids}
+            {
+                "severity": f.severity,
+                "code": f.code,
+                "message": f.message,
+                "object_ids": f.object_ids,
+            }
             for f in report.findings
         ],
         "counts": report.counts,
@@ -556,8 +629,10 @@ def kb_export(out_path: str) -> dict[str, Any]:
 def kb_export_check(bundle_path: str) -> dict[str, Any]:
     r = bundle.export_check(Path(bundle_path))
     return {
-        "ok": r.ok, "bundle_id": r.bundle_id,
-        "files_checked": r.files_checked, "issues": r.issues,
+        "ok": r.ok,
+        "bundle_id": r.bundle_id,
+        "files_checked": r.files_checked,
+        "issues": r.issues,
     }
 
 
@@ -565,9 +640,12 @@ def kb_export_check(bundle_path: str) -> dict[str, Any]:
 def kb_import_check(bundle_path: str) -> dict[str, Any]:
     r = bundle.import_check(_store().kb_dir, Path(bundle_path))
     return {
-        "ok": r.ok, "bundle_id": r.bundle_id,
-        "new_files": r.new_files, "conflicts": r.conflicts,
-        "identical_files": len(r.identical), "issues": r.issues,
+        "ok": r.ok,
+        "bundle_id": r.bundle_id,
+        "new_files": r.new_files,
+        "conflicts": r.conflicts,
+        "identical_files": len(r.identical),
+        "issues": r.issues,
     }
 
 
@@ -575,8 +653,10 @@ def kb_import_check(bundle_path: str) -> dict[str, Any]:
 def kb_import_apply(bundle_path: str, on_conflict: str = "skip") -> dict[str, Any]:
     try:
         r = bundle.import_apply(
-            _store().kb_dir, Path(bundle_path),
-            on_conflict=on_conflict, actor=_agent(),
+            _store().kb_dir,
+            Path(bundle_path),
+            on_conflict=on_conflict,
+            actor=_agent(),
         )
     except (RuntimeError, ValueError) as e:
         raise ValueError(str(e)) from e
@@ -593,13 +673,18 @@ def kb_audit(tail: int = 50) -> list[dict[str, Any]]:
 
 @mcp.tool()
 def kb_reindex_embeddings(
-    *, backfill: bool = False, force: bool = False, model: str | None = None,
+    *,
+    backfill: bool = False,
+    force: bool = False,
+    model: str | None = None,
 ) -> dict[str, Any]:
     """Re-encode every artifact under the current embedding adapter."""
     from .embeddings.migration import backfill_embeddings
+
     store = _store()
     if model:
         from .embeddings import get_embedder
+
         get_embedder(model)
     n = backfill_embeddings(store, force=force)
     return {"touched": n, "model": _current_model_name()}
@@ -607,10 +692,13 @@ def kb_reindex_embeddings(
 
 @mcp.tool()
 def kb_dedup_scan(
-    *, threshold: float = 0.95, dry_run: bool = False,
+    *,
+    threshold: float = 0.95,
+    dry_run: bool = False,
 ) -> dict[str, Any]:
     """Find near-duplicate artifacts via embedding cosine."""
     from .embeddings.dedup import scan_all
+
     store = _store()
     rows = scan_all(store.kb_dir, threshold=threshold, dry_run=dry_run)
     return {"duplicates": rows, "threshold": threshold}
@@ -622,6 +710,7 @@ def kb_eval_embeddings(*, queries_path: str, k: int = 10) -> dict[str, Any]:
     from pathlib import Path
 
     from .embeddings.scorer import evaluate
+
     store = _store()
     return evaluate(
         kb_dir=store.kb_dir,
@@ -635,13 +724,12 @@ def kb_embeddings_stats() -> dict[str, Any]:
     """Model identity, per-kind counts, query cache stats."""
     from . import index_db
     from .embeddings.cache import query_cache_stats
+
     store = _store()
     meta = index_db.get_embedding_meta(store.kb_dir)
     counts: dict[str, int] = {}
     with index_db.open_db(store.kb_dir) as conn:
-        for k, n in conn.execute(
-            "SELECT kind, COUNT(*) FROM embedding_index GROUP BY kind"
-        ):
+        for k, n in conn.execute("SELECT kind, COUNT(*) FROM embedding_index GROUP BY kind"):
             counts[k] = int(n)
     return {
         "model": meta.get("embedding_model"),
@@ -655,6 +743,7 @@ def kb_embeddings_stats() -> dict[str, Any]:
 def _current_model_name() -> str:
     try:
         from .embeddings import get_embedder
+
         return get_embedder().name
     except Exception:
         return ""

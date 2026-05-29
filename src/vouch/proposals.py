@@ -57,14 +57,21 @@ def _file_proposal(
         # Dry-run never touches disk. The caller still gets a Proposal back
         # with the id it would have had so the agent can show a preview.
         audit.log_event(
-            store.kb_dir, event=f"proposal.{kind.value}.dry_run", actor=proposed_by,
-            object_ids=[proposal.id], dry_run=True, data={"payload": payload},
+            store.kb_dir,
+            event=f"proposal.{kind.value}.dry_run",
+            actor=proposed_by,
+            object_ids=[proposal.id],
+            dry_run=True,
+            data={"payload": payload},
         )
         return proposal
     store.put_proposal(proposal)
     audit.log_event(
-        store.kb_dir, event=f"proposal.{kind.value}.create", actor=proposed_by,
-        object_ids=[proposal.id], data={"slug_hint": payload.get("id")},
+        store.kb_dir,
+        event=f"proposal.{kind.value}.create",
+        actor=proposed_by,
+        object_ids=[proposal.id],
+        data={"slug_hint": payload.get("id")},
     )
     return proposal
 
@@ -83,6 +90,9 @@ def propose_claim(
     slug_hint: str | None = None,
     session_id: str | None = None,
     dry_run: bool = False,
+    visibility: str | None = None,
+    project: str | None = None,
+    agent: str | None = None,
 ) -> Proposal:
     if not text.strip():
         raise ProposalError("claim text is empty")
@@ -96,7 +106,7 @@ def propose_claim(
                 store.get_evidence(eid)
             except Exception as e:
                 raise ProposalError(f"unknown source/evidence id: {eid}") from e
-    payload = {
+    payload: dict = {
         "id": slug_hint or _slugify(text),
         "text": text.strip(),
         "type": claim_type,
@@ -105,10 +115,24 @@ def propose_claim(
         "entities": entities or [],
         "tags": tags or [],
     }
+    if visibility is not None:
+        from .models import Visibility
+        try:
+            payload["visibility"] = Visibility(visibility).value
+        except ValueError as e:
+            raise ProposalError(f"invalid visibility: {visibility!r}") from e
+    if project is not None:
+        payload["project"] = project
+    if agent is not None:
+        payload["agent"] = agent
     return _file_proposal(
-        store, kind=ProposalKind.CLAIM, payload=payload,
-        proposed_by=proposed_by, session_id=session_id,
-        rationale=rationale, dry_run=dry_run,
+        store,
+        kind=ProposalKind.CLAIM,
+        payload=payload,
+        proposed_by=proposed_by,
+        session_id=session_id,
+        rationale=rationale,
+        dry_run=dry_run,
     )
 
 
@@ -141,9 +165,13 @@ def propose_page(
         "tags": tags or [],
     }
     return _file_proposal(
-        store, kind=ProposalKind.PAGE, payload=payload,
-        proposed_by=proposed_by, session_id=session_id,
-        rationale=rationale, dry_run=dry_run,
+        store,
+        kind=ProposalKind.PAGE,
+        payload=payload,
+        proposed_by=proposed_by,
+        session_id=session_id,
+        rationale=rationale,
+        dry_run=dry_run,
     )
 
 
@@ -170,9 +198,13 @@ def propose_entity(
         "description": description,
     }
     return _file_proposal(
-        store, kind=ProposalKind.ENTITY, payload=payload,
-        proposed_by=proposed_by, session_id=session_id,
-        rationale=rationale, dry_run=dry_run,
+        store,
+        kind=ProposalKind.ENTITY,
+        payload=payload,
+        proposed_by=proposed_by,
+        session_id=session_id,
+        rationale=rationale,
+        dry_run=dry_run,
     )
 
 
@@ -201,9 +233,13 @@ def propose_relation(
         "evidence": evidence or [],
     }
     return _file_proposal(
-        store, kind=ProposalKind.RELATION, payload=payload,
-        proposed_by=proposed_by, session_id=session_id,
-        rationale=rationale, dry_run=dry_run,
+        store,
+        kind=ProposalKind.RELATION,
+        payload=payload,
+        proposed_by=proposed_by,
+        session_id=session_id,
+        rationale=rationale,
+        dry_run=dry_run,
     )
 
 
@@ -224,22 +260,19 @@ def approve(
     """
     proposal = store.get_proposal(proposal_id)
     if proposal.status != ProposalStatus.PENDING:
-        raise ProposalError(
-            f"proposal {proposal_id} is {proposal.status.value}, not pending"
-        )
+        raise ProposalError(f"proposal {proposal_id} is {proposal.status.value}, not pending")
     if approved_by == proposal.proposed_by:
         cfg: dict[str, Any] = {}
         try:
             import yaml
+
             loaded = yaml.safe_load((store.kb_dir / "config.yaml").read_text())
             if isinstance(loaded, dict):
                 cfg = loaded
         except Exception:
             pass
         review_cfg = cfg.get("review")
-        approver_role = (
-            review_cfg.get("approver_role") if isinstance(review_cfg, dict) else None
-        )
+        approver_role = review_cfg.get("approver_role") if isinstance(review_cfg, dict) else None
         if approver_role != "trusted-agent":
             raise ProposalError(
                 f"forbidden_self_approval: {approved_by} cannot approve their own "
@@ -256,8 +289,12 @@ def approve(
         store.put_claim(claim)
         with index_db.open_db(store.kb_dir) as conn:
             index_db.index_claim(
-                conn, id=claim.id, text=claim.text,
-                type=claim.type.value, status=claim.status.value, tags=claim.tags,
+                conn,
+                id=claim.id,
+                text=claim.text,
+                type=claim.type.value,
+                status=claim.status.value,
+                tags=claim.tags,
             )
         result = claim
     elif proposal.kind == ProposalKind.PAGE:
@@ -265,8 +302,12 @@ def approve(
         store.put_page(page)
         with index_db.open_db(store.kb_dir) as conn:
             index_db.index_page(
-                conn, id=page.id, title=page.title, body=page.body,
-                type=page.type.value, tags=page.tags,
+                conn,
+                id=page.id,
+                title=page.title,
+                body=page.body,
+                type=page.type.value,
+                tags=page.tags,
             )
         result = page
     elif proposal.kind == ProposalKind.ENTITY:
@@ -274,8 +315,12 @@ def approve(
         store.put_entity(entity)
         with index_db.open_db(store.kb_dir) as conn:
             index_db.index_entity(
-                conn, id=entity.id, name=entity.name, description=entity.description,
-                type=entity.type.value, aliases=entity.aliases,
+                conn,
+                id=entity.id,
+                name=entity.name,
+                description=entity.description,
+                type=entity.type.value,
+                aliases=entity.aliases,
             )
         result = entity
     else:  # RELATION
@@ -289,8 +334,10 @@ def approve(
     proposal.decision_reason = reason
     store.move_proposal_to_decided(proposal)
     audit.log_event(
-        store.kb_dir, event=f"proposal.{proposal.kind.value}.approve",
-        actor=approved_by, object_ids=[proposal.id, result.id],
+        store.kb_dir,
+        event=f"proposal.{proposal.kind.value}.approve",
+        actor=approved_by,
+        object_ids=[proposal.id, result.id],
         data={"reason": reason},
     )
     return result
@@ -307,17 +354,17 @@ def reject(
         raise ProposalError("rejection must include a reason (future agent context)")
     proposal = store.get_proposal(proposal_id)
     if proposal.status != ProposalStatus.PENDING:
-        raise ProposalError(
-            f"proposal {proposal_id} is {proposal.status.value}, not pending"
-        )
+        raise ProposalError(f"proposal {proposal_id} is {proposal.status.value}, not pending")
     proposal.status = ProposalStatus.REJECTED
     proposal.decided_at = datetime.now(UTC)
     proposal.decided_by = rejected_by
     proposal.decision_reason = reason
     store.move_proposal_to_decided(proposal)
     audit.log_event(
-        store.kb_dir, event=f"proposal.{proposal.kind.value}.reject",
-        actor=rejected_by, object_ids=[proposal.id],
+        store.kb_dir,
+        event=f"proposal.{proposal.kind.value}.reject",
+        actor=rejected_by,
+        object_ids=[proposal.id],
         data={"reason": reason},
     )
     return proposal
@@ -331,9 +378,7 @@ _ARTIFACT_GETTERS = {
 }
 
 
-def _ensure_no_existing_artifact(
-    store: KBStore, kind: ProposalKind, artifact_id: str
-) -> None:
+def _ensure_no_existing_artifact(store: KBStore, kind: ProposalKind, artifact_id: str) -> None:
     getter = getattr(store, _ARTIFACT_GETTERS[kind])
     try:
         getter(artifact_id)

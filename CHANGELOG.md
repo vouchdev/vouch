@@ -6,6 +6,9 @@ All notable changes to vouch are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+- Richer scope tuple `(visibility, project, agent)` on `Claim` and `Source`. All three fields are optional with `None` defaults — fully backward compatible. Exposed via `propose-claim`, `source add` CLI flags and `kb_propose_claim`, `kb_register_source` MCP tools. `list_claims()` and `list_sources()` accept filter kwargs.
+
 ## [0.1.0] — 2026-05-26
 
 ### Packaging
