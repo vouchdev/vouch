@@ -283,16 +283,9 @@ def test_crystallize_cli_all_failures_exits_1(store: KBStore) -> None:
     assert "all 2 proposal(s) failed" in result.stderr
 
 
-def test_crystallize_cli_partial_failures_shows_warning(
-    store: KBStore, monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_crystallize_cli_partial_failures_shows_warning(store: KBStore) -> None:
     from vouch.proposals import approve as real_approve
 
-    # Approve as a distinct reviewer so the second (real) approval isn't blocked
-    # by the self-approval guard. Without this the approver defaults to the OS
-    # user via _whoami(), which on a machine whose login happens to be "a"
-    # collides with the session agent and makes the test environment-dependent.
-    monkeypatch.setenv("VOUCH_AGENT", "human-reviewer")
     with patch.object(KBStore, "_embed_and_store"):
         src = store.put_source(b"e")
     sess = sess_mod.session_start(store, agent="a", task="t")
@@ -387,3 +380,11 @@ def test_approve_batch_keep_going_best_effort(
     pending = {p.id for p in store.list_proposals(ProposalStatus.PENDING)}
     assert good[0] not in pending
     assert good[1] not in pending
+
+
+def test_serve_fails_fast_without_kb(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """vouch serve must exit non-zero with a clear message when no .vouch/ KB exists."""
+    monkeypatch.chdir(tmp_path)
+    result = CliRunner().invoke(cli, ["serve", "--transport", "jsonl"])
+    assert result.exit_code != 0
+    assert "vouch init" in result.output or "vouch init" in (result.stderr or "")

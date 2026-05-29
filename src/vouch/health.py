@@ -7,7 +7,6 @@ contradictions, stale claims. Status is a one-line summary used by tooling.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -167,19 +166,11 @@ def lint(store: KBStore, *, stale_after_days: int = 180) -> HealthReport:
     return HealthReport(ok=ok, findings=findings, counts=counts)
 
 
-def doctor(
-    store: KBStore, *, on_progress: Callable[[str], None] | None = None
-) -> HealthReport:
-    """Lint + source verification + index consistency. Slow but thorough.
-
-    `on_progress`, if given, is called with a short phase label as each stage
-    runs (source verification is the slow part). It never affects the result.
-    """
+def doctor(store: KBStore) -> HealthReport:
+    """Lint + source verification + index consistency. Slow but thorough."""
     report = lint(store)
 
     # Source integrity (content hash).
-    if on_progress is not None:
-        on_progress("sources")
     for vr in verify_all(store):
         if not vr.stored_ok:
             report.findings.append(Finding(
@@ -211,19 +202,8 @@ def doctor(
     return report
 
 
-def rebuild_index(
-    store: KBStore, *, on_progress: Callable[[str], None] | None = None
-) -> dict:
-    """Drop and rebuild state.db from the durable files. Idempotent.
-
-    `on_progress`, if given, is called with a short phase label ("claims",
-    "pages", "entities", "embeddings") as each stage starts — for CLI
-    progress display. It never affects the result.
-    """
-    def _tick(phase: str) -> None:
-        if on_progress is not None:
-            on_progress(phase)
-
+def rebuild_index(store: KBStore) -> dict:
+    """Drop and rebuild state.db from the durable files. Idempotent."""
     # Detect a stale embedding-model identity before reset() wipes the meta.
     try:
         from . import audit
@@ -239,25 +219,21 @@ def rebuild_index(
         pass
     index_db.reset(store.kb_dir)
     with index_db.open_db(store.kb_dir) as conn:
-        _tick("claims")
         for c in store.list_claims():
             index_db.index_claim(
                 conn, id=c.id, text=c.text,
                 type=c.type.value, status=c.status.value, tags=c.tags,
             )
-        _tick("pages")
         for p in store.list_pages():
             index_db.index_page(
                 conn, id=p.id, title=p.title, body=p.body,
                 type=p.type.value, tags=p.tags,
             )
-        _tick("entities")
         for e in store.list_entities():
             index_db.index_entity(
                 conn, id=e.id, name=e.name, description=e.description,
                 type=e.type.value, aliases=e.aliases,
             )
-    _tick("embeddings")
     _rebuild_embeddings(store)
     return index_db.stats(store.kb_dir)
 

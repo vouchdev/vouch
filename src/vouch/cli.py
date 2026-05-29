@@ -11,11 +11,10 @@ import getpass
 import json
 import os
 import sys
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any
 
 import click
 import yaml
@@ -30,12 +29,7 @@ from .capabilities import capabilities as build_caps
 from .context import build_context_pack
 from .lifecycle import LifecycleError
 from .models import Proposal, ProposalKind, ProposalStatus
-from .onboarding import (
-    DEFAULT_TEMPLATE,
-    TEMPLATES,
-    available_templates,
-    seed_starter_kb,
-)
+from .onboarding import seed_starter_kb
 from .proposals import (
     ProposalError,
     check_approvable,
@@ -97,55 +91,6 @@ def _emit_json(obj) -> None:
     click.echo(json.dumps(obj, indent=2, default=str, sort_keys=True))
 
 
-def _color_enabled() -> bool:
-    # Honour the de-facto conventions: NO_COLOR disables, FORCE_COLOR forces,
-    # otherwise colour only when stdout is an interactive terminal. Keeps pipes,
-    # CI, and `--json` output clean while still being pretty in a shell.
-    if os.environ.get("NO_COLOR"):
-        return False
-    if os.environ.get("FORCE_COLOR"):
-        return True
-    return sys.stdout.isatty()
-
-
-def _style(text: str, **kwargs: Any) -> str:
-    return click.style(text, **kwargs) if _color_enabled() else text
-
-
-def _echo(message: str = "", *, err: bool = False) -> None:
-    # click.echo strips ANSI when the stream isn't a TTY unless told otherwise;
-    # pass an explicit color flag so FORCE_COLOR into a pipe keeps the styling
-    # and NO_COLOR / plain pipes stay clean.
-    click.echo(message, err=err, color=_color_enabled())
-
-
-_SEVERITY_STYLE = {
-    "error": {"marker": "✗", "fg": "red"},
-    "warning": {"marker": "!", "fg": "yellow"},
-    "info": {"marker": "·", "fg": "cyan"},
-}
-
-
-def _print_findings(findings: list) -> None:
-    for f in findings:
-        style = _SEVERITY_STYLE.get(f.severity, {"marker": "?", "fg": None})
-        line = f"{style['marker']} [{f.code}] {f.message}"
-        _echo(_style(line, fg=style["fg"]))
-
-
-def _progress_cb(verb: str) -> Callable[[str], None] | None:
-    # Progress is for humans watching a terminal; stay silent in pipes/CI/tests
-    # so machine output and captured test stdout aren't polluted. Writes to
-    # stderr so it never lands in piped stdout.
-    if not sys.stderr.isatty():
-        return None
-
-    def cb(step: str) -> None:
-        click.echo(_style(f"  … {verb} {step}", fg="cyan"), err=True)
-
-    return cb
-
-
 @click.group()
 @click.version_option(__version__, prog_name="vouch")
 def cli() -> None:
@@ -157,39 +102,19 @@ def cli() -> None:
 
 @cli.command()
 @click.option("--path", default=".", type=click.Path(file_okay=False), show_default=True)
-@click.option("--template", default=DEFAULT_TEMPLATE, show_default=True,
-              help="Starter pack to seed (e.g. gittensor for SN74 context).")
-def init(path: str, template: str) -> None:
+def init(path: str) -> None:
     """Initialise a .vouch/ knowledge base at PATH."""
-    if template not in available_templates():
-        raise click.ClickException(
-            f"unknown template '{template}' "
-            f"(available: {', '.join(available_templates())})"
-        )
     root = Path(path).resolve()
     root.mkdir(parents=True, exist_ok=True)
     store = KBStore.init(root)
-    if template == DEFAULT_TEMPLATE:
-        seed = seed_starter_kb(store, approved_by=_whoami())
-        health.rebuild_index(store)
-        audit_mod.log_event(store.kb_dir, event="kb.init", actor=_whoami())
-        click.echo(f"Initialised KB at {store.kb_dir}")
-        if seed.created_anything:
-            click.echo(f"Seeded starter claim: {seed.claim_id}")
-        else:
-            click.echo("Starter claim already present.")
+    seed = seed_starter_kb(store, approved_by=_whoami())
+    health.rebuild_index(store)
+    audit_mod.log_event(store.kb_dir, event="kb.init", actor=_whoami())
+    click.echo(f"Initialised KB at {store.kb_dir}")
+    if seed.created_anything:
+        click.echo(f"Seeded starter claim: {seed.claim_id}")
     else:
-        result = TEMPLATES[template](store, approved_by=_whoami())
-        health.rebuild_index(store)
-        audit_mod.log_event(store.kb_dir, event="kb.init", actor=_whoami())
-        click.echo(f"Initialised KB at {store.kb_dir}")
-        if result.created_anything:
-            click.echo(
-                f"Seeded {result.template} template: "
-                f"{len(result.created)} artifact(s)"
-            )
-        else:
-            click.echo(f"{result.template} template already present.")
+        click.echo("Starter claim already present.")
     click.echo("Next steps:")
     click.echo("  vouch status")
     click.echo("  vouch search agent")
@@ -226,62 +151,39 @@ def status(as_json: bool) -> None:
     if as_json:
         _emit_json(s)
         return
-    _echo(f"KB at {_style(str(s['kb_dir']), bold=True)}")
-    _echo(
-        f"  durable: {_style(str(s['claims']), fg='cyan')} claims  •  "
-        f"{_style(str(s['pages']), fg='cyan')} pages  •  "
-        f"{_style(str(s['sources']), fg='cyan')} sources  •  "
-        f"{_style(str(s['entities']), fg='cyan')} entities  •  "
-        f"{_style(str(s['relations']), fg='cyan')} relations"
+    click.echo(f"KB at {s['kb_dir']}")
+    click.echo(
+        f"  durable: {s['claims']} claims  •  {s['pages']} pages  •  "
+        f"{s['sources']} sources  •  {s['entities']} entities  •  "
+        f"{s['relations']} relations"
     )
-    pending = s["pending_proposals"]
-    pending_str = _style(str(pending), fg="yellow" if pending else "green")
-    _echo(f"  pending: {pending_str} proposals")
-    present = s["index_present"]
-    index_str = (
-        _style("present", fg="green") if present else _style("missing", fg="red")
-    )
-    _echo(f"  audit:   {_style(str(s['audit_events']), fg='cyan')} events  •  "
-          f"index: {index_str}")
-
-
-def _findings_json(report) -> list[dict[str, Any]]:
-    return [
-        {"severity": f.severity, "code": f.code, "message": f.message,
-         "object_ids": list(getattr(f, "object_ids", []) or [])}
-        for f in report.findings
-    ]
+    click.echo(f"  pending: {s['pending_proposals']} proposals")
+    click.echo(f"  audit:   {s['audit_events']} events  •  "
+               f"index: {'present' if s['index_present'] else 'missing'}")
 
 
 @cli.command()
 @click.option("--stale-days", default=180, show_default=True, type=int)
-@click.option("--json", "as_json", is_flag=True, help="Emit findings as JSON.")
-def lint(stale_days: int, as_json: bool) -> None:
+def lint(stale_days: int) -> None:
     """Surface user-actionable problems: broken citations, stale claims, dangling refs."""
     store = _load_store()
     report = health.lint(store, stale_after_days=stale_days)
-    if as_json:
-        _emit_json({"ok": report.ok, "findings": _findings_json(report)})
-        sys.exit(0 if report.ok else 1)
-    _print_findings(report.findings)
+    for f in report.findings:
+        marker = {"error": "✗", "warning": "!", "info": "·"}.get(f.severity, "?")
+        click.echo(f"{marker} [{f.code}] {f.message}")
     if not report.findings:
-        _echo(_style("clean", fg="green"))
+        click.echo("clean")
     sys.exit(0 if report.ok else 1)
 
 
 @cli.command()
-@click.option("--json", "as_json", is_flag=True, help="Emit findings as JSON.")
-def doctor(as_json: bool) -> None:
+def doctor() -> None:
     """Full health sweep: lint + source verification + index check."""
     store = _load_store()
-    report = health.doctor(store, on_progress=_progress_cb("verifying"))
-    if as_json:
-        _emit_json({
-            "ok": report.ok, "counts": report.counts,
-            "findings": _findings_json(report),
-        })
-        sys.exit(0 if report.ok else 1)
-    _print_findings(report.findings)
+    report = health.doctor(store)
+    for f in report.findings:
+        marker = {"error": "✗", "warning": "!", "info": "·"}.get(f.severity, "?")
+        click.echo(f"{marker} [{f.code}] {f.message}")
     click.echo(f"-- {report.counts}")
     sys.exit(0 if report.ok else 1)
 
@@ -752,7 +654,6 @@ def crystallize(session_id: str, no_page: bool) -> None:
 @click.option("--rerank/--no-rerank", default=False)
 @click.option("--hyde/--no-hyde", default=False)
 @click.option("--explain/--no-explain", default=False)
-@click.option("--json", "as_json", is_flag=True, help="Emit hits as JSON.")
 def search(
     query: str,
     limit: int,
@@ -763,7 +664,6 @@ def search(
     rerank: bool,
     hyde: bool,
     explain: bool,
-    as_json: bool,
 ) -> None:
     """Search the KB."""
     from . import index_db
@@ -809,25 +709,11 @@ def search(
             click.echo("warning: rerank extras not installed; skipping rerank",
                        err=True)
 
-    if as_json:
-        _emit_json({
-            "backend": used,
-            "hits": [
-                {"kind": k, "id": i, "snippet": snip, "score": score,
-                 "backend": used}
-                for k, i, snip, score in hits
-            ],
-        })
-        return
-
-    label = _style(f"({used})", fg="green")
     for k, i, snip, score in hits:
-        loc = _style(f"{k}/{i}", fg="cyan")
         if explain:
-            sc = _style(f"score={score:.4f}", dim=True)
-            _echo(f"{label} {loc}\t{sc}\t{snip}")
+            click.echo(f"[{used}] {k}/{i}\tscore={score:.4f}\t{snip}  ({used})")
         else:
-            _echo(f"{loc}\t{snip}  {label}")
+            click.echo(f"{k}/{i}\t{snip}  ({used})")
 
 
 @cli.command()
@@ -851,8 +737,7 @@ def context(task: str, limit: int, max_chars: int | None,
 def index() -> None:
     """Rebuild state.db from durable files."""
     store = _load_store()
-    with _cli_errors():
-        stats = health.rebuild_index(store, on_progress=_progress_cb("indexing"))
+    stats = health.rebuild_index(store)
     click.echo(f"indexed: {stats}")
 
 
@@ -982,11 +867,7 @@ def audit(tail: int, as_json: bool) -> None:
 def export(out_path: str) -> None:
     """Bundle the durable KB into a portable .tar.gz."""
     store = _load_store()
-    with _cli_errors():
-        manifest = bundle.export(
-            store.kb_dir, dest=Path(out_path), actor=_whoami(),
-            on_progress=_progress_cb("exporting"),
-        )
+    manifest = bundle.export(store.kb_dir, dest=Path(out_path), actor=_whoami())
     _emit_json({
         "bundle_id": manifest["bundle_id"],
         "files": len(manifest["files"]),
@@ -1030,12 +911,11 @@ def import_apply_cmd(bundle_path: str, on_conflict: str) -> None:
         r = bundle.import_apply(
             store.kb_dir, Path(bundle_path),
             on_conflict=on_conflict, actor=_whoami(),
-            on_progress=_progress_cb("importing"),
         )
     except RuntimeError as e:
         raise click.ClickException(str(e)) from e
     # Rebuild the index after a bulk import so search picks up new claims.
-    health.rebuild_index(store, on_progress=_progress_cb("indexing"))
+    health.rebuild_index(store)
     _emit_json(r)
 
 
@@ -1112,6 +992,7 @@ def diff(old_id: str, new_id: str, as_json: bool) -> None:
               type=click.Choice(["stdio", "jsonl"]))
 def serve(transport: str) -> None:
     """Run the MCP server (stdio) or the JSONL tool server."""
+    _load_store()  # fail fast with a clear message if no .vouch/ KB is present
     if transport == "stdio":
         from .server import run_stdio
         run_stdio()
