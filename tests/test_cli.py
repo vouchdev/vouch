@@ -84,6 +84,31 @@ def test_show_missing_proposal_shows_clean_error(store: KBStore) -> None:
     _assert_clean_error(result, "proposal no-such-proposal")
 
 
+def test_fsck_clean_kb_prints_clean_and_exits_zero(store: KBStore) -> None:
+    """`vouch fsck` on a fresh KB exits 0 and only emits info-level findings."""
+    from vouch.models import Claim
+    src = store.put_source(b"e")
+    store.put_claim(Claim(id="c1", text="t", evidence=[src.id]))
+    result = CliRunner().invoke(cli, ["fsck"])
+    # No state.db yet → info finding, but report.ok stays True.
+    assert result.exit_code == 0, result.output
+    assert "[index_missing]" in result.output
+
+
+def test_fsck_reports_dangling_chain_and_exits_nonzero(store: KBStore) -> None:
+    """`vouch fsck` exits 1 on error findings and prints affected object ids."""
+    from vouch.models import Claim
+    src = store.put_source(b"e")
+    store.put_claim(Claim(
+        id="c1", text="t", evidence=[src.id], supersedes=["ghost"],
+    ))
+    result = CliRunner().invoke(cli, ["fsck"])
+    assert result.exit_code == 1, result.output
+    assert "dangling_supersedes" in result.output
+    # The affected object ids are surfaced inline so users can grep / pipe.
+    assert "(objects: c1, ghost)" in result.output
+
+
 def test_pending_json_empty_queue(store: KBStore) -> None:
     result = CliRunner().invoke(cli, ["pending", "--json"])
 

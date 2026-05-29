@@ -286,6 +286,24 @@ def doctor(as_json: bool) -> None:
     sys.exit(0 if report.ok else 1)
 
 
+@cli.command()
+def fsck() -> None:
+    """Deep consistency check: orphan embeddings, dangling supersede/contradict
+    chains, decided-proposal ↔ artifact mismatches, index-vs-file drift.
+    """
+    store = _load_store()
+    report = health.fsck(store)
+    for f in report.findings:
+        marker = {"error": "✗", "warning": "!", "info": "·"}.get(f.severity, "?")
+        line = f"{marker} [{f.code}] {f.message}"
+        if f.object_ids:
+            line += f" (objects: {', '.join(f.object_ids)})"
+        click.echo(line)
+    if not report.findings:
+        click.echo("clean")
+    sys.exit(0 if report.ok else 1)
+
+
 # --- proposals ------------------------------------------------------------
 
 

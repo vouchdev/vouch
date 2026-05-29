@@ -7,6 +7,11 @@ All notable changes to vouch are documented here. Format follows
 ## [Unreleased]
 
 ### Added
+- `vouch fsck` performs deep consistency checks beyond `vouch doctor`:
+  orphaned embeddings, dangling supersede/contradict chains, decided
+  proposals whose artifact is missing, and FTS5 index-vs-file drift
+  (orphan rows, missing rows, status drift). Read-only; reports findings
+  with object ids. `--fix` is intentionally out of scope (#96).
 - `vouch init --template <name>` seeds a domain starter pack. The default `starter` template is unchanged; the new `gittensor` template seeds a small, cited, approved KB about Gittensor (SN74) contribution scoring (1 source, 1 entity, 7 claims — merged-PR rewards, PAT verification, scoring factors, sybil-resistance, repo allow-list policy, issue-solving multiplier, and emission split) so a fresh KB in a Gittensor repo has retrievable context on day one. Templates are an in-code registry — future packs plug in the same way.
 
 ## [0.1.0] — 2026-05-26
