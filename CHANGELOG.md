@@ -18,13 +18,6 @@ All notable changes to vouch are documented here. Format follows
   Trusted Publishing (OIDC).
 
 ### Added
-- Friendlier CLI output (#54, track 2): colourised `vouch status` / `lint` /
-  `doctor` / `search` (honours `NO_COLOR`, `FORCE_COLOR`, and TTY detection);
-  `--json` on `vouch lint` and `vouch search` for machine-readable output
-  while the default stays human-readable; progress callbacks on the long ops
-  (`rebuild_index`, `doctor`, bundle `export`/`import_apply`) surfaced as
-  status lines on interactive terminals; and `vouch index` / `vouch export`
-  now report a clean `Error:` instead of a traceback on a malformed artifact.
 - `vouch approve <id1> <id2> …` approves multiple proposals in one
   non-interactive call for CI and backlog clearing (#93). Default is
   all-or-nothing: every id is validated as an approvable pending proposal
@@ -33,6 +26,13 @@ All notable changes to vouch are documented here. Format follows
   (approve what you can, report the rest, exit non-zero on partial failure).
   One audit event is still recorded per approved artifact. Complements the
   interactive `vouch review` queue.
+- Friendlier CLI output (#54, track 2): colourised `vouch status` / `lint` /
+  `doctor` / `search` (honours `NO_COLOR`, `FORCE_COLOR`, and TTY detection);
+  `--json` on `vouch lint` and `vouch search` for machine-readable output
+  while the default stays human-readable; progress callbacks on the long ops
+  (`rebuild_index`, `doctor`, bundle `export`/`import_apply`) surfaced as
+  status lines on interactive terminals; and `vouch index` / `vouch export`
+  now report a clean `Error:` instead of a traceback on a malformed artifact.
 - `vouch sync-check` and `vouch sync-apply` reconcile another `.vouch`
   directory or bundle by importing only non-conflicting durable artifacts and
   reporting conflicts without overwriting reviewed knowledge.
@@ -45,9 +45,11 @@ All notable changes to vouch are documented here. Format follows
   or dry-running pending proposals without bypassing the review gate.
 
 ### Fixed
+- `store.put_relation`, `store.put_relation_idempotent`, and `store.put_page` now reject artifacts whose foreign-id references don't resolve in the KB (relation `source` / `target` / `evidence`; page `entities` / `sources`). `proposals.propose_relation` and `proposals.propose_page` surface the same checks at proposal time as `ProposalError`. `bundle.import_check` and `sync.sync_check` run an equivalent cross-artifact pass against the post-merge id set so manifest-consistent bundles can't smuggle relations / pages whose references resolve to nothing — closes the write-time counterpart of the after-the-fact `dangling_relation` finding in `health.lint` (`src/vouch/health.py:135-145`).
 - Add `put_relation_idempotent()` to `KBStore` and use it in `supersede()` and `contradict()` so retrying after a partial failure converges to a consistent state instead of raising `ValueError`.
 - Raise `ProposalError("forbidden_self_approval")` in `proposals.approve()` when `approved_by == proposal.proposed_by`, enforcing the review-gate guarantee documented in the README and CONTRIBUTING.
 - `crystallize()` now sets `review.approver_role: trusted-agent` context so single-agent sessions can be crystallized without hitting the `forbidden_self_approval` guard (#47).
+- Narrow `except Exception` to `except ArtifactNotFoundError` in `propose_claim()` evidence validation so I/O and parse errors propagate with their original type instead of being masked as `unknown source/evidence id` (#48).
 - Bundle import rejects tar members whose path escapes `kb_dir`
   (CVE-2007-4559, #9). Previously a crafted `.tar.gz` with a member
   named `../../evil.txt` could write outside `.vouch/`; the manifest
@@ -85,6 +87,18 @@ All notable changes to vouch are documented here. Format follows
   a silent no-op. Existing Linux/macOS bundles are unchanged (their paths
   were already POSIX); Windows bundles produced before this fix should be
   re-exported.
+- `kb.context` no longer returns claims whose status is `archived`,
+  `superseded`, or `redacted` (#78). Two compounding bugs were combining
+  to leak retracted knowledge back to agents: `build_context_pack` had
+  no status filter, and `store.update_claim` only refreshed the
+  embedding cache without keeping `claims_fts.status` in sync — so even
+  after `lifecycle.archive` / `supersede` / `contradict`, the FTS5 row
+  kept its first-index status and `kb.search` / `kb.context` matched the
+  retracted claim. `update_claim` now re-indexes the FTS5 row (mirroring
+  what `proposals.approve` does on first index), and
+  `build_context_pack` drops retracted claims from the assembled pack.
+  `CONTESTED` claims continue to surface so contradictions remain
+  visible.
 - `bundle.import_check` and `bundle.import_apply` now verify each tar
   member's `sha256` against `manifest.json` (#74). Previously the
   per-file hash was only enforced by `export_check`; the import side

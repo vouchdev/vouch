@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from vouch import health
-from vouch.models import Claim, ClaimStatus, Relation
+from vouch.models import Claim, ClaimStatus
 from vouch.storage import KBStore
 
 
@@ -29,8 +29,23 @@ def test_lint_finds_broken_citation_when_source_removed(store: KBStore) -> None:
 def test_lint_dangling_relation(store: KBStore) -> None:
     src = store.put_source(b"e")
     store.put_claim(Claim(id="c1", text="t", evidence=[src.id]))
-    store.put_relation(Relation(id="rel-x", source="c1",
-                                relation="uses", target="ghost"))
+    # Hand-write the YAML to simulate a relation that landed before
+    # `put_relation` enforced endpoint existence (or one introduced
+    # by a manual edit). `health.lint` is the after-the-fact safety
+    # net for exactly this case; the on-disk YAML is still a
+    # `dangling_relation` finding even though no current write path
+    # would land it.
+    dangling_yaml = (
+        "id: rel-x\n"
+        "source: c1\n"
+        "relation: uses\n"
+        "target: ghost\n"
+        "confidence: 0.7\n"
+        "evidence: []\n"
+        "created_at: '2026-05-27T00:00:00+00:00'\n"
+        "updated_at: '2026-05-27T00:00:00+00:00'\n"
+    )
+    (store.kb_dir / "relations" / "rel-x.yaml").write_text(dangling_yaml)
     report = health.lint(store)
     codes = {f.code for f in report.findings}
     assert "dangling_relation" in codes

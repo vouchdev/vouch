@@ -80,6 +80,67 @@ def test_build_context_pack_uses_semantic_default(tmp_path: Path) -> None:
     assert any(item["id"] == "c1" for item in pack.get("items", []))
 
 
+def test_context_pack_excludes_archived_claims(store: KBStore) -> None:
+    """Regression for #78: build_context_pack must skip claims with status
+    in {ARCHIVED, SUPERSEDED, REDACTED} — without the filter, retracted
+    knowledge keeps flowing back to agents and the lifecycle controls
+    are decorative."""
+    from vouch import lifecycle
+
+    src = store.put_source(b"e")
+    store.put_claim(Claim(id="c1", text="mongodb is faster than postgres",
+                          evidence=[src.id]))
+    health.rebuild_index(store)
+    pack = context.build_context_pack(store, query="mongodb", limit=5)
+    assert any(it["id"] == "c1" for it in pack["items"]), pack
+
+    lifecycle.archive(store, claim_id="c1", actor="reviewer")
+    pack = context.build_context_pack(store, query="mongodb", limit=5)
+    assert not any(it["id"] == "c1" for it in pack["items"]), pack
+
+
+def test_context_pack_excludes_superseded_claims(store: KBStore) -> None:
+    """Regression for #78: supersede(old, new) must keep `new` retrievable
+    while removing `old` from kb.context."""
+    from vouch import lifecycle
+
+    src = store.put_source(b"e")
+    store.put_claim(Claim(id="old", text="redis caching strategy v1",
+                          evidence=[src.id]))
+    store.put_claim(Claim(id="new", text="redis caching strategy v2",
+                          evidence=[src.id]))
+    health.rebuild_index(store)
+    lifecycle.supersede(store, old_claim_id="old", new_claim_id="new",
+                        actor="reviewer")
+
+    pack = context.build_context_pack(store, query="redis caching", limit=5)
+    ids = {it["id"] for it in pack["items"]}
+    assert "new" in ids, pack
+    assert "old" not in ids, pack
+
+
+def test_update_claim_refreshes_fts5_status(store: KBStore) -> None:
+    """Regression for #78: store.update_claim must keep claims_fts.status
+    in sync, otherwise the context filter above (and any other status-
+    aware retrieval) sees a stale value from first-index time."""
+    import sqlite3
+
+    from vouch import lifecycle
+
+    src = store.put_source(b"e")
+    store.put_claim(Claim(id="c1", text="redis caching strategy",
+                          evidence=[src.id]))
+    health.rebuild_index(store)
+    lifecycle.archive(store, claim_id="c1", actor="reviewer")
+
+    with sqlite3.connect(store.kb_dir / "state.db") as conn:
+        row = conn.execute(
+            "SELECT status FROM claims_fts WHERE id = ?", ("c1",),
+        ).fetchone()
+    assert row is not None
+    assert row[0] == "archived", row
+
+
 def test_build_context_pack_explain_flag_returns_score_breakdown(
     tmp_path: Path,
 ) -> None:

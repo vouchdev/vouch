@@ -99,8 +99,10 @@ def test_crystallize_collects_approval_failures(store):
     import vouch.sessions as sess_mod
 
     sess = sess_mod.session_start(store, agent="a", task="t")
-    propose_claim(store, text="t", evidence=[src.id], proposed_by="a", session_id=sess.id)
-    propose_claim(store, text="u", evidence=[src.id], proposed_by="a", session_id=sess.id)
+    propose_claim(store, text="t", evidence=[src.id], proposed_by="a",
+                  session_id=sess.id)
+    propose_claim(store, text="u", evidence=[src.id], proposed_by="a",
+                  session_id=sess.id)
     sess_mod.session_end(store, sess.id)
 
     with patch("vouch.sessions.approve", side_effect=ValueError("storage full")):

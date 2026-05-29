@@ -91,10 +91,10 @@ def propose_claim(
     for eid in evidence:
         try:
             store.get_source(eid)
-        except Exception:
+        except ArtifactNotFoundError:
             try:
                 store.get_evidence(eid)
-            except Exception as e:
+            except ArtifactNotFoundError as e:
                 raise ProposalError(f"unknown source/evidence id: {eid}") from e
     payload = {
         "id": slug_hint or _slugify(text),
@@ -130,6 +130,25 @@ def propose_page(
 ) -> Proposal:
     if not title.strip():
         raise ProposalError("page title is empty")
+    # Mirror the existence check `propose_claim` already runs on evidence
+    # ids: a page that lists a claim / entity / source id but never had it
+    # resolved is exactly the dangling-reference shape `store.put_page`
+    # used to silently accept (issue: graph-integrity write gates).
+    for cid in claim_ids or []:
+        try:
+            store.get_claim(cid)
+        except ArtifactNotFoundError as e:
+            raise ProposalError(f"unknown claim id: {cid}") from e
+    for eid in entity_ids or []:
+        try:
+            store.get_entity(eid)
+        except ArtifactNotFoundError as e:
+            raise ProposalError(f"unknown entity id: {eid}") from e
+    for sid in source_ids or []:
+        try:
+            store.get_source(sid)
+        except ArtifactNotFoundError as e:
+            raise ProposalError(f"unknown source id: {sid}") from e
     payload = {
         "id": slug_hint or _slugify(title),
         "title": title.strip(),
@@ -191,6 +210,31 @@ def propose_relation(
 ) -> Proposal:
     if not src or not target or not relation:
         raise ProposalError("relation needs src, relation, target")
+    # Endpoint + evidence existence checks mirror the `propose_claim`
+    # citation loop. The corresponding write-time gate now lives in
+    # `store.put_relation` / `store.put_relation_idempotent`; surfacing
+    # the same error here means the agent sees a friendly `ProposalError`
+    # at proposal time instead of a downstream `ValueError` at approve.
+    if not _node_exists(store, src):
+        raise ProposalError(
+            f"unknown relation source endpoint: {src} (must be an existing "
+            f"claim, page, entity, or source id)"
+        )
+    if not _node_exists(store, target):
+        raise ProposalError(
+            f"unknown relation target endpoint: {target} (must be an "
+            f"existing claim, page, entity, or source id)"
+        )
+    for eid in evidence or []:
+        try:
+            store.get_source(eid)
+        except ArtifactNotFoundError:
+            try:
+                store.get_evidence(eid)
+            except ArtifactNotFoundError as e:
+                raise ProposalError(
+                    f"unknown source/evidence id: {eid}"
+                ) from e
     rid = f"{src}--{relation}--{target}"
     payload = {
         "id": _slugify(rid),
@@ -373,6 +417,29 @@ def _ensure_no_existing_artifact(
         f"(a prior approve may have been interrupted; reconcile manually "
         f"by removing the artifact or rejecting this proposal)"
     )
+
+
+def _node_exists(store: KBStore, node_id: str) -> bool:
+    """True if `node_id` resolves to a Claim, Page, Entity, or Source.
+
+    The set of valid Relation endpoint kinds; mirrors
+    `KBStore._node_exists` (storage.py) so propose-time and write-time
+    rejection use the same definition.
+    """
+    if not node_id:
+        return False
+    for getter in (
+        store.get_claim,
+        store.get_page,
+        store.get_entity,
+        store.get_source,
+    ):
+        try:
+            getter(node_id)
+            return True
+        except ArtifactNotFoundError:
+            continue
+    return False
 
 
 def _slugify(text: str) -> str:

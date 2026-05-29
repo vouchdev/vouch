@@ -187,6 +187,117 @@ def test_relation_round_trip(store: KBStore) -> None:
     assert [r.id for r in store.relations_to("b")] == ["a-uses-b"]
 
 
+# --- graph integrity: relation / page write paths reject dangling refs ---
+#
+# The `dangling_relation` shape used to be reported by `health.lint` after
+# the fact (`src/vouch/health.py:135-145`) but no writer enforced it, so
+# every approve / lifecycle / bundle path silently landed broken edges.
+# These regressions cover the structural counterpart of the #81 fix on
+# the Relation + Page surface.
+
+
+def test_put_relation_rejects_unknown_source_endpoint(store: KBStore) -> None:
+    store.put_entity(Entity(id="real-target", name="T", type=EntityType.PROJECT))
+    rel = Relation(id="r1", source="ghost", relation=RelationType.USES, target="real-target")
+    with pytest.raises(ValueError, match="unknown source endpoint"):
+        store.put_relation(rel)
+    assert not (store.kb_dir / "relations" / "r1.yaml").exists()
+
+
+def test_put_relation_rejects_unknown_target_endpoint(store: KBStore) -> None:
+    store.put_entity(Entity(id="real-src", name="S", type=EntityType.PROJECT))
+    rel = Relation(id="r2", source="real-src", relation=RelationType.USES, target="ghost")
+    with pytest.raises(ValueError, match="unknown target endpoint"):
+        store.put_relation(rel)
+    assert not (store.kb_dir / "relations" / "r2.yaml").exists()
+
+
+def test_put_relation_rejects_unknown_evidence_ref(store: KBStore) -> None:
+    store.put_entity(Entity(id="x", name="X", type=EntityType.PROJECT))
+    store.put_entity(Entity(id="y", name="Y", type=EntityType.PROJECT))
+    rel = Relation(
+        id="r3", source="x", relation=RelationType.USES, target="y",
+        evidence=["ghost-source-or-evidence"],
+    )
+    with pytest.raises(ValueError, match="unknown source/evidence"):
+        store.put_relation(rel)
+    assert not (store.kb_dir / "relations" / "r3.yaml").exists()
+
+
+def test_put_relation_accepts_source_id_as_endpoint(store: KBStore) -> None:
+    # The Relation endpoint surface is documented in the README §"Object
+    # model" as 'entities / claims / pages'; in practice Source ids are
+    # also valid graph nodes (sources back claims and crystallize into
+    # pages). Keep that surface explicit here.
+    src = store.put_source(b"source-as-node", title="t")
+    rel = Relation(
+        id=f"r-{src.id[:8]}",
+        source=src.id, relation=RelationType.REFERENCES, target=src.id,
+        evidence=[src.id],
+    )
+    store.put_relation(rel)
+    assert store.get_relation(rel.id).source == src.id
+
+
+def test_put_relation_idempotent_validates_endpoints_on_first_write(
+    store: KBStore,
+) -> None:
+    # Lifecycle ops (supersede / contradict) reach `put_relation_idempotent`
+    # with both endpoints loaded via `get_claim`, so they always satisfy
+    # the new gate. The negative case here proves a hand-built call with
+    # a dangling endpoint is still rejected.
+    store.put_entity(Entity(id="ok", name="OK", type=EntityType.PROJECT))
+    rel = Relation(id="r-id", source="ok", relation=RelationType.USES, target="ghost")
+    with pytest.raises(ValueError, match="unknown target endpoint"):
+        store.put_relation_idempotent(rel)
+    assert not (store.kb_dir / "relations" / "r-id.yaml").exists()
+
+
+def test_put_relation_idempotent_skips_revalidation_on_existing_file(
+    store: KBStore, tmp_path: Path,
+) -> None:
+    # If a relation already exists on disk, `put_relation_idempotent`
+    # converges without re-checking endpoints. This protects supersede /
+    # contradict retries from spurious failures if the linked claim was
+    # later archived or retracted.
+    store.put_entity(Entity(id="p", name="P", type=EntityType.PROJECT))
+    store.put_entity(Entity(id="q", name="Q", type=EntityType.PROJECT))
+    rel = Relation(id="r-pq", source="p", relation=RelationType.USES, target="q")
+    store.put_relation(rel)
+    # Now "remove" target from the KB.
+    (store.kb_dir / "entities" / "q.yaml").unlink()
+    # Repeat call must not raise even though target no longer exists.
+    store.put_relation_idempotent(rel)
+
+
+def test_put_page_rejects_unknown_entity_ref(store: KBStore) -> None:
+    page = Page(id="p-bad-ent", title="t", body="b", entities=["ghost-entity"])
+    with pytest.raises(ValueError, match="unknown entity"):
+        store.put_page(page)
+    assert not (store.kb_dir / "pages" / "p-bad-ent.md").exists()
+
+
+def test_put_page_rejects_unknown_source_ref(store: KBStore) -> None:
+    page = Page(id="p-bad-src", title="t", body="b", sources=["ghost-src"])
+    with pytest.raises(ValueError, match="unknown source"):
+        store.put_page(page)
+    assert not (store.kb_dir / "pages" / "p-bad-src.md").exists()
+
+
+def test_put_page_accepts_resolvable_entity_and_source_refs(
+    store: KBStore,
+) -> None:
+    src = store.put_source(b"hello", title="hi")
+    store.put_entity(Entity(id="ent1", name="E", type=EntityType.CONCEPT))
+    page = Page(
+        id="p-ok", title="t", body="b",
+        entities=["ent1"], sources=[src.id],
+    )
+    store.put_page(page)
+    assert store.get_page("p-ok").entities == ["ent1"]
+    assert store.get_page("p-ok").sources == [src.id]
+
+
 # --- evidence -------------------------------------------------------------
 
 
@@ -318,6 +429,37 @@ def test_propose_relation_then_approve(store: KBStore) -> None:
     assert r.relation == RelationType.CONTRADICTS
 
 
+def test_propose_relation_rejects_unknown_source(store: KBStore) -> None:
+    src = store.put_source(b"e")
+    store.put_claim(Claim(id="c-real", text="t", evidence=[src.id]))
+    with pytest.raises(ProposalError, match="unknown relation source endpoint"):
+        propose_relation(
+            store, src="ghost", relation="uses", target="c-real",
+            proposed_by="a",
+        )
+
+
+def test_propose_relation_rejects_unknown_target(store: KBStore) -> None:
+    src = store.put_source(b"e")
+    store.put_claim(Claim(id="c-real", text="t", evidence=[src.id]))
+    with pytest.raises(ProposalError, match="unknown relation target endpoint"):
+        propose_relation(
+            store, src="c-real", relation="uses", target="ghost",
+            proposed_by="a",
+        )
+
+
+def test_propose_relation_rejects_unknown_evidence_ref(store: KBStore) -> None:
+    src = store.put_source(b"e")
+    store.put_claim(Claim(id="c1", text="t", evidence=[src.id]))
+    store.put_claim(Claim(id="c2", text="t2", evidence=[src.id]))
+    with pytest.raises(ProposalError, match="unknown source/evidence"):
+        propose_relation(
+            store, src="c1", relation="contradicts", target="c2",
+            evidence=["nonexistent"], proposed_by="a",
+        )
+
+
 def test_propose_page_round_trip_through_approval(store: KBStore) -> None:
     src = store.put_source(b"e")
     claim = store.put_claim(Claim(id="c1", text="t", evidence=[src.id]))
@@ -328,6 +470,30 @@ def test_propose_page_round_trip_through_approval(store: KBStore) -> None:
     artifact = approve(store, pr.id, approved_by="u")
     assert isinstance(artifact, Page)
     assert store.get_page(artifact.id).body == "body"
+
+
+def test_propose_page_rejects_unknown_claim_ref(store: KBStore) -> None:
+    with pytest.raises(ProposalError, match="unknown claim id"):
+        propose_page(
+            store, title="t", body="b",
+            claim_ids=["ghost-claim"], proposed_by="a",
+        )
+
+
+def test_propose_page_rejects_unknown_entity_ref(store: KBStore) -> None:
+    with pytest.raises(ProposalError, match="unknown entity id"):
+        propose_page(
+            store, title="t", body="b",
+            entity_ids=["ghost-entity"], proposed_by="a",
+        )
+
+
+def test_propose_page_rejects_unknown_source_ref(store: KBStore) -> None:
+    with pytest.raises(ProposalError, match="unknown source id"):
+        propose_page(
+            store, title="t", body="b",
+            source_ids=["ghost-source"], proposed_by="a",
+        )
 
 
 # --- lifecycle ------------------------------------------------------------

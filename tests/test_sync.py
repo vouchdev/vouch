@@ -129,3 +129,49 @@ def test_sync_check_cli_outputs_report(
     payload = json.loads(result.output)
     assert payload["source_type"] == "kb"
     assert "claims/c1.yaml" in payload["new_files"]
+
+
+# --- graph integrity on the sync path ------------------------------------
+#
+# Sync walks the same `bundle._validate_content` per-file pass as
+# import, then also calls `bundle._check_graph_integrity` against the
+# destination KB. So a directory-or-bundle source whose Relation /
+# Page references resolve to nothing locally or in the source itself
+# must be rejected by both sync_check and sync_apply.
+
+
+def _hand_write_dangling_relation_kb(root: Path) -> Path:
+    """Build a `.vouch/` directory whose only relation has dangling
+    endpoints. Bypasses `put_relation` (which would now reject it) by
+    writing the YAML directly, simulating an attacker-supplied source."""
+    kb = _store(root)
+    rel_yaml = (
+        "id: r-dangling\n"
+        "source: ghost-source\n"
+        "relation: uses\n"
+        "target: ghost-target\n"
+        "confidence: 0.7\n"
+        "evidence: []\n"
+        "created_at: '2026-05-27T00:00:00+00:00'\n"
+        "updated_at: '2026-05-27T00:00:00+00:00'\n"
+    )
+    (kb.kb_dir / "relations" / "r-dangling.yaml").write_text(rel_yaml)
+    return kb.root
+
+
+def test_sync_check_rejects_dangling_relation_from_directory_source(
+    tmp_path: Path,
+) -> None:
+    src_root = _hand_write_dangling_relation_kb(tmp_path / "incoming")
+    dest = _store(tmp_path / "dest")
+    report = sync.sync_check(dest.kb_dir, src_root)
+    assert not report.ok
+    assert any("dangling reference" in i for i in report.issues), report.issues
+
+
+def test_sync_apply_refuses_dangling_relation(tmp_path: Path) -> None:
+    src_root = _hand_write_dangling_relation_kb(tmp_path / "incoming")
+    dest = _store(tmp_path / "dest")
+    with pytest.raises(RuntimeError, match="dangling reference"):
+        sync.sync_apply(dest.kb_dir, src_root)
+    assert not (dest.kb_dir / "relations" / "r-dangling.yaml").exists()

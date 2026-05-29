@@ -188,11 +188,14 @@ def _read_source_file(src: _SyncSource, path: str) -> bytes:
         return tar.extractfile(tar.getmember(path)).read()  # type: ignore[union-attr]
 
 
-def _validation_issues_for_source(src: _SyncSource) -> list[str]:
+def _validation_issues_for_source(
+    src: _SyncSource, kb_dir: Path | None = None
+) -> list[str]:
     issues: list[str] = []
     if src.bundle_path is not None:
         check = bundle.export_check(src.bundle_path)
         issues.extend(check.issues)
+    incoming_bodies: dict[str, bytes] = {}
     for path, incoming in sorted(src.files.items()):
         reason = bundle._unsafe_name_reason(path)
         if reason is not None:
@@ -207,13 +210,19 @@ def _validation_issues_for_source(src: _SyncSource) -> list[str]:
             issues.append(f"hash mismatch: {path}")
             continue
         bundle._validate_content(path, data, issues)
+        incoming_bodies[path] = data
+    # Graph-integrity pass mirrors the bundle import path so sync
+    # doesn't accept Relations / Pages whose endpoints / references
+    # neither exist locally nor arrive in the same sync.
+    if kb_dir is not None:
+        bundle._check_graph_integrity(kb_dir, incoming_bodies, issues)
     return issues
 
 
 def sync_check(kb_dir: Path, source_path: Path) -> SyncCheckResult:
     """Compare another KB or bundle with ``kb_dir`` without writing."""
     src = _load_source(source_path)
-    issues = _validation_issues_for_source(src)
+    issues = _validation_issues_for_source(src, kb_dir=kb_dir)
     new_files: list[str] = []
     identical: list[str] = []
     conflicts: list[SyncConflict] = []

@@ -27,6 +27,7 @@ import hashlib
 import logging
 import os
 import re
+import sqlite3
 import stat
 from pathlib import Path
 from typing import Any
@@ -287,6 +288,40 @@ class KBStore:
                 out.append(Source.model_validate(_yaml_load(meta.read_text())))
         return out
 
+    # --- graph-integrity helpers ------------------------------------------
+
+    # Closes the structural counterpart of the #81 fix: every graph artifact
+    # (Relation source/target/evidence, Page entities/sources) must resolve
+    # to a known artifact in the KB before it lands on disk. The invariant
+    # was already articulated as a `dangling_relation` finding in
+    # `health.lint` (`src/vouch/health.py:135-145`) but no write path
+    # enforced it, so every approve / lifecycle / bundle / sync surface
+    # silently landed graph edges and pages pointing at nothing.
+
+    def _node_exists(self, node_id: str) -> bool:
+        """True if `node_id` resolves to a Claim, Page, Entity, or Source."""
+        if not node_id:
+            return False
+        if self._claim_path(node_id).exists():
+            return True
+        if self._page_path(node_id).exists():
+            return True
+        if self._entity_path(node_id).exists():
+            return True
+        return (self._source_dir(node_id) / "meta.yaml").exists()
+
+    def _evidence_ref_exists(self, ref_id: str) -> bool:
+        """True if `ref_id` resolves to a Source or Evidence record.
+
+        Matches the citation surface that `put_claim` already accepts:
+        either a content-hash Source id or an Evidence id.
+        """
+        if not ref_id:
+            return False
+        if (self._source_dir(ref_id) / "meta.yaml").exists():
+            return True
+        return self._evidence_path(ref_id).exists()
+
     # --- claims ------------------------------------------------------------
 
     def put_claim(self, claim: Claim) -> Claim:
@@ -335,6 +370,24 @@ class KBStore:
         Claim.model_validate(claim.model_dump(mode="json"))
         self._claim_path(claim.id).write_text(_yaml_dump(claim.model_dump(mode="json")))
         self._embed_and_store(kind="claim", id=claim.id, text=claim.text)
+        # Keep the FTS5 row in sync with the on-disk claim so lifecycle
+        # mutations (archive, supersede, contradict, confirm) are reflected
+        # in retrieval immediately. Without this, claims_fts.status stays
+        # frozen at first-index time and retracted claims keep matching
+        # kb.search / kb.context.
+        from . import index_db as _index_db
+
+        try:
+            with _index_db.open_db(self.kb_dir) as conn:
+                _index_db.index_claim(
+                    conn, id=claim.id, text=claim.text,
+                    type=claim.type.value, status=claim.status.value,
+                    tags=list(claim.tags),
+                )
+        except sqlite3.Error as e:
+            _embed_log.warning(
+                "claim %s: FTS5 reindex skipped on update (%s)", claim.id, e,
+            )
         return claim
 
     # --- pages -------------------------------------------------------------
@@ -343,6 +396,12 @@ class KBStore:
         for cid in page.claims:
             if not self._claim_path(cid).exists():
                 raise ValueError(f"page {page.id} references unknown claim {cid}")
+        for eid in page.entities:
+            if not self._entity_path(eid).exists():
+                raise ValueError(f"page {page.id} references unknown entity {eid}")
+        for sid in page.sources:
+            if not (self._source_dir(sid) / "meta.yaml").exists():
+                raise ValueError(f"page {page.id} references unknown source {sid}")
         try:
             with self._page_path(page.id).open("x") as f:
                 f.write(_serialize_page(page))
@@ -396,7 +455,27 @@ class KBStore:
 
     # --- relations ---------------------------------------------------------
 
+    def _validate_relation_refs(self, rel: Relation) -> None:
+        if not self._node_exists(rel.source):
+            raise ValueError(
+                f"relation {rel.id} references unknown source endpoint "
+                f"{rel.source!r} (must be an existing claim, page, entity, "
+                f"or source id)"
+            )
+        if not self._node_exists(rel.target):
+            raise ValueError(
+                f"relation {rel.id} references unknown target endpoint "
+                f"{rel.target!r} (must be an existing claim, page, entity, "
+                f"or source id)"
+            )
+        for eid in rel.evidence:
+            if not self._evidence_ref_exists(eid):
+                raise ValueError(
+                    f"relation {rel.id} cites unknown source/evidence {eid!r}"
+                )
+
     def put_relation(self, rel: Relation) -> Relation:
+        self._validate_relation_refs(rel)
         try:
             with self._relation_path(rel.id).open("x") as f:
                 f.write(_yaml_dump(rel.model_dump(mode="json")))
@@ -424,6 +503,12 @@ class KBStore:
                 text=f"{rel.source} {rel.relation.value} {rel.target}",
             )
             return rel
+        # Validate before the exclusive create. Skipping validation for the
+        # "already on disk" branch above is deliberate — a relation that's
+        # already durable was validated when it landed; re-checking would
+        # turn supersede/contradict retries into spurious failures whenever
+        # the linked claim was subsequently archived or retracted.
+        self._validate_relation_refs(rel)
         try:
             with path.open("x") as f:
                 f.write(_yaml_dump(rel.model_dump(mode="json")))
