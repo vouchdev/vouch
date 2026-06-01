@@ -225,7 +225,7 @@ def _h_register_source_from_path(p: dict) -> dict:
 
 
 def _h_propose_claim(p: dict) -> dict:
-    pr = propose_claim(
+    result = propose_claim(
         _store(),
         text=p["text"],
         evidence=list(p["evidence"]),
@@ -239,8 +239,16 @@ def _h_propose_claim(p: dict) -> dict:
         dry_run=bool(p.get("dry_run", False)),
         proposed_by=_agent(),
     )
-    return {"proposal_id": pr.id, "status": pr.status.value, "kind": pr.kind.value,
-            "dry_run": bool(p.get("dry_run", False))}
+    pr = result.proposal
+    out: dict = {
+        "proposal_id": pr.id,
+        "status": pr.status.value,
+        "kind": pr.kind.value,
+        "dry_run": bool(p.get("dry_run", False)),
+    }
+    if result.warnings:
+        out["warnings"] = result.warnings
+    return out
 
 
 def _h_propose_page(p: dict) -> dict:

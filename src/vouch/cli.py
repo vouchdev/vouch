@@ -638,6 +638,15 @@ def expire(apply: bool, days: int | None, as_json: bool) -> None:
 # --- proposal-from-CLI shortcuts -----------------------------------------
 
 
+def _format_similarity_warning(w: dict) -> str:
+    label = w.get("code", "similar")
+    kind = w.get("artifact_kind", "?")
+    aid = w.get("artifact_id", "?")
+    cos = w.get("cosine", 0)
+    snip = w.get("snippet", "")
+    return f"warning: {label} {kind} {aid} (cosine {cos}) — {snip}"
+
+
 @cli.command(name="propose-claim")
 @click.option("--text", required=True)
 @click.option("--source", "sources", multiple=True, required=True,
@@ -651,12 +660,14 @@ def propose_claim_cmd(text: str, sources: tuple[str, ...], claim_type: str,
                       tags: tuple[str, ...]) -> None:
     store = _load_store()
     with _cli_errors():
-        pr = propose_claim(
+        result = propose_claim(
             store, text=text, evidence=list(sources),
             proposed_by=_whoami(), claim_type=claim_type,
             confidence=confidence, tags=list(tags), rationale=rationale,
         )
-    click.echo(pr.id)
+    click.echo(result.id)
+    for w in result.warnings:
+        _echo(_format_similarity_warning(w), err=True)
 
 
 @cli.command(name="propose-page")

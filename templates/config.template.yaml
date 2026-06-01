@@ -12,6 +12,7 @@ review:
   require_citations: true        # claims without citations fail validation
   approver_role: human           # human | trusted-agent
   expire_pending_after_days: 90  # GC threshold for stale proposals (0 = never)
+  similarity_threshold: 0.95      # cosine warn on propose (needs embeddings extra)
 
 # Optional per-agent identity overrides. Keyed by VOUCH_AGENT value.
 agents:

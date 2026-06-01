@@ -7,6 +7,10 @@ All notable changes to vouch are documented here. Format follows
 ## [Unreleased]
 
 ### Added
+- Propose-time similarity warnings: `propose_claim` / `kb.propose_claim` return
+  non-blocking `warnings` (`similar_approved`, `similar_pending`) when the
+  embeddings extra is installed. Configurable via `review.similarity_threshold`
+  (default `0.95`). CLI prints warnings to stderr; dry-run included.
 - `vouch fsck` performs deep consistency checks beyond `vouch doctor`:
   orphaned embeddings, dangling supersede/contradict chains, decided
   proposals whose artifact is missing, and FTS5 index-vs-file drift

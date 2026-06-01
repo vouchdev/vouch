@@ -303,7 +303,7 @@ def kb_propose_claim(
 ) -> dict[str, Any]:
     """Propose a new claim. Becomes durable only after `kb_approve`."""
     try:
-        pr = propose_claim(
+        result = propose_claim(
             _store(), text=text, evidence=evidence,
             claim_type=claim_type, confidence=confidence,
             entities=entities, tags=tags, rationale=rationale,
@@ -312,7 +312,7 @@ def kb_propose_claim(
         )
     except (ProposalError, ArtifactNotFoundError, ValueError) as e:
         raise ValueError(str(e)) from e
-    return _proposal_response(pr, dry_run)
+    return _proposal_response(result, dry_run)
 
 
 @mcp.tool()
@@ -387,8 +387,9 @@ def kb_propose_relation(
     return _proposal_response(pr, dry_run)
 
 
-def _proposal_response(pr, dry_run: bool) -> dict[str, Any]:
-    return {
+def _proposal_response(result, dry_run: bool) -> dict[str, Any]:
+    pr = result.proposal if hasattr(result, "proposal") else result
+    out: dict[str, Any] = {
         "proposal_id": pr.id,
         "status": pr.status.value,
         "kind": pr.kind.value,
@@ -398,6 +399,10 @@ def _proposal_response(pr, dry_run: bool) -> dict[str, Any]:
             if dry_run else "pending human approval via `vouch approve <id>`"
         ),
     }
+    warnings = getattr(result, "warnings", None)
+    if warnings:
+        out["warnings"] = warnings
+    return out
 
 
 # === review-gate decisions (agents can approve on their own KBs if the
