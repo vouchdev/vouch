@@ -89,8 +89,25 @@ def sha256_hex(data: bytes) -> str:
 def discover_root(start: Path | None = None) -> Path:
     """Walk up from `start` looking for a `.vouch` directory.
 
-    Mirrors how git locates its repo root.
+    Mirrors how git locates its repo root. The walk can be skipped entirely
+    by setting `VOUCH_KB_PATH=/abs/path/.vouch` (documented in
+    `adapters/generic-mcp/README.md`) — useful when the host launches the
+    server from a default cwd (e.g. Claude Desktop on macOS / Windows).
     """
+    forced = os.environ.get("VOUCH_KB_PATH")
+    if forced:
+        kb = Path(forced).resolve()
+        if not kb.is_dir():
+            raise KBNotFoundError(
+                f"VOUCH_KB_PATH={forced!r} is not an existing directory"
+            )
+        if kb.name != KB_DIRNAME:
+            raise KBNotFoundError(
+                f"VOUCH_KB_PATH must point at a {KB_DIRNAME!r} directory, "
+                f"got {forced!r}"
+            )
+        return kb.parent
+
     cur = (start or Path.cwd()).resolve()
     while True:
         if (cur / KB_DIRNAME).is_dir():

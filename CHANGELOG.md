@@ -6,6 +6,9 @@ All notable changes to vouch are documented here. Format follows
 
 ## [Unreleased]
 
+### Fixed
+- `discover_root()` now honours `VOUCH_KB_PATH=/abs/path/.vouch` and returns the parent root, instead of always walking up from cwd. The env var was already documented in `adapters/generic-mcp/README.md` but wasn't wired into the code — closing the doc-vs-code drift removes the `"cwd": "..."` ceremony hosts like Claude Desktop need today to point at a specific KB.
+
 ## [0.1.0] — 2026-05-26
 
 ### Packaging
