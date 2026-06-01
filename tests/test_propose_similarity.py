@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from vouch.embeddings import register
@@ -18,10 +20,7 @@ class _HashEmbedder(Embedder):
     version = "1"
     dim = 8
 
-    def encode(self, text: str):
-        import hashlib
-        import numpy as np
-
+    def encode(self, text: str) -> np.ndarray:
         h = hashlib.sha256(text.encode()).digest()
         out = np.array([h[i] / 255.0 for i in range(self.dim)], dtype=np.float32)
         norm = float(np.linalg.norm(out))
