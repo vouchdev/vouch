@@ -29,6 +29,19 @@ def test_jsonl_search_request(store: KBStore, monkeypatch) -> None:
     assert any(it["id"] == "c1" for it in resp["result"])
 
 
+def test_jsonl_context_accepts_string_max_chars(store: KBStore, monkeypatch) -> None:
+    src = store.put_source(b"e")
+    store.put_claim(Claim(id="c1", text="findable token", evidence=[src.id]))
+    health.rebuild_index(store)
+    monkeypatch.chdir(store.root)
+    resp = handle_request({
+        "id": "r3",
+        "method": "kb.context",
+        "params": {"task": "findable", "max_chars": "500"},
+    })
+    assert resp["ok"]
+
+
 def test_jsonl_unknown_method_returns_error(store: KBStore, monkeypatch) -> None:
     monkeypatch.chdir(store.root)
     resp = handle_request({"id": "r2", "method": "kb.bogus", "params": {}})

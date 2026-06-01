@@ -127,11 +127,13 @@ def _h_search(p: dict) -> list[dict]:
 
 
 def _h_context(p: dict) -> dict:
+    raw_max_chars = p.get("max_chars")
+    max_chars = int(raw_max_chars) if raw_max_chars is not None else None
     return build_context_pack(  # type: ignore[return-value]
         _store(),
         query=p["task"],
         limit=int(p.get("limit", 10)),
-        max_chars=p.get("max_chars"),
+        max_chars=max_chars,
         min_items=int(p.get("min_items", 0)),
         require_citations=bool(p.get("require_citations", False)),
         fail_on_warnings=bool(p.get("fail_on_warnings", False)),
