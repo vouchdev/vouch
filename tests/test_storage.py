@@ -263,6 +263,26 @@ def test_propose_claim_rejects_unknown_source(store: KBStore) -> None:
         propose_claim(store, text="t", evidence=["0" * 64], proposed_by="agent")
 
 
+def test_propose_claim_survives_similarity_import_error(
+    store: KBStore, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Base CI install has no numpy; similarity import must not break propose."""
+    import builtins
+
+    real_import = builtins.__import__
+
+    def guarded_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if fromlist and "find_similar_on_propose" in fromlist:
+            raise ImportError("similarity unavailable")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", guarded_import)
+    src = store.put_source(b"e")
+    result = propose_claim(store, text="t", evidence=[src.id], proposed_by="a")
+    assert result.warnings == []
+    assert result.id
+
+
 def test_propose_claim_dry_run_does_not_persist(store: KBStore) -> None:
     src = store.put_source(b"e")
     pr = propose_claim(store, text="hi", evidence=[src.id],

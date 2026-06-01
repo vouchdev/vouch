@@ -10,7 +10,9 @@ import yaml
 from ..index_db import search_embedding
 from ..models import ProposalKind, ProposalStatus
 from ..storage import KBStore
-from .dedup import DEFAULT_THRESHOLD
+
+# Match embeddings/dedup.py — do not import dedup here (it pulls numpy at import time).
+DEFAULT_THRESHOLD = 0.95
 
 _log = logging.getLogger("vouch.embeddings.similarity")
 
@@ -120,7 +122,10 @@ def _similar_pending(
     embedder: Any,
     threshold: float,
 ) -> list[dict[str, Any]]:
-    import numpy as np
+    try:
+        import numpy as np
+    except ImportError:
+        return []
 
     q = np.asarray(query_vec, dtype=np.float32)
     qnorm = float(np.linalg.norm(q))

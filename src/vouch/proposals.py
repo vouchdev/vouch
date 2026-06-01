@@ -141,11 +141,16 @@ def propose_claim(
     if (store.kb_dir / "claims" / f"{claim_id}.yaml").exists():
         exclude_claim = claim_id
 
-    from .embeddings.similarity import find_similar_on_propose
+    warnings: list[dict[str, Any]] = []
+    try:
+        from .embeddings.similarity import find_similar_on_propose
 
-    warnings = find_similar_on_propose(
-        store, claim_text, exclude_claim_id=exclude_claim,
-    )
+        warnings = find_similar_on_propose(
+            store, claim_text, exclude_claim_id=exclude_claim,
+        )
+    except ImportError:
+        # Base install has no numpy / embeddings extra — propose still works.
+        pass
 
     proposal = _file_proposal(
         store, kind=ProposalKind.CLAIM, payload=payload,
