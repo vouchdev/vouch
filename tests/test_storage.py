@@ -112,6 +112,125 @@ def test_vouch_kb_path_empty_falls_back_to_walk(
     assert discover_root(tmp_path) == tmp_path
 
 
+# --- artifact-id path-traversal guard ------------------------------------
+#
+# Every non-Source artifact model has a `_id_is_path_safe` validator (see
+# `models._validate_artifact_id`), and `KBStore._yaml` /
+# `_safe_artifact_path` re-check the resolved path stays inside its
+# subdir. Together they close the gap where `Claim(id="../escape")`
+# plus `put_claim` would write a YAML outside `kb_dir/claims/`.
+
+
+def test_claim_model_rejects_traversal_id() -> None:
+    src_id = "a" * 64
+    with pytest.raises(ValidationError, match="path separators"):
+        Claim(id="../escape", text="t", evidence=[src_id])
+    with pytest.raises(ValidationError, match="'\\.\\.'"):
+        Claim(id="a..b", text="t", evidence=[src_id])
+    with pytest.raises(ValidationError, match="path separators"):
+        Claim(id="claims/c1", text="t", evidence=[src_id])
+
+
+def test_entity_model_rejects_traversal_id() -> None:
+    with pytest.raises(ValidationError, match="path separators"):
+        Entity(id="../escape", name="X", type=EntityType.CONCEPT)
+
+
+def test_relation_model_rejects_traversal_id() -> None:
+    with pytest.raises(ValidationError, match="path separators"):
+        Relation(
+            id="../escape", source="a", relation=RelationType.USES, target="b",
+        )
+
+
+def test_page_model_rejects_traversal_id() -> None:
+    with pytest.raises(ValidationError, match="path separators"):
+        Page(id="../escape", title="t")
+
+
+def test_evidence_model_rejects_traversal_id() -> None:
+    with pytest.raises(ValidationError, match="path separators"):
+        Evidence(id="../escape", source_id="a" * 64, locator="L1")
+
+
+def test_artifact_id_rejects_nul_byte() -> None:
+    with pytest.raises(ValidationError, match="nul byte"):
+        Entity(id="ok\x00sneaky", name="X", type=EntityType.CONCEPT)
+
+
+def test_artifact_id_rejects_leading_dot() -> None:
+    with pytest.raises(ValidationError, match="may not start with '\\.'"):
+        Entity(id=".hidden", name="X", type=EntityType.CONCEPT)
+
+
+def test_artifact_id_rejects_empty_or_whitespace() -> None:
+    with pytest.raises(ValidationError, match="non-empty"):
+        Entity(id="", name="X", type=EntityType.CONCEPT)
+    with pytest.raises(ValidationError, match="non-empty"):
+        Entity(id="   ", name="X", type=EntityType.CONCEPT)
+
+
+def test_put_claim_does_not_write_when_id_is_traversal(store: KBStore) -> None:
+    """The model validator fires before `put_claim` is even called, so no
+    file lands at the escape path the buggy code would have written to
+    (`kb_dir/escape.yaml`, one level above `claims/`). Regression for
+    the arbitrary-file-write vector via the in-YAML id."""
+    src = store.put_source(b"e")
+    with pytest.raises(ValidationError, match="path separators"):
+        store.put_claim(Claim(id="../escape", text="t", evidence=[src.id]))
+    # The path `_claim_path("../escape")` would have resolved to is empty.
+    assert not (store.kb_dir / "escape.yaml").exists()
+    assert not (store.root / "escape.yaml").exists()
+
+
+def test_storage_layer_blocks_traversal_id_from_raw_caller(
+    store: KBStore,
+) -> None:
+    """`_safe_artifact_path` is belt-and-suspenders for callers that bypass
+    the model — e.g. `store.get_claim("../escape")` from an MCP/JSONL
+    surface that received an attacker-supplied id. Must raise rather than
+    resolve to a path outside `kb_dir/claims/`."""
+    with pytest.raises(ValueError, match="escapes claims/"):
+        store._claim_path("../escape")
+    with pytest.raises(ValueError, match="escapes pages/"):
+        store._page_path("../escape")
+    with pytest.raises(ValueError, match="escapes sources/"):
+        store._source_dir("../escape")
+    with pytest.raises(ValueError, match="escapes entities/"):
+        store._entity_path("../escape")
+    with pytest.raises(ValueError, match="escapes relations/"):
+        store._relation_path("../escape")
+    with pytest.raises(ValueError, match="escapes evidence/"):
+        store._evidence_path("../escape")
+    with pytest.raises(ValueError, match="escapes sessions/"):
+        store._session_path("../escape")
+
+
+def test_update_claim_rejects_in_place_mutation_to_traversal_id(
+    store: KBStore,
+) -> None:
+    """A caller that loads a claim and mutates `claim.id = '../escape'`
+    in place must be rejected before any YAML hits disk. Either layer
+    can fire — the storage-layer `_safe_artifact_path` guard catches it
+    on the existence-check (`ValueError`), or `update_claim`'s
+    re-validation (added in #82) catches it on `Claim.model_validate`
+    (`ValidationError`). Either is acceptable; what matters is that
+    nothing is written off-tree."""
+    src = store.put_source(b"e")
+    store.put_claim(Claim(id="c1", text="t", evidence=[src.id]))
+    persisted_before = (store.kb_dir / "claims" / "c1.yaml").read_text()
+
+    c = store.get_claim("c1")
+    c.id = "../escape"  # in-place mutation bypasses construction validators
+
+    with pytest.raises((ValidationError, ValueError),
+                       match=r"path separators|escapes claims/"):
+        store.update_claim(c)
+    # On-disk YAML unchanged + no escape file written.
+    assert (store.kb_dir / "claims" / "c1.yaml").read_text() == persisted_before
+    assert not (store.kb_dir / "escape.yaml").exists()
+
+
 # --- sources --------------------------------------------------------------
 
 

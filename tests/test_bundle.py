@@ -398,6 +398,58 @@ def test_import_rejects_uncited_claim(store: KBStore, tmp_path: Path) -> None:
     assert not (store.kb_dir / "claims" / "bundle-uncited.yaml").exists()
 
 
+def test_import_rejects_claim_with_path_traversal_id(
+    store: KBStore, tmp_path: Path,
+) -> None:
+    """A bundle whose claim YAML carries an `id` with `..` or `/` is
+    rejected by `import_check`: `_validate_content` runs
+    `Claim.model_validate`, which fires the new `_id_is_path_safe`
+    validator. Without this, the bundle would land at a safe tar path
+    but the in-YAML id would later be used by `update_claim` / lifecycle
+    ops to compute a filesystem path outside `kb_dir/claims/`.
+    """
+    traversal_yaml = (
+        b'id: "../escape"\n'
+        b'text: "looks fine"\n'
+        b"type: fact\n"
+        b"status: stable\n"
+        b"confidence: 1.0\n"
+        b"evidence: [some-source-id]\n"
+    )
+    bundle_path = tmp_path / "traversal.tar.gz"
+    manifest = {
+        "spec": bundle.SPEC_VERSION,
+        "bundle_id": "deadbeef",
+        "files": [{
+            "path": "claims/innocent.yaml",
+            "size": len(traversal_yaml),
+            "sha256": hashlib.sha256(traversal_yaml).hexdigest(),
+        }],
+        "counts": {},
+        "safety": {"has_proposed": False, "has_state_db": False,
+                   "has_audit_log": False},
+    }
+    with tarfile.open(bundle_path, "w:gz") as tar:
+        info = tarfile.TarInfo("claims/innocent.yaml")
+        info.size = len(traversal_yaml)
+        tar.addfile(info, io.BytesIO(traversal_yaml))
+        mf_bytes = json.dumps(manifest).encode()
+        mf_info = tarfile.TarInfo(bundle.MANIFEST_NAME)
+        mf_info.size = len(mf_bytes)
+        tar.addfile(mf_info, io.BytesIO(mf_bytes))
+
+    diff = bundle.import_check(store.kb_dir, bundle_path)
+    assert not diff.ok
+    assert any(
+        "schema validation failed" in i and "path separators" in i
+        for i in diff.issues
+    ), diff.issues
+    with pytest.raises(RuntimeError, match="schema validation failed"):
+        bundle.import_apply(store.kb_dir, bundle_path)
+    assert not (store.kb_dir / "claims" / "innocent.yaml").exists()
+    assert not (store.root / "escape.yaml").exists()  # the off-tree target
+
+
 def test_import_check_passes_when_member_matches_manifest(
     store: KBStore, tmp_path: Path
 ) -> None:

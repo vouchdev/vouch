@@ -217,17 +217,39 @@ class KBStore:
     def config_path(self) -> Path:
         return self.kb_dir / CONFIG_FILENAME
 
+    def _safe_artifact_path(self, sub: str, obj_id: str, suffix: str) -> Path:
+        """Build `kb_dir/<sub>/<obj_id><suffix>` and verify it stays inside
+        `kb_dir/<sub>`.
+
+        Belt-and-suspenders for the model-layer id validator in
+        `models._validate_artifact_id`: catches any in-YAML id that
+        predates the validator (legacy on-disk files), any direct API
+        caller that passes a traversal id to `get_claim` /
+        `lifecycle.archive` / etc., and any future model-layer
+        regression. Mirrors `bundle._safe_member_path` for tar member
+        names (CVE-2007-4559 / #9).
+        """
+        sub_dir = (self.kb_dir / sub).resolve()
+        candidate = self.kb_dir / sub / f"{obj_id}{suffix}"
+        try:
+            candidate.resolve().relative_to(sub_dir)
+        except ValueError as exc:
+            raise ValueError(
+                f"artifact id escapes {sub}/: {obj_id!r}"
+            ) from exc
+        return candidate
+
     def _yaml(self, sub: str, obj_id: str) -> Path:
-        return self.kb_dir / sub / f"{obj_id}.yaml"
+        return self._safe_artifact_path(sub, obj_id, ".yaml")
 
     def _claim_path(self, claim_id: str) -> Path:
         return self._yaml("claims", claim_id)
 
     def _page_path(self, page_id: str) -> Path:
-        return self.kb_dir / "pages" / f"{page_id}.md"
+        return self._safe_artifact_path("pages", page_id, ".md")
 
     def _source_dir(self, source_id: str) -> Path:
-        return self.kb_dir / "sources" / source_id
+        return self._safe_artifact_path("sources", source_id, "")
 
     def _entity_path(self, eid: str) -> Path:
         return self._yaml("entities", eid)

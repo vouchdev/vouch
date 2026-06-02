@@ -119,6 +119,60 @@ class PageStatus(StrEnum):
     ARCHIVED = "archived"
 
 
+# --- shared id validator --------------------------------------------------
+
+
+def _validate_artifact_id(v: str) -> str:
+    """Reject ids that would escape the file-storage layout.
+
+    `KBStore._yaml` (and the `_<X>_path` helpers that build off it) turn
+    `id` straight into a filesystem path: `kb_dir/<sub>/{id}.{yaml,md}`.
+    Without this guard a bare `id` containing `..` or a path separator
+    writes outside the artifact directory — with enough `..`s, outside
+    `kb_dir` and even outside the project tree. `bundle.import_apply`
+    already sanitises tar member names via `_unsafe_name_reason`
+    (CVE-2007-4559 / #9), but the in-YAML `id` field bypasses that
+    surface because the member path is independent of the artifact id.
+
+    Enforcing here closes:
+      * direct construction (`Claim(id="../escape")` → put_claim);
+      * bundle / sync import (`_validate_content` calls
+        `<Model>.model_validate`, which runs this validator);
+      * mutation-then-update (`update_claim` re-validates via
+        `Claim.model_validate(claim.model_dump(...))` before persisting,
+        the same belt-and-suspenders pattern #81's
+        `_at_least_one_citation` follows).
+
+    `Source.id` keeps its stricter hex-sha256 validator below — it
+    enforces a content-addressed superset of this rule.
+    """
+    if not v or not v.strip():
+        raise ValueError(
+            "artifact id must be a non-empty, non-whitespace string"
+        )
+    if "/" in v or "\\" in v:
+        raise ValueError(
+            f"artifact id may not contain path separators: {v!r}"
+        )
+    if ".." in v:
+        raise ValueError(
+            f"artifact id may not contain '..': {v!r}"
+        )
+    if "\x00" in v:
+        raise ValueError(
+            f"artifact id may not contain a nul byte: {v!r}"
+        )
+    if any(ord(ch) < 0x20 for ch in v):
+        raise ValueError(
+            f"artifact id may not contain control characters: {v!r}"
+        )
+    if v.startswith("."):
+        raise ValueError(
+            f"artifact id may not start with '.': {v!r}"
+        )
+    return v
+
+
 # --- core artifacts -------------------------------------------------------
 
 
@@ -168,6 +222,11 @@ class Evidence(BaseModel):
     hash: str | None = None
     created_at: datetime = Field(default_factory=utcnow)
 
+    @field_validator("id")
+    @classmethod
+    def _id_is_path_safe(cls, v: str) -> str:
+        return _validate_artifact_id(v)
+
 
 class Claim(BaseModel):
     """Atomic durable assertion.
@@ -185,6 +244,11 @@ class Claim(BaseModel):
         default_factory=list,
         description="Source ids OR Evidence ids — both are valid citations",
     )
+
+    @field_validator("id")
+    @classmethod
+    def _id_is_path_safe(cls, v: str) -> str:
+        return _validate_artifact_id(v)
 
     @field_validator("evidence")
     @classmethod
@@ -231,6 +295,11 @@ class Entity(BaseModel):
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
 
+    @field_validator("id")
+    @classmethod
+    def _id_is_path_safe(cls, v: str) -> str:
+        return _validate_artifact_id(v)
+
 
 class Relation(BaseModel):
     """Typed edge between entities / claims / pages."""
@@ -243,6 +312,11 @@ class Relation(BaseModel):
     evidence: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
+
+    @field_validator("id")
+    @classmethod
+    def _id_is_path_safe(cls, v: str) -> str:
+        return _validate_artifact_id(v)
 
 
 class Page(BaseModel):
@@ -262,6 +336,11 @@ class Page(BaseModel):
     tags: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
+
+    @field_validator("id")
+    @classmethod
+    def _id_is_path_safe(cls, v: str) -> str:
+        return _validate_artifact_id(v)
 
 
 # --- audit + sessions -----------------------------------------------------
@@ -295,6 +374,11 @@ class Session(BaseModel):
     proposal_ids: list[str] = Field(default_factory=list)
     note: str | None = None
 
+    @field_validator("id")
+    @classmethod
+    def _id_is_path_safe(cls, v: str) -> str:
+        return _validate_artifact_id(v)
+
 
 # --- review gate (vouch's addition on top of AKBP) -------------------------
 
@@ -326,6 +410,11 @@ class Proposal(BaseModel):
     decided_at: datetime | None = None
     decided_by: str | None = None
     decision_reason: str | None = None
+
+    @field_validator("id")
+    @classmethod
+    def _id_is_path_safe(cls, v: str) -> str:
+        return _validate_artifact_id(v)
 
 
 # --- retrieval ------------------------------------------------------------
