@@ -210,6 +210,7 @@ def _validation_issues_for_source(
             issues.append(f"hash mismatch: {path}")
             continue
         bundle._validate_content(path, data, issues)
+        bundle._check_source_content_address(path, data, issues)
         incoming_bodies[path] = data
     # Graph-integrity pass mirrors the bundle import path so sync
     # doesn't accept Relations / Pages whose endpoints / references

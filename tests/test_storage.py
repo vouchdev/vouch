@@ -67,6 +67,51 @@ def test_discover_root_missing_raises(tmp_path: Path) -> None:
         discover_root(tmp_path)
 
 
+def test_discover_root_honours_vouch_kb_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`VOUCH_KB_PATH=/abs/path/.vouch` skips the upward walk and returns the
+    .vouch parent directly. Documented in adapters/generic-mcp/README — needed
+    for Claude Desktop / hosts that launch the server with a default cwd."""
+    kb_root = tmp_path / "kb"
+    kb_root.mkdir()
+    KBStore.init(kb_root)
+    # Start the walk somewhere with no .vouch in the chain so the only way
+    # discover_root can succeed is by honouring the env var.
+    walk_start = tmp_path / "no-kb-here"
+    walk_start.mkdir()
+    monkeypatch.setenv("VOUCH_KB_PATH", str(kb_root / ".vouch"))
+    assert discover_root(walk_start) == kb_root
+
+
+def test_vouch_kb_path_missing_dir_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VOUCH_KB_PATH", str(tmp_path / "nope" / ".vouch"))
+    with pytest.raises(KBNotFoundError, match="VOUCH_KB_PATH"):
+        discover_root(tmp_path)
+
+
+def test_vouch_kb_path_not_a_vouch_dir_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The env var must point at a `.vouch` directory, not its parent — keeps
+    the contract unambiguous and matches the documented example."""
+    KBStore.init(tmp_path)
+    monkeypatch.setenv("VOUCH_KB_PATH", str(tmp_path))  # parent, not .vouch
+    with pytest.raises(KBNotFoundError, match="\\.vouch"):
+        discover_root(tmp_path)
+
+
+def test_vouch_kb_path_empty_falls_back_to_walk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An explicitly empty env var should not block normal discovery."""
+    KBStore.init(tmp_path)
+    monkeypatch.setenv("VOUCH_KB_PATH", "")
+    assert discover_root(tmp_path) == tmp_path
+
+
 # --- sources --------------------------------------------------------------
 
 

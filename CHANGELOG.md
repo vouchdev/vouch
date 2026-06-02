@@ -6,6 +6,28 @@ All notable changes to vouch are documented here. Format follows
 
 ## [Unreleased]
 
+### Fixed
+- `discover_root()` now honours `VOUCH_KB_PATH=/abs/path/.vouch` and returns the parent root, instead of always walking up from cwd. The env var was already documented in `adapters/generic-mcp/README.md` but wasn't wired into the code — closing the doc-vs-code drift removes the `"cwd": "..."` ceremony hosts like Claude Desktop need today to point at a specific KB.
+### Added
+- `vouch fsck` performs deep consistency checks beyond `vouch doctor`:
+  orphaned embeddings, dangling supersede/contradict chains, decided
+  proposals whose artifact is missing, and FTS5 index-vs-file drift
+  (orphan rows, missing rows, status drift). Read-only; reports findings
+  with object ids. `--fix` is intentionally out of scope (#96).
+- `vouch expire` garbage-collects stale pending proposals: dry-run by default,
+  `--apply` moves them to `decided/` with `decision_reason: expired`, emits
+  `proposal.expire` audit events, and honors `review.expire_pending_after_days`
+  in `config.yaml` (default 90; `0` disables). `kb.expire` on MCP/JSONL.
+- `vouch init --template <name>` seeds a domain starter pack. The default `starter` template is unchanged; the new `gittensor` template seeds a small, cited, approved KB about Gittensor (SN74) contribution scoring (1 source, 1 entity, 7 claims — merged-PR rewards, PAT verification, scoring factors, sybil-resistance, repo allow-list policy, issue-solving multiplier, and emission split) so a fresh KB in a Gittensor repo has retrievable context on day one. Templates are an in-code registry — future packs plug in the same way.
+- Structured JSON logging via `VOUCH_LOG_FORMAT=json`. When set, the
+  `vouch` logger emits one JSON object per line with `level`, `logger`,
+  `event`, and any structured extras (e.g. `actor`, `object_ids`) passed
+  through stdlib `extra=`. Unset (or any other value) keeps the existing
+  human-readable format — no behaviour change beyond formatting. Wired
+  into the CLI, MCP server, and JSONL server entry points. `VOUCH_LOG_FORMAT`
+  was already documented in `ROADMAP.md` and `adapters/generic-mcp/README.md`
+  but had no implementation (#97).
+
 ## [0.1.0] — 2026-05-26
 
 ### Packaging
@@ -43,6 +65,7 @@ All notable changes to vouch are documented here. Format follows
 
 ### Fixed
 - `store.put_relation`, `store.put_relation_idempotent`, and `store.put_page` now reject artifacts whose foreign-id references don't resolve in the KB (relation `source` / `target` / `evidence`; page `entities` / `sources`). `proposals.propose_relation` and `proposals.propose_page` surface the same checks at proposal time as `ProposalError`. `bundle.import_check` and `sync.sync_check` run an equivalent cross-artifact pass against the post-merge id set so manifest-consistent bundles can't smuggle relations / pages whose references resolve to nothing — closes the write-time counterpart of the after-the-fact `dangling_relation` finding in `health.lint` (`src/vouch/health.py:135-145`).
+- `bundle.import_check` / `import_apply` and `sync.sync_check` / `sync_apply` now enforce the Source content-addressing invariant: a `sources/<sha>/content` member must hash to `<sha>`, and a `sources/<sha>/meta.yaml` must carry a matching `id`/`hash`. Previously the import side trusted the bundle's directory layout, so a manifest-consistent bundle could land a Source whose content did not match its claimed id — `verify_source` would report `stored_ok=False` only after the import had already succeeded with a clean `bundle.import` audit event. The per-file sha256 gate (#74) only proves bytes match the manifest; this closes the write-time counterpart of the `verify.verify_source` detection.
 - Add `put_relation_idempotent()` to `KBStore` and use it in `supersede()` and `contradict()` so retrying after a partial failure converges to a consistent state instead of raising `ValueError`.
 - Raise `ProposalError("forbidden_self_approval")` in `proposals.approve()` when `approved_by == proposal.proposed_by`, enforcing the review-gate guarantee documented in the README and CONTRIBUTING.
 - `crystallize()` now sets `review.approver_role: trusted-agent` context so single-agent sessions can be crystallized without hitting the `forbidden_self_approval` guard (#47).
