@@ -95,6 +95,19 @@ def open_db(kb_dir: Path):
         conn.close()
 
 
+@contextmanager
+def open_db_at(path: Path):
+    """Like open_db but accepts an explicit path — used for atomic temp-file rebuilds."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(path))
+    try:
+        conn.executescript(SCHEMA)
+        yield conn
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def reset(kb_dir: Path) -> None:
     """Drop everything; the rebuild caller re-populates.
 

@@ -7,14 +7,17 @@ contradictions, stale claims. Status is a one-line summary used by tooling.
 
 from __future__ import annotations
 
+import shutil
+import tempfile
+import warnings
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from . import index_db
 from .audit import count_events
-from .models import ClaimStatus, ProposalStatus
-from .storage import KBStore, sha256_hex
+from .models import Claim, ClaimStatus, Entity, Page, ProposalStatus
+from .storage import KBStore, _deserialize_page, _yaml_load, sha256_hex
 from .verify import verify_all
 
 
@@ -140,14 +143,35 @@ def doctor(store: KBStore) -> HealthReport:
             "info", "index_missing",
             "state.db not present — run `vouch index` to build it",
         ))
+    else:
+        # Detect a blown index: DB exists but FTS is empty while artifact files
+        # are present on disk. This is the aftermath of a crashed rebuild_index.
+        stats = index_db.stats(store.kb_dir)
+        claims_on_disk = len(list((store.kb_dir / "claims").glob("*.yaml")))
+        pages_on_disk = len(list((store.kb_dir / "pages").glob("*.md")))
+        entities_on_disk = len(list((store.kb_dir / "entities").glob("*.yaml")))
+        artifacts_on_disk = claims_on_disk + pages_on_disk + entities_on_disk
+        indexed = stats["claims"] + stats["pages"] + stats["entities"]
+        if artifacts_on_disk > 0 and indexed == 0:
+            report.findings.append(Finding(
+                "warning", "index_blown",
+                "state.db is empty but artifact files exist on disk — "
+                "run `vouch index` to rebuild the search index",
+            ))
 
     report.ok = not any(f.severity == "error" for f in report.findings)
     return report
 
 
 def rebuild_index(store: KBStore) -> dict:
-    """Drop and rebuild state.db from the durable files. Idempotent."""
-    # Detect a stale embedding-model identity before reset() wipes the meta.
+    """Rebuild state.db from durable files, atomically.
+
+    Writes into a temp file in the same directory (so the final rename is
+    atomic on any POSIX filesystem), then swaps it into place only on full
+    success.  If anything raises — bad YAML, validation error, I/O — the
+    temp file is deleted and the existing index is left untouched.
+    """
+    # Detect a stale embedding-model identity before we discard the old meta.
     try:
         from . import audit
         from .embeddings.migration import detect_mismatch
@@ -160,23 +184,56 @@ def rebuild_index(store: KBStore) -> dict:
             )
     except ImportError:
         pass
-    index_db.reset(store.kb_dir)
-    with index_db.open_db(store.kb_dir) as conn:
-        for c in store.list_claims():
-            index_db.index_claim(
-                conn, id=c.id, text=c.text,
-                type=c.type.value, status=c.status.value, tags=c.tags,
-            )
-        for p in store.list_pages():
-            index_db.index_page(
-                conn, id=p.id, title=p.title, body=p.body,
-                type=p.type.value, tags=p.tags,
-            )
-        for e in store.list_entities():
-            index_db.index_entity(
-                conn, id=e.id, name=e.name, description=e.description,
-                type=e.type.value, aliases=e.aliases,
-            )
+
+    db_path = store.kb_dir / index_db.DB_FILENAME
+    store.kb_dir.mkdir(parents=True, exist_ok=True)
+
+    with tempfile.NamedTemporaryFile(
+        dir=store.kb_dir, suffix=".db.tmp", delete=False,
+    ) as tmp:
+        tmp_path = Path(tmp.name)
+
+    skipped: list[tuple[str, str]] = []
+    try:
+        with index_db.open_db_at(tmp_path) as conn:
+            for p in sorted((store.kb_dir / "claims").glob("*.yaml")):
+                try:
+                    c: Claim = Claim.model_validate(_yaml_load(p.read_text()))
+                    index_db.index_claim(
+                        conn, id=c.id, text=c.text,
+                        type=c.type.value, status=c.status.value, tags=c.tags,
+                    )
+                except Exception as exc:
+                    skipped.append((p.name, str(exc)))
+            for p in sorted((store.kb_dir / "pages").glob("*.md")):
+                try:
+                    pg: Page = _deserialize_page(p.read_text())
+                    index_db.index_page(
+                        conn, id=pg.id, title=pg.title, body=pg.body,
+                        type=pg.type.value, tags=pg.tags,
+                    )
+                except Exception as exc:
+                    skipped.append((p.name, str(exc)))
+            for p in sorted((store.kb_dir / "entities").glob("*.yaml")):
+                try:
+                    e: Entity = Entity.model_validate(_yaml_load(p.read_text()))
+                    index_db.index_entity(
+                        conn, id=e.id, name=e.name, description=e.description,
+                        type=e.type.value, aliases=e.aliases,
+                    )
+                except Exception as exc:
+                    skipped.append((p.name, str(exc)))
+        shutil.move(str(tmp_path), str(db_path))
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
+
+    if skipped:
+        warnings.warn(
+            f"rebuild_index skipped {len(skipped)} unreadable artifact(s): {skipped}",
+            stacklevel=2,
+        )
+
     _rebuild_embeddings(store)
     return index_db.stats(store.kb_dir)
 
