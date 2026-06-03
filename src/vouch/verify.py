@@ -9,7 +9,6 @@ warnings so the agent / human can re-evaluate the claims that cite it.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 
 from . import audit
 from .models import Source
@@ -42,18 +41,33 @@ def verify_source(store: KBStore, source: Source) -> VerificationResult:
     external_status = "n/a"
     note: str | None = None
     if source.type.value == "file":
-        ext = Path(source.locator)
-        if ext.is_file():
-            try:
-                external_status = (
-                    "match" if sha256_hex(ext.read_bytes()) == source.id else "drift"
-                )
-            except OSError as e:
-                external_status = "missing"
-                note = f"unreadable: {e}"
-        else:
+        # Read the external file through `KBStore.read_under_root` so the
+        # verify side honours the same project-root containment guard the
+        # write side (`register_source_from_path` → `read_under_root`,
+        # #28 / CVE-2007-4559) already enforces. Without this,
+        # `Path(source.locator).read_bytes()` opens any path the vouch
+        # process can reach — a file-existence and hash-confirmation side
+        # channel for an attacker who plants an off-tree `locator` via
+        # `kb.register_source` (the `url` arg routes into `locator`
+        # verbatim) or a malicious bundle (`Source.locator` has no
+        # model-layer containment validator). `read_under_root` already
+        # does `Path.resolve() / is_relative_to(root) / O_NOFOLLOW /
+        # fstat S_ISREG`; verify just needed to route through it.
+        try:
+            _resolved, ext_body = store.read_under_root(source.locator)
+        except ValueError as e:
+            # Out-of-root locator, empty path, directory, special file,
+            # symlink-swap into the resolved name — graceful miss with
+            # no bytes read off-tree.
             external_status = "missing"
-            note = "external file path no longer exists"
+            note = f"unreadable: {e}"
+        except OSError as e:
+            external_status = "missing"
+            note = f"unreadable: {e}"
+        else:
+            external_status = (
+                "match" if sha256_hex(ext_body) == source.id else "drift"
+            )
 
     return VerificationResult(
         source=source, stored_ok=stored_ok,

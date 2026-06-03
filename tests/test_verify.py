@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from vouch import verify
+from vouch.models import Source
 from vouch.storage import KBStore
 
 
@@ -93,3 +96,118 @@ def test_verify_all_continues_after_one_failure(
     assert by_id[good_src.id].stored_ok is True
     assert by_id[bad_src.id].stored_ok is False
     assert by_id[bad_src.id].note == "stored content missing"
+
+
+# --- security: verify_source must not read off-project locators ---------
+#
+# `Source.locator` accepts an arbitrary string (set verbatim from the
+# `url` arg in `kb.register_source` on both MCP and JSONL transports, and
+# from any bundle's meta.yaml). The previous implementation did
+# `Path(source.locator).read_bytes()` for type=file sources with no
+# containment check — a file-existence + hash-confirmation primitive
+# triggered by `vouch source verify` / `vouch doctor`. These regressions
+# pin the read through `KBStore.read_under_root`, which already enforces
+# `is_relative_to(root)` + `O_NOFOLLOW` + `fstat S_ISREG`.
+
+
+def test_verify_refuses_to_read_off_project_locator(
+    store: KBStore, tmp_path: Path,
+) -> None:
+    """A source whose `locator` points outside the project root must be
+    reported as `external_status="missing"` rather than `match` — proves
+    the read never happened. Models the bundle-imported /
+    `kb.register_source(url=...)` attack.
+
+    Detection strategy: register a Source whose `id` is the sha256 of
+    bytes we plant in an off-tree file. If the buggy `Path(locator)
+    .read_bytes()` path is still alive, `verify_source` would read those
+    bytes, hash them, get `external_status="match"`, and effectively
+    confirm the off-tree file's content. After the fix,
+    `read_under_root` refuses the read on containment, and the result
+    is `missing`."""
+    off_tree_root = tmp_path.parent / "off-tree-victim"
+    off_tree_root.mkdir(exist_ok=True)
+    victim = off_tree_root / "secret.txt"
+    try:
+        leaked = b"would-be-leaked-bytes"
+        victim.write_bytes(leaked)
+        # Source.id == sha256(leaked) so the legacy code path would
+        # report `match` if it actually read the off-tree file.
+        src = store.put_source(
+            leaked, title="lying", locator=str(victim.resolve()),
+            source_type="file",
+        )
+        assert src.id == hashlib.sha256(leaked).hexdigest()
+
+        result = verify.verify_source(store, src)
+        assert result.stored_ok is True
+        # The key invariant: NOT "match". A buggy read of the off-tree
+        # file would have returned `match` here.
+        assert result.external_status == "missing", (
+            f"verify_source read off-tree locator and reported "
+            f"external_status={result.external_status!r} — "
+            f"read_under_root containment guard regressed"
+        )
+        assert result.note is not None
+        assert (
+            "must be inside project root" in result.note
+            or "unreadable" in result.note
+        )
+    finally:
+        if victim.exists():
+            victim.unlink()
+        if off_tree_root.exists() and not any(off_tree_root.iterdir()):
+            off_tree_root.rmdir()
+
+
+def test_verify_refuses_to_read_absolute_system_path(
+    store: KBStore, tmp_path: Path,
+) -> None:
+    """A `kb.register_source(url="/etc/passwd", source_type="file")`-style
+    attack must not produce a hash-confirmation oracle on the system
+    path. We don't depend on /etc/passwd existing — `read_under_root`
+    rejects on containment before the open(), so the result is the same
+    on Linux, macOS, and Windows."""
+    src = store.put_source(
+        b"placeholder", title="lying",
+        locator="/etc/passwd" if sys_is_posix() else r"C:\Windows\win.ini",
+        source_type="file",
+    )
+    result = verify.verify_source(store, src)
+    assert result.external_status == "missing"
+    assert result.note is not None  # containment / unreadable note attached
+
+
+def sys_is_posix() -> bool:
+    import os
+    return os.name == "posix"
+
+
+def test_verify_in_project_locator_still_detects_drift(
+    store: KBStore, tmp_path: Path,
+) -> None:
+    """Positive: an in-project locator continues to be read (and drift
+    is detected). Guards against the containment fix breaking honest
+    `register_source_from_path` flows whose locators are scoped to the
+    project root by design (#28)."""
+    f = tmp_path / "doc.txt"
+    f.write_bytes(b"original")
+    src = store.put_source(
+        f.read_bytes(), title="doc", locator=str(f.resolve()),
+    )
+    # Drift: overwrite + re-verify.
+    f.write_bytes(b"changed")
+    result = verify.verify_source(store, src)
+    assert result.stored_ok is True
+    assert result.external_status == "drift"
+
+
+def test_verify_empty_locator_caught_by_model(store: KBStore) -> None:
+    """`Source._locator_non_empty` rejects empty / whitespace-only
+    locators at construction time, so an on-disk `locator: ""` from a
+    pre-fix meta.yaml never reaches `verify_source` in the first place
+    (model_validate at read time will surface it as an invalid Source)."""
+    with pytest.raises(ValidationError, match="locator must be a non-empty"):
+        Source(id="a" * 64, locator="")
+    with pytest.raises(ValidationError, match="locator must be a non-empty"):
+        Source(id="a" * 64, locator="   ")

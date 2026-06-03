@@ -152,6 +152,20 @@ class Source(BaseModel):
             raise ValueError("id must be a lowercase hex sha256 (64 chars)")
         return v
 
+    @field_validator("locator")
+    @classmethod
+    def _locator_non_empty(cls, v: str) -> str:
+        # `verify.verify_source` reads `source.locator` through
+        # `KBStore.read_under_root` for type=file sources; an empty /
+        # whitespace-only locator is a degenerate value that always
+        # surfaced as `external_status="missing"` anyway. Reject it at
+        # the model layer so the on-disk state stays meaningful.
+        if not v.strip():
+            raise ValueError(
+                "source locator must be a non-empty, non-whitespace string"
+            )
+        return v
+
 
 class Evidence(BaseModel):
     """Pointer into a Source backing a specific Claim.
