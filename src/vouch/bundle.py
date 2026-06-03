@@ -299,7 +299,7 @@ def _check_graph_integrity(
                     f"graph integrity: relation {rel.id} cites unknown source/evidence {eid!r}"
                 )
 
-    # Check pages (entities and sources fields only — claims already checked by put_page).
+    # Check pages — bundle import bypasses put_page, so all three ref fields need checking.
     for path, data in bundle_members.items():
         if not path.startswith("pages/"):
             continue
@@ -307,6 +307,11 @@ def _check_graph_integrity(
             page: Page = _deserialize_page(data.decode())
         except Exception:
             continue
+        for cid in page.claims:
+            if cid not in claim_ids:
+                issues.append(
+                    f"graph integrity: page {page.id} references unknown claim {cid!r}"
+                )
         for eid in page.entities:
             if eid not in entity_ids:
                 issues.append(

@@ -13,7 +13,7 @@ import yaml
 
 from vouch import bundle
 from vouch.models import Claim, Entity, EntityType, Page, Relation, RelationType
-from vouch.storage import KBStore
+from vouch.storage import KBStore, _serialize_page
 
 _UNSAFE_PATH_RE = r"traversal|absolute path|nul byte|unsafe path|empty path"
 
@@ -408,7 +408,6 @@ def test_import_check_flags_page_with_unknown_entity(
     store: KBStore, tmp_path: Path
 ) -> None:
     page = Page(id="p1", title="T", entities=["ghost-entity"])
-    from vouch.storage import _serialize_page
     page_bytes = _serialize_page(page).encode()
     bundle_path = tmp_path / "dangling-page.tar.gz"
     _write_multi_member_bundle(bundle_path, {"pages/p1.md": page_bytes})
@@ -422,7 +421,6 @@ def test_import_check_flags_page_with_unknown_source(
     store: KBStore, tmp_path: Path
 ) -> None:
     page = Page(id="p1", title="T", sources=["deadbeef" * 8])
-    from vouch.storage import _serialize_page
     page_bytes = _serialize_page(page).encode()
     bundle_path = tmp_path / "dangling-page-src.tar.gz"
     _write_multi_member_bundle(bundle_path, {"pages/p1.md": page_bytes})

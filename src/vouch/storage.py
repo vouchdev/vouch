@@ -433,7 +433,6 @@ class KBStore:
         to a consistent state on retry without raising if the relation file
         was already written in a previous partial execution.
         """
-        self._validate_relation(rel)
         path = self._relation_path(rel.id)
         if path.exists():
             self._embed_and_store(
@@ -441,6 +440,7 @@ class KBStore:
                 text=f"{rel.source} {rel.relation.value} {rel.target}",
             )
             return rel
+        self._validate_relation(rel)
         try:
             with path.open("x") as f:
                 f.write(_yaml_dump(rel.model_dump(mode="json")))
