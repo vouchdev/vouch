@@ -85,6 +85,37 @@ def test_lint_surfaces_legacy_uncited_claim_yaml_without_crashing(
     assert all(f.severity != "error" for f in good_findings), good_findings
 
 
+def test_lint_surfaces_legacy_empty_text_yaml_without_crashing(
+    store: KBStore,
+) -> None:
+    """Regression for the empty-required-field validator fix: an older KB
+    might already have a claim YAML whose `text` is empty (predates the
+    `_text_non_empty` validator). `vouch lint` must surface it as an
+    `invalid_claim` finding rather than blowing up with a bare
+    `pydantic.ValidationError`. Mirrors the #82-review pattern for
+    legacy uncited claims."""
+    src = store.put_source(b"e")
+    store.put_claim(Claim(id="good", text="t", evidence=[src.id]))
+
+    legacy_empty_text = (
+        'id: legacy-empty\n'
+        'text: ""\n'
+        "type: fact\n"
+        "status: stable\n"
+        "confidence: 1.0\n"
+        "evidence: ['" + src.id + "']\n"
+    )
+    (store.kb_dir / "claims" / "legacy-empty.yaml").write_text(legacy_empty_text)
+
+    report = health.lint(store)
+    codes = {f.code for f in report.findings}
+    assert "invalid_claim" in codes, [f.message for f in report.findings]
+    assert report.ok is False
+    # The good claim is still discovered — lint did not bail out on the bad one.
+    good_findings = [f for f in report.findings if "good" in f.object_ids]
+    assert all(f.severity != "error" for f in good_findings), good_findings
+
+
 def test_list_claims_filtered_by_status(store: KBStore) -> None:
     src = store.put_source(b"e")
     store.put_claim(Claim(id="c1", text="x", evidence=[src.id],

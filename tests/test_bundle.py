@@ -398,6 +398,121 @@ def test_import_rejects_uncited_claim(store: KBStore, tmp_path: Path) -> None:
     assert not (store.kb_dir / "claims" / "bundle-uncited.yaml").exists()
 
 
+def _write_single_member_bundle(
+    bundle_path: Path, member_name: str, body: bytes,
+) -> None:
+    """Build a manifest-consistent bundle with one member."""
+    manifest = {
+        "spec": bundle.SPEC_VERSION,
+        "bundle_id": "deadbeef",
+        "files": [{
+            "path": member_name,
+            "size": len(body),
+            "sha256": hashlib.sha256(body).hexdigest(),
+        }],
+        "counts": {},
+        "safety": {"has_proposed": False, "has_state_db": False,
+                   "has_audit_log": False},
+    }
+    with tarfile.open(bundle_path, "w:gz") as tar:
+        info = tarfile.TarInfo(member_name)
+        info.size = len(body)
+        tar.addfile(info, io.BytesIO(body))
+        mf_bytes = json.dumps(manifest).encode()
+        mf_info = tarfile.TarInfo(bundle.MANIFEST_NAME)
+        mf_info.size = len(mf_bytes)
+        tar.addfile(mf_info, io.BytesIO(mf_bytes))
+
+
+def test_import_rejects_claim_with_empty_text(
+    store: KBStore, tmp_path: Path,
+) -> None:
+    """A bundle whose claim YAML has `text: ""` is rejected by
+    `import_check` (`schema validation failed: …text must be non-empty…`)
+    because the new `Claim._text_non_empty` validator fires through
+    `_validate_content`'s `Claim.model_validate(...)` call. Same shape
+    as the existing uncited-claim test above (#81 / #82)."""
+    src = store.put_source(b"e")
+    empty_text_yaml = (
+        b'id: bundle-empty-text\n'
+        b'text: ""\n'
+        b"type: fact\n"
+        b"status: stable\n"
+        b"confidence: 1.0\n"
+        b"evidence: ['" + src.id.encode() + b"']\n"
+    )
+    bundle_path = tmp_path / "empty-text.tar.gz"
+    _write_single_member_bundle(
+        bundle_path, "claims/bundle-empty-text.yaml", empty_text_yaml,
+    )
+
+    diff = bundle.import_check(store.kb_dir, bundle_path)
+    assert not diff.ok
+    assert any(
+        "schema validation failed" in i and "text must be a non-empty" in i
+        for i in diff.issues
+    ), diff.issues
+    with pytest.raises(RuntimeError, match="schema validation failed"):
+        bundle.import_apply(store.kb_dir, bundle_path)
+    assert not (store.kb_dir / "claims" / "bundle-empty-text.yaml").exists()
+
+
+def test_import_rejects_entity_with_empty_name(
+    store: KBStore, tmp_path: Path,
+) -> None:
+    empty_name_yaml = (
+        b'id: bundle-empty-name\n'
+        b'name: ""\n'
+        b"type: concept\n"
+        b"aliases: []\n"
+    )
+    bundle_path = tmp_path / "empty-name.tar.gz"
+    _write_single_member_bundle(
+        bundle_path, "entities/bundle-empty-name.yaml", empty_name_yaml,
+    )
+
+    diff = bundle.import_check(store.kb_dir, bundle_path)
+    assert not diff.ok
+    assert any(
+        "schema validation failed" in i and "name must be a non-empty" in i
+        for i in diff.issues
+    ), diff.issues
+    with pytest.raises(RuntimeError, match="schema validation failed"):
+        bundle.import_apply(store.kb_dir, bundle_path)
+    assert not (store.kb_dir / "entities" / "bundle-empty-name.yaml").exists()
+
+
+def test_import_rejects_page_with_empty_title(
+    store: KBStore, tmp_path: Path,
+) -> None:
+    empty_title_md = (
+        b"---\n"
+        b'id: bundle-empty-title\n'
+        b'title: ""\n'
+        b"type: concept\n"
+        b"status: draft\n"
+        b"claims: []\n"
+        b"entities: []\n"
+        b"sources: []\n"
+        b"tags: []\n"
+        b"---\nbody"
+    )
+    bundle_path = tmp_path / "empty-title.tar.gz"
+    _write_single_member_bundle(
+        bundle_path, "pages/bundle-empty-title.md", empty_title_md,
+    )
+
+    diff = bundle.import_check(store.kb_dir, bundle_path)
+    assert not diff.ok
+    assert any(
+        "schema validation failed" in i and "title must be a non-empty" in i
+        for i in diff.issues
+    ), diff.issues
+    with pytest.raises(RuntimeError, match="schema validation failed"):
+        bundle.import_apply(store.kb_dir, bundle_path)
+    assert not (store.kb_dir / "pages" / "bundle-empty-title.md").exists()
+
+
 def test_import_check_passes_when_member_matches_manifest(
     store: KBStore, tmp_path: Path
 ) -> None:

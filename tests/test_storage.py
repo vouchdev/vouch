@@ -192,6 +192,84 @@ def test_update_claim_rejects_empty_evidence(store: KBStore) -> None:
     assert (store.kb_dir / "claims" / "c1.yaml").read_text() == persisted_before
 
 
+# --- empty required-text-field validators -------------------------------
+#
+# Same structural shape as #81 / #82 (Claim.evidence min-citation): the
+# non-empty contract for Claim.text / Entity.name / Page.title used to live
+# only in `propose_*` helpers; the model layer was silent so every other
+# write path (direct construction, bundle import via `_validate_content`,
+# in-place mutation + `update_claim`) landed empty/whitespace records.
+
+
+def test_claim_model_rejects_empty_text() -> None:
+    src_id = "a" * 64
+    with pytest.raises(ValidationError, match="claim text must be a non-empty"):
+        Claim(id="c1", text="", evidence=[src_id])
+
+
+def test_claim_model_rejects_whitespace_only_text() -> None:
+    src_id = "a" * 64
+    with pytest.raises(ValidationError, match="claim text must be a non-empty"):
+        Claim(id="c1", text="   \t\n", evidence=[src_id])
+
+
+def test_put_claim_rejects_empty_text(store: KBStore) -> None:
+    src = store.put_source(b"e")
+    with pytest.raises(ValidationError, match="claim text must be a non-empty"):
+        store.put_claim(Claim(id="c1", text="", evidence=[src.id]))
+    assert not (store.kb_dir / "claims" / "c1.yaml").exists()
+
+
+def test_update_claim_rejects_in_place_mutation_to_empty_text(
+    store: KBStore,
+) -> None:
+    """`update_claim` re-validates via `Claim.model_validate(...)` (the #82
+    review fix), so mutating `claim.text = ''` after `get_claim` is now
+    rejected before the YAML hits disk."""
+    src = store.put_source(b"e")
+    store.put_claim(Claim(id="c1", text="legit", evidence=[src.id]))
+    persisted_before = (store.kb_dir / "claims" / "c1.yaml").read_text()
+
+    c = store.get_claim("c1")
+    c.text = ""  # in-place mutation bypasses construction validators
+
+    with pytest.raises(ValidationError, match="claim text must be a non-empty"):
+        store.update_claim(c)
+    assert (store.kb_dir / "claims" / "c1.yaml").read_text() == persisted_before
+
+
+def test_entity_model_rejects_empty_name() -> None:
+    with pytest.raises(ValidationError, match="entity name must be a non-empty"):
+        Entity(id="e1", name="", type=EntityType.CONCEPT)
+
+
+def test_entity_model_rejects_whitespace_only_name() -> None:
+    with pytest.raises(ValidationError, match="entity name must be a non-empty"):
+        Entity(id="e1", name="   ", type=EntityType.CONCEPT)
+
+
+def test_put_entity_rejects_empty_name(store: KBStore) -> None:
+    with pytest.raises(ValidationError, match="entity name must be a non-empty"):
+        store.put_entity(Entity(id="e1", name="", type=EntityType.CONCEPT))
+    assert not (store.kb_dir / "entities" / "e1.yaml").exists()
+
+
+def test_page_model_rejects_empty_title() -> None:
+    with pytest.raises(ValidationError, match="page title must be a non-empty"):
+        Page(id="p1", title="")
+
+
+def test_page_model_rejects_whitespace_only_title() -> None:
+    with pytest.raises(ValidationError, match="page title must be a non-empty"):
+        Page(id="p1", title="\n  \t")
+
+
+def test_put_page_rejects_empty_title(store: KBStore) -> None:
+    with pytest.raises(ValidationError, match="page title must be a non-empty"):
+        store.put_page(Page(id="p1", title=""))
+    assert not (store.kb_dir / "pages" / "p1.md").exists()
+
+
 # --- pages ----------------------------------------------------------------
 
 

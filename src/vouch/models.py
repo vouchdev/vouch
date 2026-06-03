@@ -201,6 +201,23 @@ class Claim(BaseModel):
                 "(README §'Object model'; CONTRIBUTING §'Things we won't merge')"
             )
         return v
+
+    @field_validator("text")
+    @classmethod
+    def _text_non_empty(cls, v: str) -> str:
+        # Same shape as `_at_least_one_citation` (#81 / #82). README §"Object
+        # model" describes a Claim as "an atomic durable assertion" — a
+        # whitespace-only text isn't one. Was previously enforced only by
+        # `proposals.propose_claim` (`src/vouch/proposals.py:91-92`); every
+        # other write path — direct `Claim(...)`, `bundle.import_apply` via
+        # `_validate_content`, and `update_claim` re-validation — silently
+        # accepted `text=""` and landed an empty-text claim that surfaces
+        # in `kb.search` / `kb.context` with no readable content.
+        if not v.strip():
+            raise ValueError(
+                "claim text must be a non-empty, non-whitespace string"
+            )
+        return v
     entities: list[str] = Field(default_factory=list)
     supersedes: list[str] = Field(default_factory=list)
     superseded_by: str | None = None
@@ -231,6 +248,20 @@ class Entity(BaseModel):
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
 
+    @field_validator("name")
+    @classmethod
+    def _name_non_empty(cls, v: str) -> str:
+        # Mirrors `Claim._text_non_empty` / #81-#82. README §"Object model"
+        # describes Entity as "a typed named thing"; a whitespace-only name
+        # is not a name. `proposals.propose_entity` already raised
+        # `ProposalError("entity name is empty")`; the model layer now
+        # closes the direct-construction and bundle-import paths.
+        if not v.strip():
+            raise ValueError(
+                "entity name must be a non-empty, non-whitespace string"
+            )
+        return v
+
 
 class Relation(BaseModel):
     """Typed edge between entities / claims / pages."""
@@ -254,6 +285,21 @@ class Page(BaseModel):
     id: str
     title: str
     body: str = ""
+
+    @field_validator("title")
+    @classmethod
+    def _title_non_empty(cls, v: str) -> str:
+        # Mirrors `Claim._text_non_empty` / `Entity._name_non_empty`.
+        # `proposals.propose_page` already raised
+        # `ProposalError("page title is empty")` (`src/vouch/proposals.py:140-141`);
+        # the model layer now closes direct `Page(...)` construction and
+        # `bundle.import_apply` via `_validate_content`'s
+        # `_deserialize_page` round-trip.
+        if not v.strip():
+            raise ValueError(
+                "page title must be a non-empty, non-whitespace string"
+            )
+        return v
     type: PageType = PageType.CONCEPT
     status: PageStatus = PageStatus.DRAFT
     claims: list[str] = Field(default_factory=list)
