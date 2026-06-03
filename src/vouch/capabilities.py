@@ -74,7 +74,7 @@ def capabilities() -> Capabilities:
     try:
         import starlette  # noqa: F401
         import uvicorn  # noqa: F401
-        transports += ["http-jsonl", "mcp-http"]
+        transports += ["http", "mcp-http"]
     except ImportError:
         pass
 

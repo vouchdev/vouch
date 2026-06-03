@@ -805,8 +805,18 @@ def serve(transport: str, bind: str, auth_mode: str) -> None:
             from .auth import assert_loopback_for_no_auth
             if auth_mode == "none":
                 assert_loopback_for_no_auth(bind)
+            elif auth_mode in ("bearer", "token-file"):
+                raise click.ClickException(
+                    f"--auth {auth_mode} is not supported for --transport mcp-http; "
+                    "use --transport http for bearer-token auth."
+                )
+            host, _, port_str = bind.rpartition(":")
+            mcp_host = host or "127.0.0.1"
+            mcp_port = int(port_str) if port_str else 7749
             from .server import mcp
-            mcp.run(transport="streamable-http")
+            mcp.run(transport="streamable-http", host=mcp_host, port=mcp_port)
+        except click.ClickException:
+            raise
         except Exception as e:
             raise click.ClickException(str(e)) from e
 

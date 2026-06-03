@@ -23,10 +23,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
-import traceback
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from .auth import AuthError, assert_loopback_for_no_auth, require_auth, resolve_actor
 from .jsonl_server import HANDLERS
@@ -36,7 +38,7 @@ from .storage import ArtifactNotFoundError, KBNotFoundError, KBStore, discover_r
 try:
     from starlette.applications import Starlette
     from starlette.requests import Request
-    from starlette.responses import JSONResponse, Response
+    from starlette.responses import JSONResponse, Response, StreamingResponse
     from starlette.routing import Route
     _STARLETTE_AVAILABLE = True
 except ImportError:
@@ -108,8 +110,9 @@ def _make_dispatch_handler(auth_mode: str) -> Any:
             return _error_response("missing_param", str(e))
         except (ValueError, ProposalError, ArtifactNotFoundError) as e:
             return _error_response("invalid_request", str(e))
-        except Exception as e:
-            return _error_response("internal_error", f"{e}\n{traceback.format_exc()}")
+        except Exception:
+            logger.exception("handler %s failed", full_method)
+            return _error_response("internal_error", "internal server error")
         finally:
             if saved_agent is None:
                 os.environ.pop("VOUCH_AGENT", None)
@@ -187,8 +190,8 @@ def _make_sse_handler(auth_mode: str) -> Any:
                     data = json.dumps(record, default=str)
                     yield f"event: {event_name}\ndata: {data}\n\n".encode()
 
-        return Response(
-            content=generate(),
+        return StreamingResponse(
+            generate(),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",

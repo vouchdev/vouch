@@ -75,14 +75,31 @@ def verify_token(token: str, mode: str, kb_dir: Path) -> bool:
     """Return True if the token is valid for the given auth mode."""
     if mode == "none":
         return True
+    candidate_hash = _sha256_hex(token)
+    cfg = _load_server_config(kb_dir)
+    if cfg and cfg.tokens:
+        for entry in cfg.tokens:
+            stored = entry.token_hash
+            if stored.startswith("sha256:"):
+                stored = stored[len("sha256:"):]
+            if _safe_eq(candidate_hash, stored):
+                return True
     raw_token = _read_static_token(mode)
     if raw_token is None:
         return False
-    return _safe_eq(_sha256_hex(token), _sha256_hex(raw_token))
+    return _safe_eq(candidate_hash, _sha256_hex(raw_token))
 
 
 def _read_static_token(mode: str) -> str | None:
-    """Read the configured token from env or file."""
+    """Read the configured token from env or file.
+
+    bearer:     env var first, then token file.
+    token-file: token file only (re-read on every call, enabling hot rotation).
+    """
+    if mode == "token-file":
+        if _DEFAULT_TOKEN_FILE.exists():
+            return _DEFAULT_TOKEN_FILE.read_text().strip()
+        return None
     env_token = os.environ.get("VOUCH_SERVER_TOKEN")
     if env_token:
         return env_token
