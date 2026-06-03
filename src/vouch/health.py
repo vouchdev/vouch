@@ -199,30 +199,37 @@ def rebuild_index(store: KBStore) -> dict:
             for p in sorted((store.kb_dir / "claims").glob("*.yaml")):
                 try:
                     c: Claim = Claim.model_validate(_yaml_load(p.read_text()))
-                    index_db.index_claim(
-                        conn, id=c.id, text=c.text,
-                        type=c.type.value, status=c.status.value, tags=c.tags,
-                    )
                 except Exception as exc:
                     skipped.append((p.name, str(exc)))
+                    continue
+                index_db.index_claim(
+                    conn, id=c.id, text=c.text,
+                    type=c.type.value, status=c.status.value, tags=c.tags,
+                )
             for p in sorted((store.kb_dir / "pages").glob("*.md")):
                 try:
                     pg: Page = _deserialize_page(p.read_text())
-                    index_db.index_page(
-                        conn, id=pg.id, title=pg.title, body=pg.body,
-                        type=pg.type.value, tags=pg.tags,
-                    )
                 except Exception as exc:
                     skipped.append((p.name, str(exc)))
+                    continue
+                index_db.index_page(
+                    conn, id=pg.id, title=pg.title, body=pg.body,
+                    type=pg.type.value, tags=pg.tags,
+                )
             for p in sorted((store.kb_dir / "entities").glob("*.yaml")):
                 try:
                     e: Entity = Entity.model_validate(_yaml_load(p.read_text()))
-                    index_db.index_entity(
-                        conn, id=e.id, name=e.name, description=e.description,
-                        type=e.type.value, aliases=e.aliases,
-                    )
                 except Exception as exc:
                     skipped.append((p.name, str(exc)))
+                    continue
+                index_db.index_entity(
+                    conn, id=e.id, name=e.name, description=e.description,
+                    type=e.type.value, aliases=e.aliases,
+                )
+            # Embeddings are built into the temp DB before the swap so the
+            # entire operation remains atomic — a failure here aborts the
+            # rename and the live index is left untouched.
+            _write_embeddings(conn, store)
         shutil.move(str(tmp_path), str(db_path))
     except Exception:
         tmp_path.unlink(missing_ok=True)
@@ -234,33 +241,40 @@ def rebuild_index(store: KBStore) -> dict:
             stacklevel=2,
         )
 
-    _rebuild_embeddings(store)
     return index_db.stats(store.kb_dir)
 
 
-def _rebuild_embeddings(store: KBStore) -> None:
+def _write_embeddings(conn, store: KBStore) -> None:  # type: ignore[no-untyped-def]
+    """Write embedding vectors into *conn* (caller owns the connection/commit).
+
+    No-ops silently if no embedder is registered or its deps are absent.
+    """
     try:
         from .embeddings import get_embedder
         embedder = get_embedder()
     except Exception:
         return
+    texts: list[tuple[str, str, str]] = []
+    for c in store.list_claims():
+        texts.append(("claim", c.id, c.text))
+    for p in store.list_pages():
+        texts.append(("page", p.id, f"{p.title} {p.body}"))
+    for e in store.list_entities():
+        texts.append(("entity", e.id, f"{e.name} {e.description or ''}"))
+    if not texts:
+        return
+    batch_size = 64
+    for i in range(0, len(texts), batch_size):
+        batch = texts[i:i + batch_size]
+        vecs = embedder.encode_batch([t[2] for t in batch])
+        for (kind, eid, _), row in zip(batch, vecs, strict=True):
+            index_db.index_embedding(conn, kind=kind, id=eid,
+                                     vec=row.tolist())
+
+
+def _rebuild_embeddings(store: KBStore) -> None:
     with index_db.open_db(store.kb_dir) as conn:
-        texts: list[tuple[str, str, str]] = []
-        for c in store.list_claims():
-            texts.append(("claim", c.id, c.text))
-        for p in store.list_pages():
-            texts.append(("page", p.id, f"{p.title} {p.body}"))
-        for e in store.list_entities():
-            texts.append(("entity", e.id, f"{e.name} {e.description or ''}"))
-        if not texts:
-            return
-        batch_size = 64
-        for i in range(0, len(texts), batch_size):
-            batch = texts[i:i + batch_size]
-            vecs = embedder.encode_batch([t[2] for t in batch])
-            for (kind, eid, _), row in zip(batch, vecs, strict=True):
-                index_db.index_embedding(conn, kind=kind, id=eid,
-                                         vec=row.tolist())
+        _write_embeddings(conn, store)
 
 
 # --- helpers used by `vouch discover` (CLI) -------------------------------
