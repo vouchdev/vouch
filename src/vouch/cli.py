@@ -773,15 +773,42 @@ def import_apply_cmd(bundle_path: str, on_conflict: str) -> None:
 
 @cli.command()
 @click.option("--transport", default="stdio", show_default=True,
-              type=click.Choice(["stdio", "jsonl"]))
-def serve(transport: str) -> None:
-    """Run the MCP server (stdio) or the JSONL tool server."""
+              type=click.Choice(["stdio", "jsonl", "http", "mcp-http"]))
+@click.option("--bind", default="127.0.0.1:7749", show_default=True,
+              help="HOST:PORT for the HTTP transport (ignored for stdio/jsonl).")
+@click.option("--auth", "auth_mode", default="token-file", show_default=True,
+              type=click.Choice(["bearer", "token-file", "none"]),
+              help="Auth mode for the HTTP transport.")
+def serve(transport: str, bind: str, auth_mode: str) -> None:
+    """Run the MCP server (stdio), the JSONL tool server, or an HTTP server."""
     if transport == "stdio":
         from .server import run_stdio
         run_stdio()
-    else:
+    elif transport == "jsonl":
         from .jsonl_server import run_jsonl
         run_jsonl()
+    elif transport == "http":
+        try:
+            from .http_server import run_http
+        except ImportError as e:
+            raise click.ClickException(str(e)) from e
+        run_http(bind=bind, auth_mode=auth_mode)
+    else:
+        try:
+            from starlette.applications import Starlette  # noqa: F401
+        except ImportError as e:
+            raise click.ClickException(
+                "mcp-http transport requires the 'http' optional dependencies: "
+                "pip install 'vouch-kb[http]'"
+            ) from e
+        try:
+            from .auth import assert_loopback_for_no_auth
+            if auth_mode == "none":
+                assert_loopback_for_no_auth(bind)
+            from .server import mcp
+            mcp.run(transport="streamable-http")
+        except Exception as e:
+            raise click.ClickException(str(e)) from e
 
 
 if __name__ == "__main__":

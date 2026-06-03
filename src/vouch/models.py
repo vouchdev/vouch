@@ -374,3 +374,23 @@ class Capabilities(BaseModel):
             "audit_log": True,
         }
     )
+    auth_modes: list[str] = Field(default_factory=list)
+
+
+# --- server config (VEP-0004) ----------------------------------------------
+
+
+class TokenEntry(BaseModel):
+    """One named bearer token stored as a sha256 hash."""
+
+    name: str
+    token_hash: str = Field(description="'sha256:<hex>' — hash stored, not plaintext")
+
+
+class ServerConfig(BaseModel):
+    """Optional server: stanza in .vouch/config.yaml (VEP-0004)."""
+
+    bind: str = "127.0.0.1:7749"
+    auth: str = "token-file"
+    tls: bool = False
+    tokens: list[TokenEntry] = Field(default_factory=list)

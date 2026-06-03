@@ -69,10 +69,20 @@ def capabilities() -> Capabilities:
         retrieval.append("hybrid")
     except Exception:
         pass
+
+    transports = ["mcp", "jsonl"]
+    try:
+        import starlette  # noqa: F401
+        import uvicorn  # noqa: F401
+        transports += ["http-jsonl", "mcp-http"]
+    except ImportError:
+        pass
+
     return Capabilities(
         version=__version__,
         methods=METHODS,
         retrieval=retrieval,
         review_gated=True,
-        transports=["mcp", "jsonl"],
+        transports=transports,
+        auth_modes=["none", "bearer", "token-file"],
     )
