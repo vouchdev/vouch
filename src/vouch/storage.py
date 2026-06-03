@@ -328,6 +328,12 @@ class KBStore:
         for cid in page.claims:
             if not self._claim_path(cid).exists():
                 raise ValueError(f"page {page.id} references unknown claim {cid}")
+        for eid in page.entities:
+            if not self._entity_path(eid).exists():
+                raise ValueError(f"page {page.id} references unknown entity {eid}")
+        for sid in page.sources:
+            if not (self._source_dir(sid) / "meta.yaml").exists():
+                raise ValueError(f"page {page.id} references unknown source {sid}")
         try:
             with self._page_path(page.id).open("x") as f:
                 f.write(_serialize_page(page))
@@ -381,7 +387,32 @@ class KBStore:
 
     # --- relations ---------------------------------------------------------
 
+    def _relation_referable(self, artifact_id: str) -> bool:
+        """Return True if artifact_id resolves to any referenceable KB artifact."""
+        return (
+            self._claim_path(artifact_id).exists()
+            or (self._source_dir(artifact_id) / "meta.yaml").exists()
+            or self._entity_path(artifact_id).exists()
+            or self._page_path(artifact_id).exists()
+        )
+
+    def _validate_relation(self, rel: Relation) -> None:
+        for endpoint, label in ((rel.source, "source"), (rel.target, "target")):
+            if not self._relation_referable(endpoint):
+                raise ValueError(
+                    f"relation {rel.id} {label} {endpoint!r} does not exist"
+                )
+        for eid in rel.evidence:
+            if (self._source_dir(eid) / "meta.yaml").exists():
+                continue
+            if self._evidence_path(eid).exists():
+                continue
+            raise ValueError(
+                f"relation {rel.id} cites unknown source/evidence {eid!r}"
+            )
+
     def put_relation(self, rel: Relation) -> Relation:
+        self._validate_relation(rel)
         try:
             with self._relation_path(rel.id).open("x") as f:
                 f.write(_yaml_dump(rel.model_dump(mode="json")))
@@ -402,6 +433,7 @@ class KBStore:
         to a consistent state on retry without raising if the relation file
         was already written in a previous partial execution.
         """
+        self._validate_relation(rel)
         path = self._relation_path(rel.id)
         if path.exists():
             self._embed_and_store(

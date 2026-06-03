@@ -148,6 +148,71 @@ def test_relation_round_trip(store: KBStore) -> None:
     assert [r.id for r in store.relations_to("b")] == ["a-uses-b"]
 
 
+def test_relation_rejects_dangling_source(store: KBStore) -> None:
+    store.put_entity(Entity(id="b", name="B", type=EntityType.PROJECT))
+    with pytest.raises(ValueError, match=r"source.*does not exist"):
+        store.put_relation(Relation(
+            id="bad-rel", source="ghost", relation=RelationType.USES, target="b",
+        ))
+
+
+def test_relation_rejects_dangling_target(store: KBStore) -> None:
+    store.put_entity(Entity(id="a", name="A", type=EntityType.PROJECT))
+    with pytest.raises(ValueError, match=r"target.*does not exist"):
+        store.put_relation(Relation(
+            id="bad-rel", source="a", relation=RelationType.USES, target="ghost",
+        ))
+
+
+def test_relation_rejects_unknown_evidence(store: KBStore) -> None:
+    store.put_entity(Entity(id="a", name="A", type=EntityType.PROJECT))
+    store.put_entity(Entity(id="b", name="B", type=EntityType.PROJECT))
+    with pytest.raises(ValueError, match="unknown source/evidence"):
+        store.put_relation(Relation(
+            id="bad-rel", source="a", relation=RelationType.USES, target="b",
+            evidence=["deadbeef"],
+        ))
+
+
+def test_relation_accepts_claim_and_page_endpoints(store: KBStore) -> None:
+    src = store.put_source(b"e")
+    store.put_claim(Claim(id="c1", text="t", evidence=[src.id]))
+    store.put_page(Page(id="p1", title="P1"))
+    rel = Relation(id="c1-uses-p1", source="c1", relation=RelationType.USES, target="p1")
+    stored = store.put_relation(rel)
+    assert stored.id == "c1-uses-p1"
+
+
+def test_relation_accepts_source_as_evidence(store: KBStore) -> None:
+    src = store.put_source(b"e")
+    store.put_entity(Entity(id="a", name="A", type=EntityType.PROJECT))
+    store.put_entity(Entity(id="b", name="B", type=EntityType.PROJECT))
+    rel = Relation(
+        id="a-uses-b", source="a", relation=RelationType.USES, target="b",
+        evidence=[src.id],
+    )
+    stored = store.put_relation(rel)
+    assert stored.evidence == [src.id]
+
+
+def test_page_rejects_unknown_entity(store: KBStore) -> None:
+    with pytest.raises(ValueError, match="unknown entity"):
+        store.put_page(Page(id="p1", title="T", entities=["ghost-entity"]))
+
+
+def test_page_rejects_unknown_source(store: KBStore) -> None:
+    with pytest.raises(ValueError, match="unknown source"):
+        store.put_page(Page(id="p1", title="T", sources=["0" * 64]))
+
+
+def test_page_accepts_valid_entity_and_source(store: KBStore) -> None:
+    src = store.put_source(b"raw")
+    ent = store.put_entity(Entity(id="ent1", name="E", type=EntityType.PROJECT))
+    page = store.put_page(Page(id="p1", title="T", entities=[ent.id], sources=[src.id]))
+    assert page.entities == [ent.id]
+    assert page.sources == [src.id]
+
+
 # --- evidence -------------------------------------------------------------
 
 
@@ -289,6 +354,43 @@ def test_propose_page_round_trip_through_approval(store: KBStore) -> None:
     artifact = approve(store, pr.id, approved_by="u")
     assert isinstance(artifact, Page)
     assert store.get_page(artifact.id).body == "body"
+
+
+def test_propose_relation_rejects_unknown_source_endpoint(store: KBStore) -> None:
+    store.put_entity(Entity(id="b", name="B", type=EntityType.PROJECT))
+    with pytest.raises(ProposalError, match="unknown relation source"):
+        propose_relation(store, src="ghost", relation="uses", target="b", proposed_by="a")
+
+
+def test_propose_relation_rejects_unknown_target_endpoint(store: KBStore) -> None:
+    store.put_entity(Entity(id="a", name="A", type=EntityType.PROJECT))
+    with pytest.raises(ProposalError, match="unknown relation target"):
+        propose_relation(store, src="a", relation="uses", target="ghost", proposed_by="a")
+
+
+def test_propose_relation_rejects_unknown_evidence(store: KBStore) -> None:
+    store.put_entity(Entity(id="a", name="A", type=EntityType.PROJECT))
+    store.put_entity(Entity(id="b", name="B", type=EntityType.PROJECT))
+    with pytest.raises(ProposalError, match="unknown source/evidence"):
+        propose_relation(
+            store, src="a", relation="uses", target="b",
+            evidence=["deadbeef"], proposed_by="a",
+        )
+
+
+def test_propose_page_rejects_unknown_claim(store: KBStore) -> None:
+    with pytest.raises(ProposalError, match="unknown claim"):
+        propose_page(store, title="T", body="", claim_ids=["ghost"], proposed_by="a")
+
+
+def test_propose_page_rejects_unknown_entity(store: KBStore) -> None:
+    with pytest.raises(ProposalError, match="unknown entity"):
+        propose_page(store, title="T", body="", entity_ids=["ghost"], proposed_by="a")
+
+
+def test_propose_page_rejects_unknown_source(store: KBStore) -> None:
+    with pytest.raises(ProposalError, match="unknown source"):
+        propose_page(store, title="T", body="", source_ids=["0" * 64], proposed_by="a")
 
 
 # --- lifecycle ------------------------------------------------------------

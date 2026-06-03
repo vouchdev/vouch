@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+import yaml
 
 from vouch import health
 from vouch.models import Claim, ClaimStatus, Relation
@@ -29,8 +30,12 @@ def test_lint_finds_broken_citation_when_source_removed(store: KBStore) -> None:
 def test_lint_dangling_relation(store: KBStore) -> None:
     src = store.put_source(b"e")
     store.put_claim(Claim(id="c1", text="t", evidence=[src.id]))
-    store.put_relation(Relation(id="rel-x", source="c1",
-                                relation="uses", target="ghost"))
+    # Write directly to disk to simulate pre-existing corrupt state;
+    # put_relation now rejects dangling endpoints.
+    rel = Relation(id="rel-x", source="c1", relation="uses", target="ghost")
+    (store.kb_dir / "relations" / "rel-x.yaml").write_text(
+        yaml.safe_dump(rel.model_dump(mode="json"))
+    )
     report = health.lint(store)
     codes = {f.code for f in report.findings}
     assert "dangling_relation" in codes

@@ -9,9 +9,10 @@ import tarfile
 from pathlib import Path
 
 import pytest
+import yaml
 
 from vouch import bundle
-from vouch.models import Claim, Page
+from vouch.models import Claim, Entity, EntityType, Page, Relation, RelationType
 from vouch.storage import KBStore
 
 _UNSAFE_PATH_RE = r"traversal|absolute path|nul byte|unsafe path|empty path"
@@ -310,3 +311,122 @@ def test_import_check_passes_when_member_matches_manifest(
 
     diff = bundle.import_check(store.kb_dir, bundle_path)
     assert not any("hash mismatch" in i for i in diff.issues), diff.issues
+
+
+# --- graph integrity ----------------------------------------------------------
+
+
+def _write_multi_member_bundle(bundle_path: Path, members: dict[str, bytes]) -> None:
+    """Build a valid (hash-consistent) bundle from a dict of path -> bytes."""
+    files = [
+        {"path": p, "size": len(d), "sha256": hashlib.sha256(d).hexdigest()}
+        for p, d in members.items()
+    ]
+    h = hashlib.sha256()
+    for f in sorted(files, key=lambda f: f["path"]):
+        h.update(f["sha256"].encode())
+    manifest = {
+        "spec": bundle.SPEC_VERSION,
+        "bundle_id": h.hexdigest(),
+        "files": files,
+        "counts": {},
+        "safety": {"has_proposed": False, "has_state_db": False, "has_audit_log": False},
+    }
+    with tarfile.open(bundle_path, "w:gz") as tar:
+        for path, data in members.items():
+            info = tarfile.TarInfo(path)
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+        mf_bytes = json.dumps(manifest).encode()
+        mf_info = tarfile.TarInfo(bundle.MANIFEST_NAME)
+        mf_info.size = len(mf_bytes)
+        tar.addfile(mf_info, io.BytesIO(mf_bytes))
+
+
+def test_import_check_flags_dangling_relation_endpoint(
+    store: KBStore, tmp_path: Path
+) -> None:
+    rel = Relation(id="r1", source="ghost-src", relation=RelationType.USES, target="ghost-tgt")
+    rel_bytes = yaml.safe_dump(rel.model_dump(mode="json")).encode()
+    bundle_path = tmp_path / "dangling.tar.gz"
+    _write_multi_member_bundle(bundle_path, {"relations/r1.yaml": rel_bytes})
+
+    diff = bundle.import_check(store.kb_dir, bundle_path)
+    assert not diff.ok
+    assert any("graph integrity" in i and "ghost-src" in i for i in diff.issues), diff.issues
+    assert any("graph integrity" in i and "ghost-tgt" in i for i in diff.issues), diff.issues
+
+
+def test_import_check_passes_for_relation_with_valid_endpoints_in_bundle(
+    store: KBStore, tmp_path: Path
+) -> None:
+    ent_a = Entity(id="a", name="A", type=EntityType.PROJECT)
+    ent_b = Entity(id="b", name="B", type=EntityType.PROJECT)
+    rel = Relation(id="r1", source="a", relation=RelationType.USES, target="b")
+    members = {
+        "entities/a.yaml": yaml.safe_dump(ent_a.model_dump(mode="json")).encode(),
+        "entities/b.yaml": yaml.safe_dump(ent_b.model_dump(mode="json")).encode(),
+        "relations/r1.yaml": yaml.safe_dump(rel.model_dump(mode="json")).encode(),
+    }
+    bundle_path = tmp_path / "good.tar.gz"
+    _write_multi_member_bundle(bundle_path, members)
+
+    diff = bundle.import_check(store.kb_dir, bundle_path)
+    assert not any("graph integrity" in i for i in diff.issues), diff.issues
+
+
+def test_import_check_resolves_relation_endpoint_against_existing_kb(
+    store: KBStore, tmp_path: Path
+) -> None:
+    store.put_entity(Entity(id="existing", name="E", type=EntityType.PROJECT))
+    store.put_entity(Entity(id="also-existing", name="F", type=EntityType.PROJECT))
+    rel = Relation(
+        id="r1", source="existing", relation=RelationType.USES, target="also-existing",
+    )
+    rel_bytes = yaml.safe_dump(rel.model_dump(mode="json")).encode()
+    bundle_path = tmp_path / "existing.tar.gz"
+    _write_multi_member_bundle(bundle_path, {"relations/r1.yaml": rel_bytes})
+
+    diff = bundle.import_check(store.kb_dir, bundle_path)
+    assert not any("graph integrity" in i for i in diff.issues), diff.issues
+
+
+def test_import_apply_refuses_dangling_relation(
+    store: KBStore, tmp_path: Path
+) -> None:
+    rel = Relation(id="r1", source="ghost", relation=RelationType.USES, target="also-ghost")
+    rel_bytes = yaml.safe_dump(rel.model_dump(mode="json")).encode()
+    bundle_path = tmp_path / "dangling.tar.gz"
+    _write_multi_member_bundle(bundle_path, {"relations/r1.yaml": rel_bytes})
+
+    with pytest.raises(RuntimeError, match="graph integrity"):
+        bundle.import_apply(store.kb_dir, bundle_path)
+    assert not (store.kb_dir / "relations" / "r1.yaml").exists()
+
+
+def test_import_check_flags_page_with_unknown_entity(
+    store: KBStore, tmp_path: Path
+) -> None:
+    page = Page(id="p1", title="T", entities=["ghost-entity"])
+    from vouch.storage import _serialize_page
+    page_bytes = _serialize_page(page).encode()
+    bundle_path = tmp_path / "dangling-page.tar.gz"
+    _write_multi_member_bundle(bundle_path, {"pages/p1.md": page_bytes})
+
+    diff = bundle.import_check(store.kb_dir, bundle_path)
+    assert not diff.ok
+    assert any("graph integrity" in i and "ghost-entity" in i for i in diff.issues), diff.issues
+
+
+def test_import_check_flags_page_with_unknown_source(
+    store: KBStore, tmp_path: Path
+) -> None:
+    page = Page(id="p1", title="T", sources=["deadbeef" * 8])
+    from vouch.storage import _serialize_page
+    page_bytes = _serialize_page(page).encode()
+    bundle_path = tmp_path / "dangling-page-src.tar.gz"
+    _write_multi_member_bundle(bundle_path, {"pages/p1.md": page_bytes})
+
+    diff = bundle.import_check(store.kb_dir, bundle_path)
+    assert not diff.ok
+    assert any("graph integrity" in i and "unknown source" in i for i in diff.issues), diff.issues

@@ -28,7 +28,7 @@ from typing import Any
 import yaml
 
 from . import audit
-from .models import Claim, Entity, Evidence, Proposal, Relation, Session, Source
+from .models import Claim, Entity, Evidence, Page, Proposal, Relation, Session, Source
 from .storage import _deserialize_page, sha256_hex
 
 MANIFEST_NAME = "manifest.json"
@@ -231,6 +231,94 @@ def _validate_content(path: str, data: bytes, issues: list[str]) -> None:
         issues.append(f"schema validation failed: {path}: {e}")
 
 
+def _check_graph_integrity(
+    kb_dir: Path,
+    bundle_members: dict[str, bytes],
+    issues: list[str],
+) -> None:
+    """Cross-artifact integrity pass: verify relation endpoints and page
+    entity/source references resolve within the merged id space (destination
+    KB plus incoming bundle).  Mirrors the invariants enforced by
+    storage.put_relation and storage.put_page at write time.
+    """
+    # Build the merged id sets from disk (destination) plus bundle (incoming).
+    def _disk_ids(subdir: str, glob: str) -> set[str]:
+        d = kb_dir / subdir
+        if not d.is_dir():
+            return set()
+        return {p.stem for p in d.glob(glob)}
+
+    claim_ids: set[str] = _disk_ids("claims", "*.yaml")
+    entity_ids: set[str] = _disk_ids("entities", "*.yaml")
+    source_ids: set[str] = {
+        p.parent.name
+        for p in (kb_dir / "sources").rglob("meta.yaml")
+        if p.is_file()
+    } if (kb_dir / "sources").is_dir() else set()
+    page_ids: set[str] = _disk_ids("pages", "*.md")
+    evidence_ids: set[str] = _disk_ids("evidence", "*.yaml")
+
+    # Layer in bundle members.
+    for path, data in bundle_members.items():
+        parts = path.split("/")
+        if len(parts) < 2:
+            continue
+        subdir = parts[0]
+        try:
+            if subdir == "claims":
+                claim_ids.add(Claim.model_validate(yaml.safe_load(data)).id)
+            elif subdir == "entities":
+                entity_ids.add(Entity.model_validate(yaml.safe_load(data)).id)
+            elif subdir == "sources" and path.endswith("/meta.yaml"):
+                source_ids.add(Source.model_validate(yaml.safe_load(data)).id)
+            elif subdir == "pages":
+                page_ids.add(_deserialize_page(data.decode()).id)
+            elif subdir == "evidence":
+                evidence_ids.add(Evidence.model_validate(yaml.safe_load(data)).id)
+        except Exception:
+            pass  # schema issues are already caught by _validate_content
+
+    referable = claim_ids | source_ids | entity_ids | page_ids
+
+    # Check relations.
+    for path, data in bundle_members.items():
+        if not path.startswith("relations/"):
+            continue
+        try:
+            rel = Relation.model_validate(yaml.safe_load(data))
+        except Exception:
+            continue
+        for endpoint, label in ((rel.source, "source"), (rel.target, "target")):
+            if endpoint not in referable:
+                issues.append(
+                    f"graph integrity: relation {rel.id} {label} {endpoint!r} not found"
+                )
+        for eid in rel.evidence:
+            if eid not in source_ids and eid not in evidence_ids:
+                issues.append(
+                    f"graph integrity: relation {rel.id} cites unknown source/evidence {eid!r}"
+                )
+
+    # Check pages (entities and sources fields only — claims already checked by put_page).
+    for path, data in bundle_members.items():
+        if not path.startswith("pages/"):
+            continue
+        try:
+            page: Page = _deserialize_page(data.decode())
+        except Exception:
+            continue
+        for eid in page.entities:
+            if eid not in entity_ids:
+                issues.append(
+                    f"graph integrity: page {page.id} references unknown entity {eid!r}"
+                )
+        for sid in page.sources:
+            if sid not in source_ids:
+                issues.append(
+                    f"graph integrity: page {page.id} references unknown source {sid!r}"
+                )
+
+
 def import_check(kb_dir: Path, bundle_path: Path) -> ImportCheckResult:
     """Diff a bundle against the destination KB without writing anything."""
     new_files: list[str] = []
@@ -262,6 +350,7 @@ def import_check(kb_dir: Path, bundle_path: Path) -> ImportCheckResult:
                 identical.append(f["path"])
             else:
                 conflicts.append(f["path"])
+        bundle_members: dict[str, bytes] = {}
         for member in tar.getmembers():
             if member.name == MANIFEST_NAME or not member.isfile():
                 continue
@@ -278,7 +367,9 @@ def import_check(kb_dir: Path, bundle_path: Path) -> ImportCheckResult:
                 issues.append(f"hash mismatch: {member.name}")
                 continue
             _validate_content(member.name, body, issues)
+            bundle_members[member.name] = body
 
+    _check_graph_integrity(kb_dir, bundle_members, issues)
     return ImportCheckResult(
         ok=not issues, bundle_id=bundle_id,
         new_files=new_files, conflicts=conflicts,

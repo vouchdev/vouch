@@ -130,6 +130,21 @@ def propose_page(
 ) -> Proposal:
     if not title.strip():
         raise ProposalError("page title is empty")
+    for cid in claim_ids or []:
+        try:
+            store.get_claim(cid)
+        except Exception as e:
+            raise ProposalError(f"unknown claim id: {cid}") from e
+    for eid in entity_ids or []:
+        try:
+            store.get_entity(eid)
+        except Exception as e:
+            raise ProposalError(f"unknown entity id: {eid}") from e
+    for sid in source_ids or []:
+        try:
+            store.get_source(sid)
+        except Exception as e:
+            raise ProposalError(f"unknown source id: {sid}") from e
     payload = {
         "id": slug_hint or _slugify(title),
         "title": title.strip(),
@@ -176,6 +191,22 @@ def propose_entity(
     )
 
 
+def _resolve_artifact(store: KBStore, artifact_id: str) -> bool:
+    """Return True if artifact_id resolves to any referenceable KB artifact."""
+    for getter in (store.get_claim, store.get_entity, store.get_page):
+        try:
+            getter(artifact_id)  # type: ignore[call-arg]
+            return True
+        except Exception:
+            pass
+    try:
+        store.get_source(artifact_id)
+        return True
+    except Exception:
+        pass
+    return False
+
+
 def propose_relation(
     store: KBStore,
     *,
@@ -191,6 +222,18 @@ def propose_relation(
 ) -> Proposal:
     if not src or not target or not relation:
         raise ProposalError("relation needs src, relation, target")
+    if not _resolve_artifact(store, src):
+        raise ProposalError(f"unknown relation source id: {src}")
+    if not _resolve_artifact(store, target):
+        raise ProposalError(f"unknown relation target id: {target}")
+    for eid in evidence or []:
+        try:
+            store.get_source(eid)
+        except Exception:
+            try:
+                store.get_evidence(eid)
+            except Exception as e:
+                raise ProposalError(f"unknown source/evidence id: {eid}") from e
     rid = f"{src}--{relation}--{target}"
     payload = {
         "id": _slugify(rid),
