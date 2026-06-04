@@ -24,6 +24,7 @@ from . import __version__, bundle, health
 from . import audit as audit_mod
 from . import lifecycle as life
 from . import migrations as migrations_mod
+from . import pr_cache as prc_mod
 from . import sessions as sess_mod
 from . import sync as sync_mod
 from . import verify as verify_mod
@@ -1283,6 +1284,165 @@ def serve(transport: str, host: str, port: int | None, token: str | None,
         except RuntimeError as e:
             # e.g. the non-loopback bind guard — show a clean Error: line.
             raise click.ClickException(str(e)) from e
+
+
+# --- pr-cache: dedup PR raises against a target repo ----------------------
+
+
+@cli.group(name="pr-cache")
+def pr_cache_group() -> None:
+    """Cache a target repo's merged/closed PRs to prevent duplicate PR raises.
+
+    Workflow:
+
+    \b
+        vouch pr-cache build https://github.com/owner/repo --analyze-closed
+        vouch pr-cache check owner/repo --topic "fix doc preview accessible"
+        vouch pr-cache show owner/repo --state closed --json
+    """
+
+
+@pr_cache_group.command("build")
+@click.argument("repo")
+@click.option("--state", type=click.Choice(["merged", "closed", "all"]), default="all",
+              show_default=True, help="Which PR states to fetch.")
+@click.option("--limit", type=int, default=200, show_default=True,
+              help="Max PRs per state to fetch from gh.")
+@click.option("--analyze-closed", is_flag=True,
+              help="Run Claude/Anthropic to summarise WHY each closed-not-merged "
+                   "PR was closed (uses local `claude` CLI if present, else "
+                   "ANTHROPIC_API_KEY). Skipped silently when neither is set.")
+@click.option("--reanalyze", is_flag=True,
+              help="Re-run close-reason analysis even if a previous result is cached.")
+@click.option("--analyzer", type=click.Choice(["auto", "claude-cli", "anthropic-api", "none"]),
+              default="auto", show_default=True,
+              help="Which close-reason analyzer to prefer.")
+@click.option("--no-fetch-files", is_flag=True,
+              help="Skip per-PR file-list fetch (faster, but dedup by file overlap stops working).")
+@click.option("--cache-dir", default=None, type=click.Path(file_okay=False),
+              help="Override cache directory (also env VOUCH_PR_CACHE_DIR).")
+def pr_cache_build(repo: str, state: str, limit: int, analyze_closed: bool,
+                   reanalyze: bool, analyzer: str, no_fetch_files: bool,
+                   cache_dir: str | None) -> None:
+    """Fetch merged/closed PRs for REPO and upsert into the local cache."""
+    with _cli_errors():
+        ref = prc_mod.parse_repo(repo)
+        try:
+            result = prc_mod.build(
+                ref,
+                state=state,
+                limit=limit,
+                analyze_closed=analyze_closed,
+                reanalyze=reanalyze,
+                analyzer=analyzer,
+                cache_dir=Path(cache_dir) if cache_dir else None,
+                fetch_files=not no_fetch_files,
+            )
+        except prc_mod.GHError as e:
+            raise click.ClickException(str(e)) from e
+    _emit_json({
+        "repo": ref.slug,
+        "fetched": result.fetched,
+        "new": result.new,
+        "updated": result.updated,
+        "analyzed": result.analyzed,
+        "skipped_analysis": result.skipped_analysis,
+        "cache_path": str(result.path),
+    })
+
+
+@pr_cache_group.command("check")
+@click.argument("repo")
+@click.option("--topic", required=True,
+              help="Short description of the PR you're about to raise (title-like text).")
+@click.option("--files", default="",
+              help="Comma-separated list of paths the planned PR would touch "
+                   "(boosts dedup precision).")
+@click.option("--min-score", default=0.15, show_default=True, type=float,
+              help="Minimum similarity (0..1) for a cached PR to count as a duplicate signal.")
+@click.option("--top-k", default=5, show_default=True, type=int)
+@click.option("--cache-dir", default=None, type=click.Path(file_okay=False),
+              help="Override cache directory (also env VOUCH_PR_CACHE_DIR).")
+def pr_cache_check(repo: str, topic: str, files: str, min_score: float,
+                   top_k: int, cache_dir: str | None) -> None:
+    """Look up cached PRs similar to TOPIC; warns of likely-duplicate raises."""
+    with _cli_errors():
+        ref = prc_mod.parse_repo(repo)
+        path = prc_mod.cache_path_for(ref, Path(cache_dir) if cache_dir else None)
+        cache = prc_mod.load_cache(path)
+        file_list = [f.strip() for f in files.split(",") if f.strip()]
+        cands = prc_mod.check_duplicates(
+            cache,
+            topic=topic,
+            files=file_list,
+            min_score=min_score,
+            top_k=top_k,
+        )
+    _emit_json({
+        "repo": ref.slug,
+        "cache_path": str(path),
+        "cache_size": len(cache),
+        "topic": topic,
+        "files": file_list,
+        "candidates": [c.as_json() for c in cands],
+        # 0.7 (= 70 % of topic tokens contained in a cached PR's title+body)
+        # is the threshold for "almost certainly the same idea." Below that,
+        # surface as a soft signal the caller should eyeball before raising.
+        "verdict": "likely_duplicate" if any(c.score >= 0.70 for c in cands)
+        else "review_candidates" if cands
+        else "no_match",
+    })
+
+
+@pr_cache_group.command("show")
+@click.argument("repo")
+@click.option("--state", type=click.Choice(["merged", "closed", "all"]), default="all",
+              show_default=True)
+@click.option("--limit", type=int, default=50, show_default=True)
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON instead of a table.")
+@click.option("--cache-dir", default=None, type=click.Path(file_okay=False),
+              help="Override cache directory (also env VOUCH_PR_CACHE_DIR).")
+def pr_cache_show(repo: str, state: str, limit: int, as_json: bool,
+                  cache_dir: str | None) -> None:
+    """List the cached PRs for REPO."""
+    with _cli_errors():
+        ref = prc_mod.parse_repo(repo)
+        path = prc_mod.cache_path_for(ref, Path(cache_dir) if cache_dir else None)
+        cache = prc_mod.load_cache(path)
+    records = sorted(cache.values(), key=lambda r: r.number, reverse=True)
+    if state != "all":
+        records = [r for r in records if r.state == state]
+    records = records[:limit]
+    if as_json:
+        _emit_json({
+            "repo": ref.slug,
+            "cache_path": str(path),
+            "count": len(records),
+            "prs": [
+                {
+                    "number": r.number, "state": r.state, "title": r.title,
+                    "url": r.url, "merged_at": r.merged_at, "closed_at": r.closed_at,
+                    "files": r.files, "labels": r.labels,
+                    "close_analysis": (
+                        asdict(r.close_analysis) if r.close_analysis else None
+                    ),
+                }
+                for r in records
+            ],
+        })
+        return
+    if not records:
+        click.echo(f"no cached PRs for {ref.slug} in {path}")
+        return
+    click.echo(f"{ref.slug}  ({len(records)} PRs from {path})")
+    for r in records:
+        when = r.merged_at or r.closed_at or ""
+        marker = "✓" if r.state == "merged" else "✗"
+        click.echo(f"  {marker} #{r.number:<6}  {r.state:<7}  {when[:10]:<10}  {r.title}")
+        if r.close_analysis and r.close_analysis.reason:
+            click.echo(f"      reason: {r.close_analysis.reason}")
+            for nrep in r.close_analysis.do_not_repeat[:3]:
+                click.echo(f"      ✗ avoid: {nrep}")
 
 
 if __name__ == "__main__":
