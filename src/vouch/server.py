@@ -52,7 +52,7 @@ def _store() -> KBStore:
             f"{e}. Run `vouch init` in the project root before starting the server."
         ) from e
     except SchemaMismatchError as e:
-        raise RuntimeError(str(e)) from e
+        raise RuntimeError(f"{e}. Run `vouch migrate` to upgrade the on-disk layout.") from e
 
 
 def _agent() -> str:

@@ -129,7 +129,7 @@ def _validate_migrated(tmp_dir: Path) -> list[str]:
             if p.suffix not in (".yaml", ".yml"):
                 # source content files — not YAML models
                 continue
-            if p.parent.name in (s for s in ["sources"]) and p.name != "meta.yaml":
+            if sub == "sources" and p.name != "meta.yaml":
                 continue
             validator = VALIDATORS.get(sub)
             if validator is None:
@@ -166,6 +166,7 @@ def _atomic_swap(kb_dir: Path, tmp_dir: Path) -> None:
         # Best-effort rollback of the first rename.
         pre.rename(kb_dir)
         raise
+    shutil.rmtree(pre, ignore_errors=True)
 
 
 def _copy_tree_for_migration(kb_dir: Path, tmp_dir: Path, steps: list[Migration]) -> list[str]:

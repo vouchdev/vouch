@@ -379,5 +379,6 @@ def test_import_check_accepts_bundle_without_schema_version(store: KBStore, tmp_
         tar.addfile(info, io.BytesIO(payload))
 
     result = bundle.import_check(store.kb_dir, bundle_path)
-    # No schema version rejection issue
-    assert not any("newer" in i for i in result.issues)
+    assert not any("schema_version" in i or "newer" in i for i in result.issues), (
+        f"pre-VEP-0004 bundle rejected for version reasons: {result.issues}"
+    )

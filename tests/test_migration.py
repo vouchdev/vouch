@@ -226,7 +226,7 @@ def test_migrate_rollback_on_validation_error(tmp_path: Path, monkeypatch):
     on_disk = (kb_dir / "claims" / "test-claim.yaml").read_text()
     assert on_disk == original_text
     # No tmp dir left behind
-    assert not (kb_dir / ".migrate-tmp").exists()
+    assert not (kb_dir.parent / ".vouch-migrate-tmp").exists()
     # config still at old version
     cfg = _yaml_load((kb_dir / CONFIG_FILENAME).read_text())
     assert cfg.get("schema_version") == "0.1"

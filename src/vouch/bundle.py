@@ -259,14 +259,23 @@ def import_check(kb_dir: Path, bundle_path: Path) -> ImportCheckResult:
         manifest = json.loads(tar.extractfile(mf_member).read().decode())  # type: ignore[union-attr]
         bundle_id = manifest.get("bundle_id", "")
         bundle_schema = manifest.get("schema_version")
-        if bundle_schema is not None and bundle_schema > VOUCH_SCHEMA_VERSION:
-            return ImportCheckResult(
-                False, bundle_id, [], [], [],
-                [
-                    f"bundle schema_version {bundle_schema!r} is newer than installed "
-                    f"vouch {VOUCH_SCHEMA_VERSION!r} — upgrade vouch before importing"
-                ],
-            )
+        if bundle_schema is not None:
+            try:
+                bundle_ver = tuple(int(x) for x in str(bundle_schema).split("."))
+                installed_ver = tuple(int(x) for x in VOUCH_SCHEMA_VERSION.split("."))
+            except (ValueError, AttributeError):
+                return ImportCheckResult(
+                    False, bundle_id, [], [], [],
+                    [f"bundle schema_version {bundle_schema!r} is not a valid version string"],
+                )
+            if bundle_ver > installed_ver:
+                return ImportCheckResult(
+                    False, bundle_id, [], [], [],
+                    [
+                        f"bundle schema_version {bundle_schema!r} is newer than installed "
+                        f"vouch {VOUCH_SCHEMA_VERSION!r} — upgrade vouch before importing"
+                    ],
+                )
         recorded = {f["path"]: f for f in manifest["files"]}
         manifest_paths = set(recorded)
         for f in manifest["files"]:

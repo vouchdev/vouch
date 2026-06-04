@@ -82,7 +82,7 @@ message pointing to `vouch migrate`.
 
 ### 3. `vouch migrate` CLI command
 
-```
+```bash
 vouch migrate [--dry-run] [--backup] [--from VERSION] [--to VERSION]
 ```
 
@@ -118,18 +118,19 @@ a 0.1→0.2 transform can run against raw dicts even after the 0.1 model
 class is removed.
 
 `migrate_kb(root, from_v, to_v, *, dry_run)` chains the relevant
-`Migration` steps, writes to `.vouch/.migrate-tmp/`, validates every file,
-then atomically replaces `.vouch/` or rolls back on any failure.
+`Migration` steps, writes to `.vouch-migrate-tmp/` (a sibling of `.vouch/`),
+validates every file, then atomically replaces `.vouch/` or rolls back on any
+failure.
 
 ### 5. Rollback guarantee
 
 `migrate_kb()` follows the atomic-swap pattern already proven in
 `rebuild_index`:
 
-1. Write all migrated artifacts to `.vouch/.migrate-tmp/`.
+1. Write all migrated artifacts to `.vouch-migrate-tmp/` (sibling of `.vouch/`).
 2. Validate every migrated artifact loads cleanly under the target Pydantic
    models.
-3. Rename `.vouch/` → `.vouch-pre-migrate/`, `.vouch/.migrate-tmp/` →
+3. Rename `.vouch/` → `.vouch-pre-migrate/`, `.vouch-migrate-tmp/` →
    `.vouch/`.
 4. On any failure in step 2 or 3: leave the original `.vouch/` untouched,
    write `migration.rollback` to the audit log, exit non-zero.
@@ -144,7 +145,7 @@ field (pre-VEP-0004) are accepted as-is — additive compatibility.
 ### 7. Health and status surfaces
 
 - `health.status()` includes `schema_version` from `config.yaml`.
-- `health.doctor()` adds a `critical`-severity finding when the stored
+- `health.doctor()` adds an `error`-severity finding when the stored
   `schema_version` does not match `VOUCH_SCHEMA_VERSION`.
 
 ## Design
@@ -158,7 +159,7 @@ def migrate_kb(root: Path, from_v: str, to_v: str, *, dry_run: bool = False) -> 
         return MigrateResult(changed=[], skipped=[], from_v=from_v, to_v=to_v)
 
     kb_dir = root / KB_DIRNAME
-    tmp_dir = kb_dir / ".migrate-tmp"
+    tmp_dir = kb_dir.parent / ".vouch-migrate-tmp"
     tmp_dir.mkdir(exist_ok=True)
 
     changed = []

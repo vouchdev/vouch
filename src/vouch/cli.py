@@ -713,7 +713,12 @@ def migrate(dry_run: bool, backup: bool, from_version: str | None,
     from .models import VOUCH_SCHEMA_VERSION
     from .storage import CONFIG_FILENAME, KB_DIRNAME, _yaml_load
 
-    root = discover_root(Path(path))
+    try:
+        root = discover_root(Path(path))
+    except KBNotFoundError as e:
+        click.echo(f"error: {e}", err=True)
+        click.echo("hint: run `vouch init` in your project root.", err=True)
+        sys.exit(2)
     kb_dir = root / KB_DIRNAME
     cfg_path = kb_dir / CONFIG_FILENAME
 
@@ -731,15 +736,15 @@ def migrate(dry_run: bool, backup: bool, from_version: str | None,
         click.echo(f"migrate: already at schema_version {to_v!r}, nothing to do.")
         return
 
-    if backup:
+    if dry_run:
+        click.echo(f"migrate: dry-run {from_v!r} → {to_v!r}")
+
+    if backup and not dry_run:
         import time
         ts = int(time.time())
         backup_dir = root / f".vouch-backup-{ts}"
         shutil.copytree(str(kb_dir), str(backup_dir))
         click.echo(f"migrate: backup written to {backup_dir}")
-
-    if dry_run:
-        click.echo(f"migrate: dry-run {from_v!r} → {to_v!r}")
 
     with _cli_errors():
         result = migrate_kb(root, from_v, to_v, dry_run=dry_run)
