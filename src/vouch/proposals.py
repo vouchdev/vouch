@@ -8,8 +8,11 @@ from __future__ import annotations
 
 import time
 import uuid
-from datetime import UTC, datetime
+from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from typing import Any
+
+import yaml
 
 from . import audit, index_db
 from .models import (
@@ -26,6 +29,20 @@ from .storage import ArtifactNotFoundError, KBStore
 
 class ProposalError(RuntimeError):
     pass
+
+
+EXPIRE_REASON = "expired"
+EXPIRE_ACTOR = "vouch-expire"
+_DEFAULT_EXPIRE_PENDING_DAYS = 90
+
+
+@dataclass
+class ExpireResult:
+    """Outcome of `expire_pending` (dry-run or apply)."""
+
+    threshold_days: int
+    would_expire: list[Proposal] = field(default_factory=list)
+    expired: list[Proposal] = field(default_factory=list)
 
 
 def new_proposal_id() -> str:
@@ -91,10 +108,10 @@ def propose_claim(
     for eid in evidence:
         try:
             store.get_source(eid)
-        except Exception:
+        except ArtifactNotFoundError:
             try:
                 store.get_evidence(eid)
-            except Exception as e:
+            except ArtifactNotFoundError as e:
                 raise ProposalError(f"unknown source/evidence id: {eid}") from e
     payload = {
         "id": slug_hint or _slugify(text),
@@ -210,6 +227,53 @@ def propose_relation(
 # --- decisions ------------------------------------------------------------
 
 
+def _approval_block_reason(
+    store: KBStore, proposal: Proposal, approved_by: str
+) -> str | None:
+    """Why `approved_by` cannot approve `proposal` right now, or None.
+
+    Covers the deterministic pre-write gates — not-pending and
+    forbidden_self_approval. Shared by `approve()` and `check_approvable()`
+    so the single-approve path and the batch CLI's precheck never drift.
+    """
+    if proposal.status != ProposalStatus.PENDING:
+        return f"proposal {proposal.id} is {proposal.status.value}, not pending"
+    if approved_by == proposal.proposed_by:
+        cfg: dict[str, Any] = {}
+        try:
+            loaded = yaml.safe_load((store.kb_dir / "config.yaml").read_text())
+            if isinstance(loaded, dict):
+                cfg = loaded
+        except Exception:
+            pass
+        review_cfg = cfg.get("review")
+        approver_role = (
+            review_cfg.get("approver_role") if isinstance(review_cfg, dict) else None
+        )
+        if approver_role != "trusted-agent":
+            return (
+                f"forbidden_self_approval: {approved_by} cannot approve their own "
+                "proposal (set review.approver_role: trusted-agent in config.yaml to opt out)"
+            )
+    return None
+
+
+def check_approvable(
+    store: KBStore, proposal_id: str, *, approved_by: str
+) -> str | None:
+    """Return why `proposal_id` can't be approved by `approved_by`, or None.
+
+    Read-only. `None` means the deterministic gates pass; the actual write in
+    `approve()` can still fail on a pre-existing artifact or an I/O error.
+    Used by the batch CLI to validate a whole set before mutating anything.
+    """
+    try:
+        proposal = store.get_proposal(proposal_id)
+    except ArtifactNotFoundError:
+        return f"proposal {proposal_id} not found"
+    return _approval_block_reason(store, proposal, approved_by)
+
+
 def approve(
     store: KBStore,
     proposal_id: str,
@@ -223,28 +287,9 @@ def approve(
     approved_by matches proposed_by (forbidden_self_approval).
     """
     proposal = store.get_proposal(proposal_id)
-    if proposal.status != ProposalStatus.PENDING:
-        raise ProposalError(
-            f"proposal {proposal_id} is {proposal.status.value}, not pending"
-        )
-    if approved_by == proposal.proposed_by:
-        cfg: dict[str, Any] = {}
-        try:
-            import yaml
-            loaded = yaml.safe_load((store.kb_dir / "config.yaml").read_text())
-            if isinstance(loaded, dict):
-                cfg = loaded
-        except Exception:
-            pass
-        review_cfg = cfg.get("review")
-        approver_role = (
-            review_cfg.get("approver_role") if isinstance(review_cfg, dict) else None
-        )
-        if approver_role != "trusted-agent":
-            raise ProposalError(
-                f"forbidden_self_approval: {approved_by} cannot approve their own "
-                "proposal (set review.approver_role: trusted-agent in config.yaml to opt out)"
-            )
+    block = _approval_block_reason(store, proposal, approved_by)
+    if block:
+        raise ProposalError(block)
     payload = dict(proposal.payload)
     # Refuse to overwrite an existing artifact. Without this guard a retry
     # after a crash between put_<kind>() and move_proposal_to_decided() would
@@ -321,6 +366,97 @@ def reject(
         data={"reason": reason},
     )
     return proposal
+
+
+def expire_pending_after_days(store: KBStore, *, override: int | None = None) -> int:
+    """Resolve GC threshold from config (`review.expire_pending_after_days`)."""
+    if override is not None:
+        return override
+    try:
+        loaded = yaml.safe_load(store.config_path.read_text())
+    except Exception:
+        return _DEFAULT_EXPIRE_PENDING_DAYS
+    if not isinstance(loaded, dict):
+        return _DEFAULT_EXPIRE_PENDING_DAYS
+    review_cfg = loaded.get("review")
+    if not isinstance(review_cfg, dict):
+        return _DEFAULT_EXPIRE_PENDING_DAYS
+    days = review_cfg.get("expire_pending_after_days")
+    if isinstance(days, int) and days >= 0:
+        return days
+    return _DEFAULT_EXPIRE_PENDING_DAYS
+
+
+def _utc(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)
+
+
+def list_stale_pending(store: KBStore, *, days: int) -> list[Proposal]:
+    """Pending proposals older than `days` (by `proposed_at`). `days <= 0` → none."""
+    if days <= 0:
+        return []
+    cutoff = datetime.now(UTC) - timedelta(days=days)
+    stale: list[Proposal] = []
+    for proposal in store.list_proposals(ProposalStatus.PENDING):
+        if _utc(proposal.proposed_at) < cutoff:
+            stale.append(proposal)
+    return stale
+
+
+def expire_one(
+    store: KBStore,
+    proposal_id: str,
+    *,
+    expired_by: str = EXPIRE_ACTOR,
+) -> Proposal:
+    """Expire a single pending proposal (terminal reject + audit)."""
+    proposal = store.get_proposal(proposal_id)
+    if proposal.status != ProposalStatus.PENDING:
+        if (
+            proposal.status == ProposalStatus.REJECTED
+            and proposal.decision_reason == EXPIRE_REASON
+        ):
+            return proposal
+        raise ProposalError(
+            f"proposal {proposal_id} is {proposal.status.value}, not pending"
+        )
+    proposal.status = ProposalStatus.REJECTED
+    proposal.decided_at = datetime.now(UTC)
+    proposal.decided_by = expired_by
+    proposal.decision_reason = EXPIRE_REASON
+    store.move_proposal_to_decided(proposal)
+    audit.log_event(
+        store.kb_dir,
+        event="proposal.expire",
+        actor=expired_by,
+        object_ids=[proposal.id],
+        data={"kind": proposal.kind.value},
+    )
+    return proposal
+
+
+def expire_pending(
+    store: KBStore,
+    *,
+    apply: bool = False,
+    expired_by: str = EXPIRE_ACTOR,
+    days: int | None = None,
+) -> ExpireResult:
+    """Garbage-collect stale pending proposals per review-gate spec."""
+    threshold = expire_pending_after_days(store, override=days)
+    stale = list_stale_pending(store, days=threshold)
+    if not apply:
+        return ExpireResult(threshold_days=threshold, would_expire=stale)
+    expired = [
+        expire_one(store, proposal.id, expired_by=expired_by) for proposal in stale
+    ]
+    return ExpireResult(
+        threshold_days=threshold,
+        would_expire=stale,
+        expired=expired,
+    )
 
 
 _ARTIFACT_GETTERS = {

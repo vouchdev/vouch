@@ -21,6 +21,7 @@ import hashlib
 import io
 import json
 import tarfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -35,8 +36,14 @@ MANIFEST_NAME = "manifest.json"
 SPEC_VERSION = "vouch-bundle-0.1"
 
 EXPORT_SUBDIRS = (
-    "claims", "pages", "sources", "entities", "relations",
-    "evidence", "sessions", "decided",
+    "claims",
+    "pages",
+    "sources",
+    "entities",
+    "relations",
+    "evidence",
+    "sessions",
+    "decided",
 )
 
 VALIDATORS: dict[str, Any] = {
@@ -72,14 +79,16 @@ def build_manifest(kb_dir: Path) -> dict[str, Any]:
     files: list[dict[str, Any]] = []
     for rel, abs_path in _iter_export_files(kb_dir):
         data = abs_path.read_bytes()
-        files.append({
-            # tarfile member names use POSIX `/` on every platform; the
-            # manifest path must match so set lookups and the per-subdir
-            # counter below work on Windows too.
-            "path": rel.as_posix(),
-            "size": len(data),
-            "sha256": sha256_hex(data),
-        })
+        files.append(
+            {
+                # tarfile member names use POSIX `/` on every platform; the
+                # manifest path must match so set lookups and the per-subdir
+                # counter below work on Windows too.
+                "path": rel.as_posix(),
+                "size": len(data),
+                "sha256": sha256_hex(data),
+            }
+        )
     # Bundle id is the sha256 of the sorted per-file hashes — same inputs
     # always produce the same id, so duplicate exports are recognisable.
     h = hashlib.sha256()
@@ -90,8 +99,7 @@ def build_manifest(kb_dir: Path) -> dict[str, Any]:
         "bundle_id": h.hexdigest(),
         "files": files,
         "counts": {
-            sub: sum(1 for f in files if f["path"].startswith(f"{sub}/"))
-            for sub in EXPORT_SUBDIRS
+            sub: sum(1 for f in files if f["path"].startswith(f"{sub}/")) for sub in EXPORT_SUBDIRS
         },
         "safety": {
             "has_proposed": False,
@@ -101,18 +109,25 @@ def build_manifest(kb_dir: Path) -> dict[str, Any]:
     }
 
 
-def export(kb_dir: Path, *, dest: Path, actor: str = "vouch-export") -> dict[str, Any]:
+def export(
+    kb_dir: Path, *, dest: Path, actor: str = "vouch-export",
+    on_progress: Callable[[str], None] | None = None,
+) -> dict[str, Any]:
     manifest = build_manifest(kb_dir)
     dest.parent.mkdir(parents=True, exist_ok=True)
     with tarfile.open(dest, "w:gz") as tar:
         for rel, abs_path in _iter_export_files(kb_dir):
+            if on_progress is not None:
+                on_progress(rel.as_posix())
             tar.add(abs_path, arcname=rel.as_posix())
         manifest_bytes = json.dumps(manifest, indent=2, sort_keys=True).encode()
         info = tarfile.TarInfo(MANIFEST_NAME)
         info.size = len(manifest_bytes)
         tar.addfile(info, io.BytesIO(manifest_bytes))
     audit.log_event(
-        kb_dir, event="bundle.export", actor=actor,
+        kb_dir,
+        event="bundle.export",
+        actor=actor,
         object_ids=[manifest["bundle_id"]],
         data={"dest": str(dest), "files": len(manifest["files"])},
     )
@@ -180,8 +195,10 @@ def export_check(bundle_path: Path) -> ExportCheckResult:
             except KeyError:
                 issues.append(f"manifest lists missing file: {path}")
     return ExportCheckResult(
-        ok=not issues, bundle_id=bundle_id,
-        files_checked=files_checked, issues=issues,
+        ok=not issues,
+        bundle_id=bundle_id,
+        files_checked=files_checked,
+        issues=issues,
     )
 
 
@@ -231,6 +248,55 @@ def _validate_content(path: str, data: bytes, issues: list[str]) -> None:
         issues.append(f"schema validation failed: {path}: {e}")
 
 
+def _check_source_content_address(path: str, body: bytes, issues: list[str]) -> None:
+    """Enforce the Source content-addressing invariant on import.
+
+    A Source's id is the sha256 of its content (README: "content-addressed
+    by sha256"; `storage.put_source` derives the id from the bytes, and
+    `verify.verify_source` re-checks `sha256(content) == id`). But
+    `import_apply` writes `sources/<sha>/{meta.yaml,content}` straight from
+    the tarball, so without this check a hand-built bundle can land a
+    source whose content does not hash to its claimed id. The per-file
+    sha256 gate (#74) only proves the bytes match the manifest, not that
+    they match the content-address — so a manifest-consistent bundle could
+    substitute the evidence behind a legitimate-looking source id. A claim
+    that "cites source X" would then point at bytes that were never hashed
+    to X; `verify_source` would report `stored_ok=False` only after the
+    import already succeeded with a clean `bundle.import` audit event.
+    """
+    parts = path.split("/")
+    if len(parts) < 3 or parts[0] != "sources":
+        return
+    claimed_id = parts[1]
+    leaf = parts[-1]
+    if leaf == "content":
+        actual = sha256_hex(body)
+        if actual != claimed_id:
+            issues.append(
+                f"source content-address mismatch: {path}: content hashes "
+                f"to {actual} but is stored under id {claimed_id}"
+            )
+    elif leaf == "meta.yaml":
+        try:
+            meta = yaml.safe_load(body)
+        except Exception:
+            return  # a parse failure is already surfaced by _validate_content
+        if not isinstance(meta, dict):
+            return
+        mid = meta.get("id")
+        if mid is not None and mid != claimed_id:
+            issues.append(
+                f"source id mismatch: {path}: meta.yaml id {mid!r} does not "
+                f"match its content-address directory {claimed_id!r}"
+            )
+        mhash = meta.get("hash")
+        if mhash is not None and mhash != claimed_id:
+            issues.append(
+                f"source hash mismatch: {path}: meta.yaml hash {mhash!r} does "
+                f"not match its content-address directory {claimed_id!r}"
+            )
+
+
 def import_check(kb_dir: Path, bundle_path: Path) -> ImportCheckResult:
     """Diff a bundle against the destination KB without writing anything."""
     new_files: list[str] = []
@@ -243,9 +309,7 @@ def import_check(kb_dir: Path, bundle_path: Path) -> ImportCheckResult:
         try:
             mf_member = tar.getmember(MANIFEST_NAME)
         except KeyError:
-            return ImportCheckResult(
-                False, "", [], [], [], ["bundle missing manifest.json"]
-            )
+            return ImportCheckResult(False, "", [], [], [], ["bundle missing manifest.json"])
         manifest = json.loads(tar.extractfile(mf_member).read().decode())  # type: ignore[union-attr]
         bundle_id = manifest.get("bundle_id", "")
         recorded = {f["path"]: f for f in manifest["files"]}
@@ -278,11 +342,20 @@ def import_check(kb_dir: Path, bundle_path: Path) -> ImportCheckResult:
                 issues.append(f"hash mismatch: {member.name}")
                 continue
             _validate_content(member.name, body, issues)
+            _check_source_content_address(member.name, body, issues)
+        for path in manifest_paths:
+            try:
+                tar.getmember(path)
+            except KeyError:
+                issues.append(f"manifest lists missing file: {path}")
 
     return ImportCheckResult(
-        ok=not issues, bundle_id=bundle_id,
-        new_files=new_files, conflicts=conflicts,
-        identical=identical, issues=issues,
+        ok=not issues,
+        bundle_id=bundle_id,
+        new_files=new_files,
+        conflicts=conflicts,
+        identical=identical,
+        issues=issues,
     )
 
 
@@ -292,6 +365,7 @@ def import_apply(
     *,
     on_conflict: str = "skip",
     actor: str = "vouch-import",
+    on_progress: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """Apply a bundle. `on_conflict` ∈ {"skip", "overwrite", "fail"}.
 
@@ -337,8 +411,7 @@ def import_apply(
             # the audit-truthfulness anti-pattern #74 was about.
             if sha256_hex(body) != expected_sha:
                 raise RuntimeError(
-                    f"refusing to import: hash mismatch at write time: "
-                    f"{member.name}"
+                    f"refusing to import: hash mismatch at write time: {member.name}"
                 )
             val_issues: list[str] = []
             _validate_content(member.name, body, val_issues)
@@ -347,6 +420,8 @@ def import_apply(
                 continue
             dest.write_bytes(body)
             written.append(member.name)
+            if on_progress is not None:
+                on_progress(member.name)
     result = {
         "bundle_id": check.bundle_id,
         "written": written,
@@ -355,7 +430,9 @@ def import_apply(
         "on_conflict": on_conflict,
     }
     audit.log_event(
-        kb_dir, event="bundle.import", actor=actor,
+        kb_dir,
+        event="bundle.import",
+        actor=actor,
         object_ids=[check.bundle_id],
         data={
             "written": len(written),

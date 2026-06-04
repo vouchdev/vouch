@@ -21,6 +21,8 @@ If you're new, read in this order:
    one KB without stepping on each other.
 8. [faq.md](faq.md) — questions we keep getting.
 9. [embeddings.md](embeddings.md) — semantic retrieval (primary backend)
+10. [gittensor.md](gittensor.md) — adopting vouch as a Gittensor repo's
+    review-gated decision memory.
 
 ### How docs relate to other directories
 

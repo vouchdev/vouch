@@ -27,6 +27,7 @@ import hashlib
 import logging
 import os
 import re
+import sqlite3
 import stat
 from pathlib import Path
 from typing import Any
@@ -49,6 +50,7 @@ _embed_log = logging.getLogger("vouch.embeddings")
 
 KB_DIRNAME = ".vouch"
 CONFIG_FILENAME = "config.yaml"
+KB_FORMAT_VERSION = 1
 
 SUBDIRS = (
     "claims", "pages", "sources", "entities", "relations",
@@ -66,10 +68,15 @@ class ArtifactNotFoundError(KeyError):
 
 def _starter_config() -> dict[str, Any]:
     return {
-        "version": 1,
-        "review": {"require_human_approval": True},
+        "version": KB_FORMAT_VERSION,
+        "review": {
+            "require_human_approval": True,
+            "expire_pending_after_days": 90,
+        },
         "retrieval": {
-            "backends": ["fts5", "substring"],
+            # auto = embedding -> fts5 -> substring; or pin one of
+            # embedding | fts5 | substring. See context._retrieve.
+            "backend": "auto",
             "default_limit": 10,
         },
         "agents": {
@@ -89,8 +96,25 @@ def sha256_hex(data: bytes) -> str:
 def discover_root(start: Path | None = None) -> Path:
     """Walk up from `start` looking for a `.vouch` directory.
 
-    Mirrors how git locates its repo root.
+    Mirrors how git locates its repo root. The walk can be skipped entirely
+    by setting `VOUCH_KB_PATH=/abs/path/.vouch` (documented in
+    `adapters/generic-mcp/README.md`) — useful when the host launches the
+    server from a default cwd (e.g. Claude Desktop on macOS / Windows).
     """
+    forced = os.environ.get("VOUCH_KB_PATH")
+    if forced:
+        kb = Path(forced).resolve()
+        if not kb.is_dir():
+            raise KBNotFoundError(
+                f"VOUCH_KB_PATH={forced!r} is not an existing directory"
+            )
+        if kb.name != KB_DIRNAME:
+            raise KBNotFoundError(
+                f"VOUCH_KB_PATH must point at a {KB_DIRNAME!r} directory, "
+                f"got {forced!r}"
+            )
+        return kb.parent
+
     cur = (start or Path.cwd()).resolve()
     while True:
         if (cur / KB_DIRNAME).is_dir():
@@ -119,6 +143,7 @@ def _serialize_page(page: Page) -> str:
 
 
 def _deserialize_page(text: str) -> Page:
+    text = text.replace("\r\n", "\n")
     m = _FRONTMATTER_RE.match(text)
     if not m:
         raise ValueError("page file missing YAML frontmatter")
@@ -151,8 +176,14 @@ class KBStore:
             raise ValueError(
                 f"path must be inside project root ({self.root}): {resolved}"
             )
+        if resolved.is_dir():
+            raise ValueError(f"not a regular file: {resolved}")
+        flags = os.O_RDONLY
+        # POSIX can reject a symlink swapped in after resolve(); Windows has
+        # no O_NOFOLLOW, so it falls back to the regular-file check below.
+        flags |= getattr(os, "O_NOFOLLOW", 0)
         try:
-            fd = os.open(resolved, os.O_RDONLY | os.O_NOFOLLOW)
+            fd = os.open(resolved, flags)
         except OSError as e:
             raise ValueError(f"cannot read {resolved}: {e}") from e
         try:
@@ -318,8 +349,32 @@ class KBStore:
     def update_claim(self, claim: Claim) -> Claim:
         if not self._claim_path(claim.id).exists():
             raise ArtifactNotFoundError(f"claim {claim.id}")
+        # Re-validate the in-memory Claim before persisting so model
+        # invariants (e.g. evidence must be non-empty — see #81) hold
+        # even when a caller mutated fields in place after get_claim().
+        # The Claim model's field validators only run at construction
+        # time; mutation alone bypasses them unless we round-trip.
+        Claim.model_validate(claim.model_dump(mode="json"))
         self._claim_path(claim.id).write_text(_yaml_dump(claim.model_dump(mode="json")))
         self._embed_and_store(kind="claim", id=claim.id, text=claim.text)
+        # Keep the FTS5 row in sync with the on-disk claim so lifecycle
+        # mutations (archive, supersede, contradict, confirm) are reflected
+        # in retrieval immediately. Without this, claims_fts.status stays
+        # frozen at first-index time and retracted claims keep matching
+        # kb.search / kb.context.
+        from . import index_db as _index_db
+
+        try:
+            with _index_db.open_db(self.kb_dir) as conn:
+                _index_db.index_claim(
+                    conn, id=claim.id, text=claim.text,
+                    type=claim.type.value, status=claim.status.value,
+                    tags=list(claim.tags),
+                )
+        except sqlite3.Error as e:
+            _embed_log.warning(
+                "claim %s: FTS5 reindex skipped on update (%s)", claim.id, e,
+            )
         return claim
 
     # --- pages -------------------------------------------------------------
