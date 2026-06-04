@@ -41,6 +41,16 @@ All notable changes to vouch are documented here. Format follows
   Trusted Publishing (OIDC).
 
 ### Added
+- HTTP transport: `vouch serve --transport http` exposes the full `kb.*`
+  surface over HTTP, reusing the same dispatch table as the MCP/JSONL
+  transports (#94, implements VEP-0004). `POST /rpc` carries the JSONL
+  envelope; `GET /capabilities` and `GET /healthz` are unauthenticated.
+  Binds `127.0.0.1` by default and refuses any non-loopback bind without
+  both `--allow-public` and a bearer token (`--token` / `VOUCH_HTTP_TOKEN`,
+  constant-time compared). The `X-Vouch-Agent` header sets the audit actor
+  per request. Zero new runtime dependencies (stdlib `http.server`); no TLS
+  in-process — terminate at a reverse proxy. `kb.capabilities.transports`
+  now includes `http`.
 - `vouch approve <id1> <id2> …` approves multiple proposals in one
   non-interactive call for CI and backlog clearing (#93). Default is
   all-or-nothing: every id is validated as an approvable pending proposal
