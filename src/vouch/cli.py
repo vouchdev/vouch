@@ -45,6 +45,7 @@ from .storage import (
     ArtifactNotFoundError,
     KBNotFoundError,
     KBStore,
+    SchemaMismatchError,
     discover_root,
 )
 
@@ -61,6 +62,8 @@ def _cli_errors() -> Iterator[None]:
         yield
     except (ArtifactNotFoundError, ValueError, ProposalError, LifecycleError) as e:
         raise click.ClickException(str(e)) from e
+    except SchemaMismatchError as e:
+        raise click.ClickException(str(e)) from e
 
 
 def _load_store(start: Path | None = None) -> KBStore:
@@ -70,6 +73,10 @@ def _load_store(start: Path | None = None) -> KBStore:
         click.echo(f"error: {e}", err=True)
         click.echo("hint: run `vouch init` in your project root.", err=True)
         sys.exit(2)
+    except SchemaMismatchError as e:
+        click.echo(f"error: {e}", err=True)
+        click.echo("hint: run `vouch migrate` to upgrade the on-disk layout.", err=True)
+        sys.exit(3)
 
 
 def _whoami() -> str:
@@ -689,6 +696,63 @@ def reindex(embeddings: bool, backfill: bool, force: bool, model: str | None) ->
         click.echo(f"reindex: embeddings backfilled = {n}")
     else:
         click.echo("reindex: FTS5 rebuilt")
+
+
+@cli.command()
+@click.option("--dry-run", is_flag=True, help="Report what would change without writing.")
+@click.option("--backup", is_flag=True, help="Copy .vouch/ to .vouch-backup-<ts>/ first.")
+@click.option("--from", "from_version", default=None, help="Override source schema version.")
+@click.option("--to", "to_version", default=None, help="Override target schema version.")
+@click.option("--path", default=".", type=click.Path(file_okay=False), show_default=True)
+def migrate(dry_run: bool, backup: bool, from_version: str | None,
+            to_version: str | None, path: str) -> None:
+    """Upgrade the on-disk .vouch/ layout to the current schema version."""
+    import shutil
+
+    from .migration import migrate_kb
+    from .models import VOUCH_SCHEMA_VERSION
+    from .storage import CONFIG_FILENAME, KB_DIRNAME, _yaml_load
+
+    root = discover_root(Path(path))
+    kb_dir = root / KB_DIRNAME
+    cfg_path = kb_dir / CONFIG_FILENAME
+
+    stored_version: str
+    if cfg_path.exists():
+        cfg = _yaml_load(cfg_path.read_text()) or {}
+        stored_version = str(cfg.get("schema_version") or "0.1")
+    else:
+        stored_version = "0.1"
+
+    from_v = from_version or stored_version
+    to_v = to_version or VOUCH_SCHEMA_VERSION
+
+    if from_v == to_v:
+        click.echo(f"migrate: already at schema_version {to_v!r}, nothing to do.")
+        return
+
+    if backup:
+        import time
+        ts = int(time.time())
+        backup_dir = root / f".vouch-backup-{ts}"
+        shutil.copytree(str(kb_dir), str(backup_dir))
+        click.echo(f"migrate: backup written to {backup_dir}")
+
+    if dry_run:
+        click.echo(f"migrate: dry-run {from_v!r} → {to_v!r}")
+
+    with _cli_errors():
+        result = migrate_kb(root, from_v, to_v, dry_run=dry_run)
+
+    if result.changed:
+        click.echo(f"migrate: {len(result.changed)} file(s) changed")
+        for f in result.changed:
+            click.echo(f"  {f}")
+    else:
+        click.echo("migrate: no files changed (transforms were no-ops)")
+
+    if not dry_run:
+        click.echo(f"migrate: schema_version {from_v!r} → {to_v!r} complete")
 
 
 @cli.command()

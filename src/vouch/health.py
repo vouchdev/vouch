@@ -13,8 +13,8 @@ from pathlib import Path
 
 from . import index_db
 from .audit import count_events
-from .models import ClaimStatus, ProposalStatus
-from .storage import KBStore, sha256_hex
+from .models import VOUCH_SCHEMA_VERSION, ClaimStatus, ProposalStatus
+from .storage import KBStore, _yaml_load, sha256_hex
 from .verify import verify_all
 
 
@@ -33,10 +33,18 @@ class HealthReport:
     counts: dict[str, int] = field(default_factory=dict)
 
 
+def _stored_schema_version(store: KBStore) -> str | None:
+    if not store.config_path.exists():
+        return None
+    cfg = _yaml_load(store.config_path.read_text()) or {}
+    return cfg.get("schema_version")
+
+
 def status(store: KBStore) -> dict:
     """Quick, machine-readable summary. No deep checks."""
     return {
         "kb_dir": str(store.kb_dir),
+        "schema_version": _stored_schema_version(store),
         "claims": len(store.list_claims()),
         "pages": len(store.list_pages()),
         "sources": len(store.list_sources()),
@@ -133,6 +141,14 @@ def doctor(store: KBStore) -> HealthReport:
         report.findings.append(Finding(
             "error", "missing_config", "config.yaml is missing",
         ))
+    else:
+        stored = _stored_schema_version(store)
+        if stored is not None and stored != VOUCH_SCHEMA_VERSION:
+            report.findings.append(Finding(
+                "error", "schema_version_mismatch",
+                f"KB schema_version {stored!r} does not match installed vouch "
+                f"{VOUCH_SCHEMA_VERSION!r} — run `vouch migrate`",
+            ))
 
     # Index presence (warning only — the index is derivable).
     if not (store.kb_dir / index_db.DB_FILENAME).exists():

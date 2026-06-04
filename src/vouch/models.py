@@ -14,6 +14,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+VOUCH_SCHEMA_VERSION = "0.1"
+
 
 def utcnow() -> datetime:
     return datetime.now(UTC)

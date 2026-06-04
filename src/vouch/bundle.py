@@ -28,7 +28,16 @@ from typing import Any
 import yaml
 
 from . import audit
-from .models import Claim, Entity, Evidence, Proposal, Relation, Session, Source
+from .models import (
+    VOUCH_SCHEMA_VERSION,
+    Claim,
+    Entity,
+    Evidence,
+    Proposal,
+    Relation,
+    Session,
+    Source,
+)
 from .storage import _deserialize_page, sha256_hex
 
 MANIFEST_NAME = "manifest.json"
@@ -87,6 +96,7 @@ def build_manifest(kb_dir: Path) -> dict[str, Any]:
         h.update(f["sha256"].encode())
     return {
         "spec": SPEC_VERSION,
+        "schema_version": VOUCH_SCHEMA_VERSION,
         "bundle_id": h.hexdigest(),
         "files": files,
         "counts": {
@@ -248,6 +258,15 @@ def import_check(kb_dir: Path, bundle_path: Path) -> ImportCheckResult:
             )
         manifest = json.loads(tar.extractfile(mf_member).read().decode())  # type: ignore[union-attr]
         bundle_id = manifest.get("bundle_id", "")
+        bundle_schema = manifest.get("schema_version")
+        if bundle_schema is not None and bundle_schema > VOUCH_SCHEMA_VERSION:
+            return ImportCheckResult(
+                False, bundle_id, [], [], [],
+                [
+                    f"bundle schema_version {bundle_schema!r} is newer than installed "
+                    f"vouch {VOUCH_SCHEMA_VERSION!r} — upgrade vouch before importing"
+                ],
+            )
         recorded = {f["path"]: f for f in manifest["files"]}
         manifest_paths = set(recorded)
         for f in manifest["files"]:

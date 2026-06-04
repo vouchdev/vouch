@@ -356,3 +356,43 @@ def test_cite_resolves_source_and_evidence(store: KBStore) -> None:
         for c in citations
     }
     assert "source" in kinds and "evidence" in kinds
+
+
+# --- schema versioning + SchemaMismatchError guard ------------------------
+
+
+def test_init_writes_schema_version(tmp_path: Path) -> None:
+    from vouch.models import VOUCH_SCHEMA_VERSION
+    from vouch.storage import CONFIG_FILENAME, KB_DIRNAME, _yaml_load
+    KBStore.init(tmp_path)
+    cfg = _yaml_load((tmp_path / KB_DIRNAME / CONFIG_FILENAME).read_text())
+    assert cfg.get("schema_version") == VOUCH_SCHEMA_VERSION
+
+
+def test_schema_version_mismatch_raises(tmp_path: Path) -> None:
+    from vouch.storage import (
+        CONFIG_FILENAME,
+        KB_DIRNAME,
+        SchemaMismatchError,
+        _yaml_dump,
+        _yaml_load,
+    )
+    KBStore.init(tmp_path)
+    cfg_path = tmp_path / KB_DIRNAME / CONFIG_FILENAME
+    cfg = _yaml_load(cfg_path.read_text())
+    cfg["schema_version"] = "99.99"
+    cfg_path.write_text(_yaml_dump(cfg))
+    with pytest.raises(SchemaMismatchError, match=r"99\.99"):
+        KBStore(tmp_path)
+
+
+def test_missing_schema_version_is_allowed(tmp_path: Path) -> None:
+    from vouch.storage import CONFIG_FILENAME, KB_DIRNAME, _yaml_dump, _yaml_load
+    KBStore.init(tmp_path)
+    cfg_path = tmp_path / KB_DIRNAME / CONFIG_FILENAME
+    cfg = _yaml_load(cfg_path.read_text())
+    del cfg["schema_version"]
+    cfg_path.write_text(_yaml_dump(cfg))
+    # Should not raise — pre-VEP-0004 KBs have no schema_version
+    store2 = KBStore(tmp_path)
+    assert store2 is not None

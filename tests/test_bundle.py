@@ -310,3 +310,74 @@ def test_import_check_passes_when_member_matches_manifest(
 
     diff = bundle.import_check(store.kb_dir, bundle_path)
     assert not any("hash mismatch" in i for i in diff.issues), diff.issues
+
+
+# --- schema_version in manifest -------------------------------------------
+
+
+def test_export_includes_schema_version(store: KBStore, tmp_path: Path) -> None:
+    from vouch.models import VOUCH_SCHEMA_VERSION
+    bundle_path = tmp_path / "out.tar.gz"
+    bundle.export(store.kb_dir, dest=bundle_path)
+    with tarfile.open(bundle_path, "r:gz") as tar:
+        manifest = json.loads(tar.extractfile(bundle.MANIFEST_NAME).read().decode())  # type: ignore[union-attr]
+    assert manifest.get("schema_version") == VOUCH_SCHEMA_VERSION
+
+
+def test_import_check_rejects_future_schema_version(store: KBStore, tmp_path: Path) -> None:
+    """Bundles created by a newer vouch should be rejected cleanly."""
+    import hashlib as _hl
+    bundle_path = tmp_path / "future.tar.gz"
+    payload = b"id: c1\n"
+    manifest = {
+        "spec": bundle.SPEC_VERSION,
+        "schema_version": "99.0",
+        "bundle_id": "abc",
+        "files": [
+            {"path": "claims/c1.yaml", "size": len(payload),
+             "sha256": _hl.sha256(payload).hexdigest()}
+        ],
+        "counts": {},
+        "safety": {},
+    }
+    with tarfile.open(bundle_path, "w:gz") as tar:
+        mf_bytes = json.dumps(manifest).encode()
+        mf_info = tarfile.TarInfo(bundle.MANIFEST_NAME)
+        mf_info.size = len(mf_bytes)
+        tar.addfile(mf_info, io.BytesIO(mf_bytes))
+        info = tarfile.TarInfo("claims/c1.yaml")
+        info.size = len(payload)
+        tar.addfile(info, io.BytesIO(payload))
+
+    result = bundle.import_check(store.kb_dir, bundle_path)
+    assert not result.ok
+    assert any("99.0" in i and "newer" in i for i in result.issues)
+
+
+def test_import_check_accepts_bundle_without_schema_version(store: KBStore, tmp_path: Path) -> None:
+    """Pre-VEP-0004 bundles (no schema_version field) must still import."""
+    import hashlib as _hl
+    bundle_path = tmp_path / "old.tar.gz"
+    payload = b"id: c1\n"
+    manifest = {
+        "spec": bundle.SPEC_VERSION,
+        "bundle_id": "abc",
+        "files": [
+            {"path": "claims/c1.yaml", "size": len(payload),
+             "sha256": _hl.sha256(payload).hexdigest()}
+        ],
+        "counts": {},
+        "safety": {},
+    }
+    with tarfile.open(bundle_path, "w:gz") as tar:
+        mf_bytes = json.dumps(manifest).encode()
+        mf_info = tarfile.TarInfo(bundle.MANIFEST_NAME)
+        mf_info.size = len(mf_bytes)
+        tar.addfile(mf_info, io.BytesIO(mf_bytes))
+        info = tarfile.TarInfo("claims/c1.yaml")
+        info.size = len(payload)
+        tar.addfile(info, io.BytesIO(payload))
+
+    result = bundle.import_check(store.kb_dir, bundle_path)
+    # No schema version rejection issue
+    assert not any("newer" in i for i in result.issues)

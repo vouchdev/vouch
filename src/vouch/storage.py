@@ -34,6 +34,7 @@ from typing import Any
 import yaml
 
 from .models import (
+    VOUCH_SCHEMA_VERSION,
     Claim,
     Entity,
     Evidence,
@@ -64,9 +65,17 @@ class ArtifactNotFoundError(KeyError):
     pass
 
 
+class SchemaMismatchError(RuntimeError):
+    """Stored KB schema_version does not match the installed vouch.
+
+    Run `vouch migrate` to upgrade the on-disk layout.
+    """
+
+
 def _starter_config() -> dict[str, Any]:
     return {
         "version": 1,
+        "schema_version": VOUCH_SCHEMA_VERSION,
         "review": {"require_human_approval": True},
         "retrieval": {
             "backends": ["fts5", "substring"],
@@ -133,6 +142,24 @@ class KBStore:
     def __init__(self, root: Path):
         self.root = root.resolve()
         self.kb_dir = self.root / KB_DIRNAME
+        if self.config_path.exists():
+            self.assert_schema_ok()
+
+    def assert_schema_ok(self) -> None:
+        """Raise SchemaMismatchError when stored schema_version != installed."""
+        if not self.config_path.exists():
+            return
+        cfg = _yaml_load(self.config_path.read_text()) or {}
+        stored = cfg.get("schema_version")
+        if stored is None:
+            # Pre-VEP-0004 KB — written before versioning existed. Treat as
+            # current version; the schema hasn't changed since 0.1 was cut.
+            return
+        if str(stored) != VOUCH_SCHEMA_VERSION:
+            raise SchemaMismatchError(
+                f"KB schema_version {stored!r} does not match installed vouch "
+                f"{VOUCH_SCHEMA_VERSION!r}. Run `vouch migrate` to upgrade."
+            )
 
     def read_under_root(self, path: str | Path) -> tuple[Path, bytes]:
         # Guard against arbitrary-file-read primitives exposed by the MCP /

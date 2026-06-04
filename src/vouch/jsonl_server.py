@@ -45,6 +45,7 @@ from .storage import (
     ArtifactNotFoundError,
     KBNotFoundError,
     KBStore,
+    SchemaMismatchError,
     discover_root,
 )
 
@@ -53,6 +54,8 @@ def _store() -> KBStore:
     try:
         return KBStore(discover_root())
     except KBNotFoundError as e:
+        raise RuntimeError(str(e)) from e
+    except SchemaMismatchError as e:
         raise RuntimeError(str(e)) from e
 
 
