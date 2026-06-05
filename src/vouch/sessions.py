@@ -14,7 +14,6 @@ from datetime import UTC, datetime
 
 from . import audit, index_db
 from .models import Page, PageType, ProposalKind, ProposalStatus, Session
-from .storage import _serialize_page
 from .proposals import approve
 from .storage import KBStore
 
@@ -105,13 +104,11 @@ def crystallize(
             body=_build_summary_body(sess, session_claim_ids),
             claims=[
                 cid for cid in session_claim_ids
-                if (store.kb_dir / "claims" / f"{cid}.yaml").exists()
+                if store._claim_path(cid).exists()
             ],
         )
-        page_path = store._page_path(page.id)
-        if page_path.exists():
-            page_path.write_text(_serialize_page(page))
-            store._embed_and_store(kind="page", id=page.id, text=f"{page.title}\n\n{page.body}")
+        if store._page_path(page.id).exists():
+            store.upsert_page(page)
         else:
             store.put_page(page)
         with index_db.open_db(store.kb_dir) as conn:

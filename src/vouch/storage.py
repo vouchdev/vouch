@@ -338,6 +338,14 @@ class KBStore:
         self._embed_and_store(kind="page", id=page.id, text=f"{page.title}\n\n{page.body}")
         return page
 
+    def upsert_page(self, page: Page) -> Page:
+        for cid in page.claims:
+            if not self._claim_path(cid).exists():
+                raise ValueError(f"page {page.id} references unknown claim {cid}")
+        self._page_path(page.id).write_text(_serialize_page(page))
+        self._embed_and_store(kind="page", id=page.id, text=f"{page.title}\n\n{page.body}")
+        return page
+
     def get_page(self, page_id: str) -> Page:
         p = self._page_path(page_id)
         if not p.exists():
