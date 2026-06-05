@@ -202,11 +202,11 @@ class KBStore:
         self._assert_safe_artifact_id(sub, obj_id)
         return self.kb_dir / sub / f"{obj_id}.yaml"
 
-    def _assert_safe_artifact_id(self, sub: str, obj_id: str) -> None:
+    def _assert_safe_artifact_id(self, sub: str, obj_id: str, *, suffix: str = ".yaml") -> None:
         reason = _unsafe_artifact_id_reason(obj_id)
         if reason is not None:
             raise ValueError(reason)
-        target = (self.kb_dir / sub / f"{obj_id}.yaml").resolve()
+        target = (self.kb_dir / sub / f"{obj_id}{suffix}").resolve()
         base = (self.kb_dir / sub).resolve()
         if not target.is_relative_to(base):
             raise ValueError(f"artifact id escapes kb directory: {obj_id!r}")
@@ -215,19 +215,11 @@ class KBStore:
         return self._yaml("claims", claim_id)
 
     def _page_path(self, page_id: str) -> Path:
-        self._assert_safe_artifact_id("pages", page_id)
-        target = (self.kb_dir / "pages" / f"{page_id}.md").resolve()
-        base = (self.kb_dir / "pages").resolve()
-        if not target.is_relative_to(base):
-            raise ValueError(f"artifact id escapes kb directory: {page_id!r}")
+        self._assert_safe_artifact_id("pages", page_id, suffix=".md")
         return self.kb_dir / "pages" / f"{page_id}.md"
 
     def _source_dir(self, source_id: str) -> Path:
-        self._assert_safe_artifact_id("sources", source_id)
-        target = (self.kb_dir / "sources" / source_id).resolve()
-        base = (self.kb_dir / "sources").resolve()
-        if not target.is_relative_to(base):
-            raise ValueError(f"artifact id escapes kb directory: {source_id!r}")
+        self._assert_safe_artifact_id("sources", source_id, suffix="")
         return self.kb_dir / "sources" / source_id
 
     def _entity_path(self, eid: str) -> Path:

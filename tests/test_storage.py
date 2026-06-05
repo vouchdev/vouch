@@ -229,7 +229,7 @@ def test_slug_hint_path_traversal_rejected_on_approve(store: KBStore) -> None:
         text="malicious",
         evidence=[src.id],
         proposed_by="agent",
-        slug_hint="../../../pwned",
+        slug_hint="../../pwned",
     )
     canary = store.root / "pwned.yaml"
     with pytest.raises((ValueError, ProposalError)):
