@@ -126,13 +126,21 @@ review overhead with no protection benefit.
 
 You *can* approve from CI:
 
+First opt in on the trusted host:
+
+```yaml
+review:
+  expose_decision_tools: true
+```
+
 ```bash
 echo '{"id":"r1","method":"kb.approve","params":{"proposal_id":"prop-…"}}' \
   | vouch serve --transport jsonl
 ```
 
-Whether you *should* is a different question. Auto-approval re-creates
-the problem the gate solves. If you do it:
+By default, `kb.approve` / `kb.reject` are not exposed to agent
+transports. Whether you *should* enable them is a different question.
+Auto-approval re-creates the problem the gate solves. If you do it:
 
 - Restrict to a specific `proposed_by` (one bot, not all agents).
 - Restrict to a specific kind (e.g. only `entity` proposals, never

@@ -41,6 +41,7 @@ from .proposals import (
     propose_relation,
     reject,
 )
+from .review_config import decision_tools_enabled, require_decision_tools_enabled
 from .storage import (
     ArtifactNotFoundError,
     KBNotFoundError,
@@ -64,7 +65,9 @@ def _agent() -> str:
 
 
 def _h_capabilities(_: dict) -> dict:
-    return build_caps().model_dump(mode="json")
+    return build_caps(
+        include_decision_tools=decision_tools_enabled(_store().kb_dir)
+    ).model_dump(mode="json")
 
 
 def _h_status(_: dict) -> dict:
@@ -285,13 +288,17 @@ def _h_propose_relation(p: dict) -> dict:
 
 
 def _h_approve(p: dict) -> dict:
-    a = approve(_store(), p["proposal_id"], approved_by=_agent(),
+    s = _store()
+    require_decision_tools_enabled(s.kb_dir)
+    a = approve(s, p["proposal_id"], approved_by=_agent(),
                 reason=p.get("reason"))
     return {"kind": type(a).__name__.lower(), "id": a.id}
 
 
 def _h_reject(p: dict) -> dict:
-    reject(_store(), p["proposal_id"], rejected_by=_agent(), reason=p["reason"])
+    s = _store()
+    require_decision_tools_enabled(s.kb_dir)
+    reject(s, p["proposal_id"], rejected_by=_agent(), reason=p["reason"])
     return {"proposal_id": p["proposal_id"], "status": "rejected"}
 
 
@@ -514,6 +521,8 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.embeddings_stats": _h_embeddings_stats,
 }
 
+DECISION_HANDLERS = {"kb.approve", "kb.reject"}
+
 
 def handle_request(envelope: dict) -> dict:
     """Pure function — no I/O. Useful for tests."""
@@ -525,6 +534,21 @@ def handle_request(envelope: dict) -> dict:
             "id": req_id, "ok": False,
             "error": {"code": "method_not_found", "message": f"unknown method: {method}"},
         }
+    if method in DECISION_HANDLERS:
+        try:
+            if not decision_tools_enabled(_store().kb_dir):
+                return {
+                    "id": req_id, "ok": False,
+                    "error": {
+                        "code": "method_not_found",
+                        "message": f"unknown method: {method}",
+                    },
+                }
+        except Exception:
+            return {
+                "id": req_id, "ok": False,
+                "error": {"code": "method_not_found", "message": f"unknown method: {method}"},
+            }
     try:
         result = HANDLERS[method](params)
         return {"id": req_id, "ok": True, "result": result}

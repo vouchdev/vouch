@@ -188,7 +188,8 @@ Source intake (not gated — evidence is harmless and de-duplicates): `kb.regist
 
 Write (gated → produce proposals): `kb.propose_{claim,page,entity,relation}` (with `dry_run:true` for preview-only)
 
-Decisions: `kb.approve`, `kb.reject` (host trust required)
+Decisions: `kb.approve`, `kb.reject` (disabled on agent transports by
+default; set `review.expose_decision_tools: true` only for trusted hosts)
 
 Lifecycle (metadata about reviewed knowledge — direct mutation, audited): `kb.supersede`, `kb.contradict`, `kb.archive`, `kb.confirm`, `kb.cite`
 

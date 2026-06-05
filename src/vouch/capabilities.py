@@ -13,6 +13,11 @@ from .models import Capabilities
 # The full method surface this implementation exposes. Keep this list in
 # sync with the MCP server + JSONL server registrations — `test_capabilities`
 # asserts they match.
+DECISION_METHODS = [
+    "kb.approve",
+    "kb.reject",
+]
+
 METHODS = [
     "kb.capabilities",
     "kb.status",
@@ -34,8 +39,6 @@ METHODS = [
     "kb.propose_page",
     "kb.propose_entity",
     "kb.propose_relation",
-    "kb.approve",
-    "kb.reject",
     "kb.supersede",
     "kb.contradict",
     "kb.archive",
@@ -60,7 +63,7 @@ METHODS = [
 ]
 
 
-def capabilities() -> Capabilities:
+def capabilities(*, include_decision_tools: bool = False) -> Capabilities:
     retrieval = ["fts5", "substring"]
     try:
         from .embeddings import get_embedder
@@ -71,7 +74,7 @@ def capabilities() -> Capabilities:
         pass
     return Capabilities(
         version=__version__,
-        methods=METHODS,
+        methods=[*METHODS, *DECISION_METHODS] if include_decision_tools else METHODS,
         retrieval=retrieval,
         review_gated=True,
         transports=["mcp", "jsonl"],

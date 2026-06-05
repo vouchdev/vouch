@@ -33,6 +33,7 @@ from .proposals import (
     propose_relation,
     reject,
 )
+from .review_config import decision_tools_enabled, require_decision_tools_enabled
 from .storage import (
     ArtifactNotFoundError,
     KBNotFoundError,
@@ -62,7 +63,9 @@ def _agent() -> str:
 @mcp.tool()
 def kb_capabilities() -> dict[str, Any]:
     """Return the protocol capabilities of this server."""
-    return build_caps().model_dump(mode="json")
+    return build_caps(
+        include_decision_tools=decision_tools_enabled(_store().kb_dir)
+    ).model_dump(mode="json")
 
 
 @mcp.tool()
@@ -404,8 +407,10 @@ def _proposal_response(pr, dry_run: bool) -> dict[str, Any]:
 @mcp.tool()
 def kb_approve(proposal_id: str, reason: str | None = None) -> dict[str, Any]:
     """Approve a proposal → durable artifact. Use carefully."""
+    store = _store()
+    require_decision_tools_enabled(store.kb_dir)
     try:
-        artifact = approve(_store(), proposal_id, approved_by=_agent(),
+        artifact = approve(store, proposal_id, approved_by=_agent(),
                            reason=reason)
     except (ArtifactNotFoundError, ValueError, ProposalError) as e:
         raise ValueError(str(e)) from e
@@ -414,8 +419,10 @@ def kb_approve(proposal_id: str, reason: str | None = None) -> dict[str, Any]:
 
 @mcp.tool()
 def kb_reject(proposal_id: str, reason: str) -> dict[str, Any]:
+    store = _store()
+    require_decision_tools_enabled(store.kb_dir)
     try:
-        reject(_store(), proposal_id, rejected_by=_agent(), reason=reason)
+        reject(store, proposal_id, rejected_by=_agent(), reason=reason)
     except (ArtifactNotFoundError, ValueError, ProposalError) as e:
         raise ValueError(str(e)) from e
     return {"proposal_id": proposal_id, "status": "rejected", "reason": reason}

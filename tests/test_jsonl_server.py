@@ -12,6 +12,14 @@ from vouch.models import Claim
 from vouch.storage import KBStore
 
 
+def _enable_decision_tools(store: KBStore) -> None:
+    import yaml
+    cfg_path = store.kb_dir / "config.yaml"
+    cfg = yaml.safe_load(cfg_path.read_text()) or {}
+    cfg.setdefault("review", {})["expose_decision_tools"] = True
+    cfg_path.write_text(yaml.safe_dump(cfg))
+
+
 @pytest.fixture
 def store(tmp_path: Path) -> KBStore:
     return KBStore.init(tmp_path)
@@ -53,6 +61,7 @@ def test_jsonl_dry_run_propose_then_real_propose(store: KBStore, monkeypatch) ->
 
 def test_jsonl_full_flow(store: KBStore, monkeypatch) -> None:
     src = store.put_source(b"raw evidence")
+    _enable_decision_tools(store)
     monkeypatch.chdir(store.root)
     pr = handle_request({"id": "1", "method": "kb.propose_claim",
                          "params": {"text": "JWT used", "evidence": [src.id]}})
@@ -64,6 +73,7 @@ def test_jsonl_full_flow(store: KBStore, monkeypatch) -> None:
     assert status["result"]["claims"] == 1
     caps = handle_request({"id": "4", "method": "kb.capabilities", "params": {}})
     assert caps["result"]["review_gated"] is True
+    assert "kb.approve" in caps["result"]["methods"]
 
 
 def test_register_source_from_path_rejects_outside_root(
@@ -164,6 +174,7 @@ def test_jsonl_session_lifecycle(store: KBStore, monkeypatch) -> None:
 def test_jsonl_self_approval_forbidden(store: KBStore, monkeypatch) -> None:
     """approve() must raise forbidden_self_approval when proposer == approver."""
     src = store.put_source(b"evidence")
+    _enable_decision_tools(store)
     monkeypatch.chdir(store.root)
     pr = handle_request({"id": "1", "method": "kb.propose_claim",
                          "params": {"text": "test claim", "evidence": [src.id]}})
@@ -173,6 +184,28 @@ def test_jsonl_self_approval_forbidden(store: KBStore, monkeypatch) -> None:
                            "params": {"proposal_id": pid}})
     assert not resp["ok"]
     assert "forbidden_self_approval" in resp["error"]["message"]
+
+
+def test_jsonl_decision_tools_disabled_by_default(
+    store: KBStore, monkeypatch
+) -> None:
+    src = store.put_source(b"evidence")
+    monkeypatch.chdir(store.root)
+    monkeypatch.setenv("VOUCH_AGENT", "alice")
+    pr = handle_request({"id": "1", "method": "kb.propose_claim",
+                         "params": {"text": "test claim", "evidence": [src.id]}})
+    pid = pr["result"]["proposal_id"]
+
+    caps = handle_request({"id": "caps", "method": "kb.capabilities", "params": {}})
+    assert "kb.approve" not in caps["result"]["methods"]
+    assert "kb.reject" not in caps["result"]["methods"]
+
+    monkeypatch.setenv("VOUCH_AGENT", "bob")
+    resp = handle_request({"id": "2", "method": "kb.approve",
+                           "params": {"proposal_id": pid}})
+    assert not resp["ok"]
+    assert resp["error"]["code"] == "method_not_found"
+    assert store.list_claims() == []
 
 
 def test_jsonl_self_approval_allowed_with_trusted_agent_config(
