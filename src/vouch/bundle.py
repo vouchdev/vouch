@@ -39,6 +39,13 @@ EXPORT_SUBDIRS = (
     "evidence", "sessions", "decided",
 )
 
+IMPORT_ROOT_FILES = {"config.yaml"}
+FORBIDDEN_SAFETY_FLAGS = {
+    "has_proposed": "proposed/",
+    "has_state_db": "state.db",
+    "has_audit_log": "audit.log.jsonl",
+}
+
 VALIDATORS: dict[str, Any] = {
     "claims": lambda data: Claim.model_validate(yaml.safe_load(data)),
     "pages": lambda data: _deserialize_page(data.decode()),
@@ -139,6 +146,35 @@ def _unsafe_name_reason(name: str) -> str | None:
     return None
 
 
+def _import_path_issue(name: str) -> str | None:
+    reason = _unsafe_name_reason(name)
+    if reason is not None:
+        return reason
+    if name in IMPORT_ROOT_FILES:
+        return None
+    if name == "audit.log.jsonl":
+        return "forbidden path in bundle: 'audit.log.jsonl'"
+    if name == "state.db" or name.startswith("state.db-"):
+        return f"forbidden path in bundle: {name!r}"
+    if name == "proposed" or name.startswith("proposed/"):
+        return f"forbidden path in bundle: {name!r}"
+    subdir = name.split("/", 1)[0]
+    if subdir not in EXPORT_SUBDIRS:
+        return f"path outside importable bundle artifacts: {name!r}"
+    return None
+
+
+def _manifest_safety_issues(manifest: dict[str, Any]) -> list[str]:
+    safety = manifest.get("safety") or {}
+    if not isinstance(safety, dict):
+        return ["manifest safety must be an object"]
+    issues: list[str] = []
+    for flag, path_desc in FORBIDDEN_SAFETY_FLAGS.items():
+        if safety.get(flag) is True:
+            issues.append(f"manifest safety flag {flag}=true includes forbidden {path_desc}")
+    return issues
+
+
 def export_check(bundle_path: Path) -> ExportCheckResult:
     """Verify every file in the bundle matches its manifest hash."""
     issues: list[str] = []
@@ -189,7 +225,7 @@ def export_check(bundle_path: Path) -> ExportCheckResult:
 
 
 def _safe_member_path(kb_dir: Path, member_name: str) -> Path:
-    reason = _unsafe_name_reason(member_name)
+    reason = _import_path_issue(member_name)
     if reason is not None:
         raise RuntimeError(reason)
     kb_root = kb_dir.resolve()
@@ -248,6 +284,7 @@ def import_check(kb_dir: Path, bundle_path: Path) -> ImportCheckResult:
             )
         manifest = json.loads(tar.extractfile(mf_member).read().decode())  # type: ignore[union-attr]
         bundle_id = manifest.get("bundle_id", "")
+        issues.extend(_manifest_safety_issues(manifest))
         recorded = {f["path"]: f for f in manifest["files"]}
         manifest_paths = set(recorded)
         for f in manifest["files"]:
