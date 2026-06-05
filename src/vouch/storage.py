@@ -127,6 +127,33 @@ def _deserialize_page(text: str) -> Page:
     return Page(body=body, **meta)
 
 
+def _validate_artifact_id(obj_id: str) -> str:
+    """Reject artifact ids that would escape their subdirectory when used as a
+    filename. Ids are flat slugs (claims/<id>.yaml, pages/<id>.md, …); a value
+    containing a path separator, ``..``, an absolute prefix, or a nul byte must
+    never reach a path builder, or an untrusted proposer could write an approved
+    artifact outside the KB (e.g. ``slug_hint="../../../../etc/evil"``).
+
+    This is the write-side counterpart to ``read_under_root``: reads are already
+    containment-checked, and bundle import already rejects ``..``/absolute/nul
+    member names (see ``bundle._unsafe_name_reason``), but the durable write path
+    had no equivalent guard. Validating at the single point where ids become
+    filenames covers every caller (MCP, JSONL, CLI, direct ``KBStore``).
+    """
+    if not obj_id or not isinstance(obj_id, str):
+        raise ValueError("artifact id must be a non-empty string")
+    if (
+        "/" in obj_id
+        or "\\" in obj_id
+        or "\x00" in obj_id
+        or os.path.isabs(obj_id)
+        or obj_id in (".", "..")
+        or ".." in Path(obj_id).parts
+    ):
+        raise ValueError(f"unsafe artifact id (path traversal): {obj_id!r}")
+    return obj_id
+
+
 class KBStore:
     """File-backed CRUD layer. Pure I/O — no business logic."""
 
@@ -188,16 +215,16 @@ class KBStore:
         return self.kb_dir / CONFIG_FILENAME
 
     def _yaml(self, sub: str, obj_id: str) -> Path:
-        return self.kb_dir / sub / f"{obj_id}.yaml"
+        return self.kb_dir / sub / f"{_validate_artifact_id(obj_id)}.yaml"
 
     def _claim_path(self, claim_id: str) -> Path:
         return self._yaml("claims", claim_id)
 
     def _page_path(self, page_id: str) -> Path:
-        return self.kb_dir / "pages" / f"{page_id}.md"
+        return self.kb_dir / "pages" / f"{_validate_artifact_id(page_id)}.md"
 
     def _source_dir(self, source_id: str) -> Path:
-        return self.kb_dir / "sources" / source_id
+        return self.kb_dir / "sources" / _validate_artifact_id(source_id)
 
     def _entity_path(self, eid: str) -> Path:
         return self._yaml("entities", eid)

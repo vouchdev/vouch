@@ -356,3 +356,38 @@ def test_cite_resolves_source_and_evidence(store: KBStore) -> None:
         for c in citations
     }
     assert "source" in kinds and "evidence" in kinds
+
+
+@pytest.mark.parametrize(
+    "bad_id",
+    ["../evil", "..", "sub/evil", "a\\b", "/abs", ".", "x\x00y"],
+)
+def test_put_rejects_path_traversal_ids(store: KBStore, bad_id: str) -> None:
+    # Write builders must refuse ids that escape their subdirectory; an
+    # unsanitized id is a path-traversal write primitive.
+    src = store.put_source(b"e")
+    with pytest.raises(ValueError):
+        store.put_claim(Claim(id=bad_id, text="t", evidence=[src.id]))
+    with pytest.raises(ValueError):
+        store.put_page(Page(id=bad_id, title="T", body="b"))
+    with pytest.raises(ValueError):
+        store.put_entity(Entity(id=bad_id, name="N", type=EntityType.CONCEPT))
+
+
+def test_approve_with_traversal_slug_hint_writes_nothing(
+    store: KBStore, tmp_path: Path
+) -> None:
+    # End-to-end: an untrusted proposer supplies a malicious slug_hint; the
+    # proposal may file, but approval must not write an artifact outside the KB.
+    src = store.put_source(b"e")
+    pr = propose_claim(
+        store,
+        text="t",
+        evidence=[src.id],
+        proposed_by="agent",
+        slug_hint="../../../../evil",
+    )
+    with pytest.raises((ProposalError, ValueError)):
+        approve(store, pr.id, approved_by="reviewer")
+    assert not (tmp_path / "evil.yaml").exists()
+    assert not (tmp_path.parent / "evil.yaml").exists()
