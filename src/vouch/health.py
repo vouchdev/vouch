@@ -183,7 +183,7 @@ def rebuild_index(store: KBStore) -> dict:
 
 def _rebuild_embeddings(store: KBStore) -> None:
     try:
-        from .embeddings import get_embedder
+        from .embeddings import content_hash, get_embedder
         embedder = get_embedder()
     except Exception:
         return
@@ -201,9 +201,20 @@ def _rebuild_embeddings(store: KBStore) -> None:
         for i in range(0, len(texts), batch_size):
             batch = texts[i:i + batch_size]
             vecs = embedder.encode_batch([t[2] for t in batch])
-            for (kind, eid, _), row in zip(batch, vecs, strict=True):
-                index_db.index_embedding(conn, kind=kind, id=eid,
-                                         vec=row.tolist())
+            for (kind, eid, text), row in zip(batch, vecs, strict=True):
+                # Write to `embedding_index` — the table `search_embedding()`
+                # reads and `reset()` (called at the top of rebuild) clears.
+                # `index_embedding()` targeted the legacy `embeddings` table,
+                # which no reader queries, so every rebuild/reindex silently
+                # left semantic search empty until each artifact was next
+                # re-written. Mirror the live `KBStore._embed_and_store`
+                # metadata so the per-content/model skip-check stays consistent.
+                index_db.put_embedding(
+                    conn, kind=kind, id=eid, vec=row.tolist(),
+                    content_hash=content_hash(text),
+                    model=embedder.name, model_version=embedder.version,
+                    dim=embedder.dim,
+                )
 
 
 # --- helpers used by `vouch discover` (CLI) -------------------------------

@@ -49,6 +49,28 @@ def test_put_page_writes_embedding(store: KBStore) -> None:
     assert rec[0].shape == (8,)
 
 
+def test_rebuild_index_repopulates_semantic_index(store: KBStore) -> None:
+    # rebuild_index resets embedding_index (the table search reads) and then
+    # re-embeds. The re-embedding must land in embedding_index, not the legacy
+    # `embeddings` table — otherwise semantic search silently returns nothing
+    # after every `vouch index` / `reindex` / import-apply.
+    from vouch import health
+
+    src = store.put_source(b"e")
+    store.put_claim(Claim(id="c1", text="alpha beta gamma", evidence=[src.id]))
+    store.put_page(Page(id="p1", title="Title", body="page body"))
+    store.put_entity(Entity(id="e1", name="JWT", type=EntityType.CONCEPT))
+
+    health.rebuild_index(store)
+
+    # Each artifact's embedding must be readable from embedding_index after the
+    # rebuild (these are None before the fix, because the rebuild wrote them to
+    # the dead `embeddings` table that no reader queries).
+    assert index_db.get_embedding(store.kb_dir, kind="claim", id="c1") is not None
+    assert index_db.get_embedding(store.kb_dir, kind="page", id="p1") is not None
+    assert index_db.get_embedding(store.kb_dir, kind="entity", id="e1") is not None
+
+
 def test_put_source_writes_embedding(store: KBStore) -> None:
     src = store.put_source(b"content bytes here", title="src1")
     rec = index_db.get_embedding(store.kb_dir, kind="source", id=src.id)
