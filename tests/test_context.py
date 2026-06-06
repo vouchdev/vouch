@@ -38,6 +38,26 @@ def test_context_pack_has_quality_metadata(store: KBStore) -> None:
     assert pack["quality"]["ok"] is True
 
 
+def test_require_citations_only_considers_returned_items(store: KBStore) -> None:
+    # Uncited claims (no evidence). With max_chars dropping tail items, the
+    # require_citations gate and uncited_items must reference only items actually
+    # returned — never claims the budget already dropped. Before the fix, uncited
+    # was computed pre-budget, so uncited_items could name absent items.
+    for i in range(20):
+        store.put_claim(Claim(
+            id=f"u{i}",
+            text=f"uncited padding claim number {i} with extra text",
+            evidence=[],
+        ))
+    health.rebuild_index(store)
+    pack = context.build_context_pack(
+        store, query="padding", max_chars=80, require_citations=True,
+    )
+    returned = {it["id"] for it in pack["items"]}
+    assert pack["quality"]["uncited_items"], "expected uncited claims to be flagged"
+    assert all(uid in returned for uid in pack["quality"]["uncited_items"])
+
+
 def test_context_pack_max_chars_omits_items(store: KBStore) -> None:
     src = store.put_source(b"e")
     # Many short claims — total summary length > 100 chars.

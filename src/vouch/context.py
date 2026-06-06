@@ -106,11 +106,6 @@ def build_context_pack(
     budget_clipped = 0
     budget_omitted = 0
 
-    if require_citations:
-        for it in items:
-            if it.type == "claim" and not it.citations:
-                uncited.append(it.id)
-
     if max_chars is not None:
         total = sum(len(i.summary) for i in items)
         if total > max_chars:
@@ -123,6 +118,12 @@ def build_context_pack(
             while items and sum(len(i.summary) for i in items) > max_chars:
                 items.pop()
                 budget_omitted += 1
+
+    # Compute the citation gate over the items actually returned — AFTER the
+    # max_chars budget has dropped tail items — so the gate never fails on (or
+    # reports in uncited_items) claims the consumer did not receive.
+    if require_citations:
+        uncited = [it.id for it in items if it.type == "claim" and not it.citations]
 
     if len(items) < min_items:
         warnings.append(f"only {len(items)} items, minimum {min_items}")
