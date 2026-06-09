@@ -94,7 +94,13 @@ def test_import_apply_fails_when_requested(store: KBStore, tmp_path: Path) -> No
         bundle.import_apply(store.kb_dir, bundle_path, on_conflict="fail")
 
 
-def _write_malicious_bundle(bundle_path: Path, member_name: str, payload: bytes) -> None:
+def _write_malicious_bundle(
+    bundle_path: Path,
+    member_name: str,
+    payload: bytes,
+    *,
+    safety: dict[str, bool] | None = None,
+) -> None:
     """Build a tarball with a single attacker-named member + matching manifest."""
     manifest = {
         "spec": bundle.SPEC_VERSION,
@@ -107,7 +113,8 @@ def _write_malicious_bundle(bundle_path: Path, member_name: str, payload: bytes)
             }
         ],
         "counts": {},
-        "safety": {"has_proposed": False, "has_state_db": False, "has_audit_log": False},
+        "safety": safety
+        or {"has_proposed": False, "has_state_db": False, "has_audit_log": False},
     }
     with tarfile.open(bundle_path, "w:gz") as tar:
         info = tarfile.TarInfo(member_name)
@@ -205,6 +212,65 @@ def test_import_check_flags_path_traversal(store: KBStore, tmp_path: Path) -> No
     result = bundle.import_check(store.kb_dir, bundle_path)
     assert not result.ok
     assert any("traversal" in i or "unsafe" in i or "absolute path" in i for i in result.issues)
+
+
+@pytest.mark.parametrize(
+    ("member_name", "payload", "expected"),
+    [
+        ("audit.log.jsonl", b'{"event":"fake"}\n', "audit.log.jsonl"),
+        ("state.db", b"sqlite bytes", "state.db"),
+        ("state.db-wal", b"sqlite wal bytes", "state.db-wal"),
+        ("proposed/pending.yaml", b"id: pending\n", "proposed/pending.yaml"),
+    ],
+)
+def test_import_rejects_non_committable_bundle_paths(
+    store: KBStore, tmp_path: Path, member_name: str, payload: bytes, expected: str
+) -> None:
+    bundle_path = tmp_path / "non-committable.tar.gz"
+    _write_malicious_bundle(bundle_path, member_name, payload)
+
+    diff = bundle.import_check(store.kb_dir, bundle_path)
+    assert not diff.ok
+    assert any(expected in issue for issue in diff.issues), diff.issues
+
+    audit_path = store.kb_dir / "audit.log.jsonl"
+    audit_path.write_text('{"event":"canary"}\n')
+    before_audit = audit_path.read_text()
+    with pytest.raises(RuntimeError, match="forbidden path"):
+        bundle.import_apply(store.kb_dir, bundle_path, on_conflict="overwrite")
+    assert audit_path.read_text() == before_audit
+
+
+@pytest.mark.parametrize(
+    ("safety", "expected"),
+    [
+        (
+            {"has_proposed": True, "has_state_db": False, "has_audit_log": False},
+            "has_proposed",
+        ),
+        (
+            {"has_proposed": False, "has_state_db": True, "has_audit_log": False},
+            "has_state_db",
+        ),
+        (
+            {"has_proposed": False, "has_state_db": False, "has_audit_log": True},
+            "has_audit_log",
+        ),
+    ],
+)
+def test_import_rejects_manifest_safety_flags(
+    store: KBStore, tmp_path: Path, safety: dict[str, bool], expected: str
+) -> None:
+    payload = b"version: 1\n"
+    bundle_path = tmp_path / "unsafe-flag.tar.gz"
+    _write_malicious_bundle(bundle_path, "config.yaml", payload, safety=safety)
+
+    diff = bundle.import_check(store.kb_dir, bundle_path)
+    assert not diff.ok
+    assert any(expected in issue for issue in diff.issues), diff.issues
+
+    with pytest.raises(RuntimeError, match=expected):
+        bundle.import_apply(store.kb_dir, bundle_path, on_conflict="overwrite")
 
 
 def _write_hash_mismatched_bundle(
