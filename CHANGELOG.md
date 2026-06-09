@@ -6,6 +6,11 @@ All notable changes to vouch are documented here. Format follows
 
 ## [Unreleased]
 
+### Fixed
+- `vouch migrate` change detection now compares transformed output against the
+  pre-transform parsed dict, so YAML whitespace or key-order round-trip
+  differences no longer appear as false positives in the changed-file list.
+
 ### Added
 - `vouch install-mcp <host>` — one-command adapter writer that drops the
   right MCP config templates into a project tree, idempotently. Eight hosts

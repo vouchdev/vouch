@@ -29,6 +29,18 @@ def _write_config(kb_dir: Path, schema_version: str) -> None:
     cfg_path.write_text(_yaml_dump(cfg))
 
 
+def _seed_kb_with_claim(
+    tmp_path: Path,
+    claim_id: str = "test-claim",
+    **claim_extra,
+) -> tuple[Path, str]:
+    store = KBStore.init(tmp_path)
+    src = store.put_source(b"evidence")
+    raw = _claim_yaml(claim_id, evidence=[src.id], **claim_extra)
+    (store.kb_dir / "claims" / f"{claim_id}.yaml").write_text(_yaml_dump(raw))
+    return store.kb_dir, src.id
+
+
 def _claim_yaml(claim_id: str, **extra) -> dict:
     base = {
         "id": claim_id,
@@ -62,7 +74,7 @@ def test_chain_same_version_returns_empty():
 
 
 def test_chain_unknown_version_raises():
-    with pytest.raises(ValueError, match="No migration path"):
+    with pytest.raises(ValueError, match="Check that your vouch installation is up to date"):
         _chain("0.1", "99.0")
 
 
@@ -149,12 +161,7 @@ def patched_migrations(monkeypatch):
 
 
 def test_migrate_round_trip(tmp_path: Path, patched_migrations):
-    KBStore.init(tmp_path)
-    kb_dir = tmp_path / KB_DIRNAME
-
-    # Write a claim with the old field name
-    raw = _claim_yaml("test-claim", old_field="old_value")
-    (kb_dir / "claims" / "test-claim.yaml").write_text(_yaml_dump(raw))
+    kb_dir, _ = _seed_kb_with_claim(tmp_path, old_field="old_value")
     _write_config(kb_dir, "0.1")
 
     result = migrate_kb(tmp_path, from_v="0.1", to_v="0.2")
@@ -171,12 +178,41 @@ def test_migrate_round_trip(tmp_path: Path, patched_migrations):
     assert cfg["schema_version"] == "0.2"
 
 
-def test_migrate_dry_run_does_not_write(tmp_path: Path, patched_migrations):
-    KBStore.init(tmp_path)
-    kb_dir = tmp_path / KB_DIRNAME
+def test_migrate_no_transform_skips_yaml_roundtrip_whitespace(tmp_path: Path, monkeypatch):
+    """No-op transforms must not flag files whose on-disk YAML differs from _yaml_dump."""
+    noop_migration = Migration(from_version="0.1", to_version="0.2", transforms=[])
+    monkeypatch.setattr("vouch.migration.MIGRATIONS", [noop_migration])
 
-    raw = _claim_yaml("test-claim", old_field="old_value")
-    (kb_dir / "claims" / "test-claim.yaml").write_text(_yaml_dump(raw))
+    kb_dir, src_id = _seed_kb_with_claim(tmp_path, "messy-claim", text="hello")
+
+    messy_yaml = f"""id: messy-claim
+text: hello
+type: observation
+status: working
+confidence: 0.7
+evidence:
+- {src_id}
+entities: []
+supersedes: []
+superseded_by: null
+contradicts: []
+scope: project
+tags: []
+created_at: '2024-01-01T00:00:00+00:00'
+updated_at: '2024-01-01T00:00:00+00:00'
+last_confirmed_at: null
+approved_by: null
+"""
+    (kb_dir / "claims" / "messy-claim.yaml").write_text(messy_yaml)
+    _write_config(kb_dir, "0.1")
+
+    result = migrate_kb(tmp_path, from_v="0.1", to_v="0.2", dry_run=True)
+
+    assert "claims/messy-claim.yaml" not in result.changed
+
+
+def test_migrate_dry_run_does_not_write(tmp_path: Path, patched_migrations):
+    kb_dir, _ = _seed_kb_with_claim(tmp_path, old_field="old_value")
     _write_config(kb_dir, "0.1")
 
     result = migrate_kb(tmp_path, from_v="0.1", to_v="0.2", dry_run=True)
@@ -212,11 +248,8 @@ def test_migrate_rollback_on_validation_error(tmp_path: Path, monkeypatch):
     )
     monkeypatch.setattr("vouch.migration.MIGRATIONS", [bad_migration])
 
-    KBStore.init(tmp_path)
-    kb_dir = tmp_path / KB_DIRNAME
-
-    original_text = _yaml_dump(_claim_yaml("test-claim"))
-    (kb_dir / "claims" / "test-claim.yaml").write_text(original_text)
+    kb_dir, _ = _seed_kb_with_claim(tmp_path)
+    original_text = (kb_dir / "claims" / "test-claim.yaml").read_text()
     _write_config(kb_dir, "0.1")
 
     with pytest.raises(RuntimeError, match="validation failed"):

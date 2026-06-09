@@ -86,7 +86,7 @@ def _chain(from_v: str, to_v: str) -> list[Migration]:
         if step is None:
             raise ValueError(
                 f"No migration path from {current!r} to {to_v!r}. "
-                f"Available steps: {[m.from_version + '->' + m.to_version for m in MIGRATIONS]}"
+                "Check that your vouch installation is up to date."
             )
         steps.append(step)
         current = step.to_version
@@ -188,12 +188,12 @@ def _copy_tree_for_migration(kb_dir: Path, tmp_dir: Path, steps: list[Migration]
             if p.suffix in (".yaml", ".yml") and not (
                 sub == "sources" and p.name != "meta.yaml"
             ):
-                original_text = p.read_text()
-                raw = _yaml_load(original_text) or {}
-                transformed = _apply_transforms(raw, sub, steps)
+                raw = _yaml_load(p.read_text()) or {}
+                baseline_text = _yaml_dump(raw)
+                transformed = _apply_transforms(dict(raw), sub, steps)
                 new_text = _yaml_dump(transformed)
                 dst.write_text(new_text)
-                if new_text != _yaml_dump(_yaml_load(original_text) or {}):
+                if new_text != baseline_text:
                     changed.append(str(p.relative_to(kb_dir)))
             else:
                 dst.write_bytes(p.read_bytes())
@@ -205,10 +205,11 @@ def _copy_tree_for_migration(kb_dir: Path, tmp_dir: Path, steps: list[Migration]
         pages_dst.mkdir(parents=True, exist_ok=True)
         for p in sorted(pages_src.glob("*.md")):
             meta, body = _read_page_frontmatter(p.read_text())
-            transformed_meta = _apply_transforms(meta, "pages", steps)
+            baseline_text = _write_page_frontmatter(meta, body)
+            transformed_meta = _apply_transforms(dict(meta), "pages", steps)
             new_text = _write_page_frontmatter(transformed_meta, body)
             (pages_dst / p.name).write_text(new_text)
-            if new_text != _write_page_frontmatter(meta, body):
+            if new_text != baseline_text:
                 changed.append(f"pages/{p.name}")
 
     # config.yaml — bump schema_version
