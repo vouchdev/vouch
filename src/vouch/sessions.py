@@ -114,9 +114,12 @@ def crystallize(
             )
         summary_page_id = page.id
 
+    crystallize_object_ids = [sess.id, *approved_artifact_ids]
+    if summary_page_id is not None:
+        crystallize_object_ids.append(summary_page_id)
     audit.log_event(
         store.kb_dir, event="session.crystallize", actor=approver,
-        object_ids=[sess.id, *approved_artifact_ids],
+        object_ids=crystallize_object_ids,
         data={"approved": len(approved_artifact_ids), "failed": len(failures)},
     )
     return {
@@ -128,11 +131,17 @@ def crystallize(
 
 
 def _build_summary_body(sess: Session, ids: list[str]) -> str:
-    lines = [f"# Session {sess.id}", ""]
-    if sess.task:
-        lines += [f"**Task:** {sess.task}", ""]
-    lines += [
-        f"**Agent:** {sess.agent}",
+    # The summary page is durable and surfaces in kb.read_page / kb.search /
+    # kb.context, but never goes through propose_page + approve. The body is
+    # therefore restricted to fields the proposing agent cannot influence —
+    # session id (server-generated), timestamps (set from server clock at
+    # session_start / session_end), and the list of artifact ids that did go
+    # through the review gate. Anything agent-controlled (sess.task,
+    # sess.note, sess.agent) is omitted to keep the review-gate guarantee
+    # intact for the Page artifact kind. See #76.
+    lines = [
+        f"# Session {sess.id}",
+        "",
         f"**Started:** {sess.started_at.isoformat()}",
         f"**Ended:** {(sess.ended_at or datetime.now(UTC)).isoformat()}",
         "",

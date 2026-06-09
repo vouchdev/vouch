@@ -1,0 +1,14 @@
+{
+  "context_servers": {
+    "vouch": {
+      "command": {
+        "path": "vouch",
+        "args": ["serve"],
+        "env": {
+          "VOUCH_AGENT": "zed"
+        }
+      },
+      "settings": {}
+    }
+  }
+}

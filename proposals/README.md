@@ -59,6 +59,8 @@ supersedes them.
 | [0001](VEP-0001-review-gate.md) | Review gate | final | 0.0.1 |
 | [0002](VEP-0002-jsonl-transport.md) | JSONL transport | final | 0.0.1 |
 | [0003](VEP-0003-content-hashed-sources.md) | Content-hashed sources | final | 0.0.1 |
+| [0005](VEP-0005-richer-scopes.md) | Richer scopes on Claim/Source | draft | — |
+| [0004](VEP-0004-http-transport.md) | HTTP transport | draft | — |
 
 ## Numbering
 

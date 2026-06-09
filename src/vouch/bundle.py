@@ -21,6 +21,7 @@ import hashlib
 import io
 import json
 import tarfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -44,8 +45,14 @@ MANIFEST_NAME = "manifest.json"
 SPEC_VERSION = "vouch-bundle-0.1"
 
 EXPORT_SUBDIRS = (
-    "claims", "pages", "sources", "entities", "relations",
-    "evidence", "sessions", "decided",
+    "claims",
+    "pages",
+    "sources",
+    "entities",
+    "relations",
+    "evidence",
+    "sessions",
+    "decided",
 )
 
 VALIDATORS: dict[str, Any] = {
@@ -81,14 +88,16 @@ def build_manifest(kb_dir: Path) -> dict[str, Any]:
     files: list[dict[str, Any]] = []
     for rel, abs_path in _iter_export_files(kb_dir):
         data = abs_path.read_bytes()
-        files.append({
-            # tarfile member names use POSIX `/` on every platform; the
-            # manifest path must match so set lookups and the per-subdir
-            # counter below work on Windows too.
-            "path": rel.as_posix(),
-            "size": len(data),
-            "sha256": sha256_hex(data),
-        })
+        files.append(
+            {
+                # tarfile member names use POSIX `/` on every platform; the
+                # manifest path must match so set lookups and the per-subdir
+                # counter below work on Windows too.
+                "path": rel.as_posix(),
+                "size": len(data),
+                "sha256": sha256_hex(data),
+            }
+        )
     # Bundle id is the sha256 of the sorted per-file hashes — same inputs
     # always produce the same id, so duplicate exports are recognisable.
     h = hashlib.sha256()
@@ -100,8 +109,7 @@ def build_manifest(kb_dir: Path) -> dict[str, Any]:
         "bundle_id": h.hexdigest(),
         "files": files,
         "counts": {
-            sub: sum(1 for f in files if f["path"].startswith(f"{sub}/"))
-            for sub in EXPORT_SUBDIRS
+            sub: sum(1 for f in files if f["path"].startswith(f"{sub}/")) for sub in EXPORT_SUBDIRS
         },
         "safety": {
             "has_proposed": False,
@@ -111,18 +119,25 @@ def build_manifest(kb_dir: Path) -> dict[str, Any]:
     }
 
 
-def export(kb_dir: Path, *, dest: Path, actor: str = "vouch-export") -> dict[str, Any]:
+def export(
+    kb_dir: Path, *, dest: Path, actor: str = "vouch-export",
+    on_progress: Callable[[str], None] | None = None,
+) -> dict[str, Any]:
     manifest = build_manifest(kb_dir)
     dest.parent.mkdir(parents=True, exist_ok=True)
     with tarfile.open(dest, "w:gz") as tar:
         for rel, abs_path in _iter_export_files(kb_dir):
+            if on_progress is not None:
+                on_progress(rel.as_posix())
             tar.add(abs_path, arcname=rel.as_posix())
         manifest_bytes = json.dumps(manifest, indent=2, sort_keys=True).encode()
         info = tarfile.TarInfo(MANIFEST_NAME)
         info.size = len(manifest_bytes)
         tar.addfile(info, io.BytesIO(manifest_bytes))
     audit.log_event(
-        kb_dir, event="bundle.export", actor=actor,
+        kb_dir,
+        event="bundle.export",
+        actor=actor,
         object_ids=[manifest["bundle_id"]],
         data={"dest": str(dest), "files": len(manifest["files"])},
     )
@@ -190,8 +205,10 @@ def export_check(bundle_path: Path) -> ExportCheckResult:
             except KeyError:
                 issues.append(f"manifest lists missing file: {path}")
     return ExportCheckResult(
-        ok=not issues, bundle_id=bundle_id,
-        files_checked=files_checked, issues=issues,
+        ok=not issues,
+        bundle_id=bundle_id,
+        files_checked=files_checked,
+        issues=issues,
     )
 
 
@@ -241,6 +258,206 @@ def _validate_content(path: str, data: bytes, issues: list[str]) -> None:
         issues.append(f"schema validation failed: {path}: {e}")
 
 
+def _artifact_id_from_path(path: str) -> tuple[str, str] | None:
+    """Return (kind, id) for a manifest path, or None for unrelated files.
+
+    Mirrors `sync._artifact_kind` semantics but only emits the entries the
+    referential pass needs. `sources/<sha>/...` collapses to ("source",
+    "<sha>") regardless of whether the path is meta.yaml or content.
+    """
+    parts = path.split("/")
+    if len(parts) < 2:
+        return None
+    top = parts[0]
+    if top == "sources" and len(parts) >= 3:
+        return "source", parts[1]
+    singular = {
+        "claims": "claim",
+        "pages": "page",
+        "entities": "entity",
+        "relations": "relation",
+        "evidence": "evidence",
+    }.get(top)
+    if singular is None:
+        return None
+    return singular, Path(parts[-1]).stem
+
+
+def _existing_ids(kb_dir: Path) -> dict[str, set[str]]:
+    """Snapshot the destination KB's artifact ids per kind.
+
+    Used by the post-merge referential pass: an incoming relation /
+    page reference is satisfied if the target id is either already on
+    disk OR is being delivered by this same bundle.
+    """
+    out: dict[str, set[str]] = {
+        "claim": set(), "page": set(), "entity": set(),
+        "source": set(), "evidence": set(),
+    }
+    for sub, kind, suffix in (
+        ("claims", "claim", ".yaml"),
+        ("entities", "entity", ".yaml"),
+        ("relations", "relation", ".yaml"),
+        ("evidence", "evidence", ".yaml"),
+    ):
+        d = kb_dir / sub
+        if not d.is_dir():
+            continue
+        for p in d.glob(f"*{suffix}"):
+            out[kind].add(p.stem)
+    pages_dir = kb_dir / "pages"
+    if pages_dir.is_dir():
+        for p in pages_dir.glob("*.md"):
+            out["page"].add(p.stem)
+    sources_dir = kb_dir / "sources"
+    if sources_dir.is_dir():
+        for sdir in sources_dir.iterdir():
+            if (sdir / "meta.yaml").exists():
+                out["source"].add(sdir.name)
+    return out
+
+
+def _check_graph_integrity(
+    kb_dir: Path,
+    incoming: dict[str, bytes],
+    issues: list[str],
+) -> None:
+    """Verify every Relation/Page/Claim in `incoming` resolves its refs.
+
+    Closes the bundle / sync equivalent of `put_relation` + `put_page`
+    validation. References are satisfied against the post-merge id set
+    (destination KB ids plus incoming bundle ids), so a self-contained
+    bundle that ships an entity alongside the relation that points at
+    it still imports cleanly. Skips files whose bytes already failed
+    schema validation upstream so a malformed file does not produce a
+    second cryptic error.
+    """
+    ids = _existing_ids(kb_dir)
+    incoming_meta: list[tuple[str, str, bytes]] = []
+    for path, body in incoming.items():
+        kind_id = _artifact_id_from_path(path)
+        if kind_id is None:
+            continue
+        kind, aid = kind_id
+        # Only artifacts that can satisfy a reference go into `ids`.
+        # `relation` is intentionally absent — relations aren't valid
+        # Relation endpoints. The incoming relation itself is still
+        # appended below so its refs get checked.
+        if kind in ids:
+            ids[kind].add(aid)
+        incoming_meta.append((path, kind, body))
+    node_kinds = ("claim", "page", "entity", "source")
+    evidence_kinds = ("source", "evidence")
+    failed_schema = {
+        i.split(": ", 2)[1] for i in issues
+        if i.startswith("schema validation failed: ")
+    }
+    for path, kind, body in incoming_meta:
+        if path in failed_schema:
+            continue
+        try:
+            if kind == "relation":
+                rel = Relation.model_validate(yaml.safe_load(body))
+                if not any(rel.source in ids[k] for k in node_kinds):
+                    issues.append(
+                        f"dangling reference: {path}: relation source "
+                        f"{rel.source!r} not in bundle or destination"
+                    )
+                if not any(rel.target in ids[k] for k in node_kinds):
+                    issues.append(
+                        f"dangling reference: {path}: relation target "
+                        f"{rel.target!r} not in bundle or destination"
+                    )
+                for eid in rel.evidence:
+                    if not any(eid in ids[k] for k in evidence_kinds):
+                        issues.append(
+                            f"dangling reference: {path}: relation "
+                            f"evidence {eid!r} not in bundle or destination"
+                        )
+            elif kind == "page":
+                page = _deserialize_page(body.decode())
+                for cid in page.claims:
+                    if cid not in ids["claim"]:
+                        issues.append(
+                            f"dangling reference: {path}: page claim "
+                            f"{cid!r} not in bundle or destination"
+                        )
+                for eid in page.entities:
+                    if eid not in ids["entity"]:
+                        issues.append(
+                            f"dangling reference: {path}: page entity "
+                            f"{eid!r} not in bundle or destination"
+                        )
+                for sid in page.sources:
+                    if sid not in ids["source"]:
+                        issues.append(
+                            f"dangling reference: {path}: page source "
+                            f"{sid!r} not in bundle or destination"
+                        )
+            elif kind == "claim":
+                claim = Claim.model_validate(yaml.safe_load(body))
+                for ref in claim.evidence:
+                    if not any(ref in ids[k] for k in evidence_kinds):
+                        issues.append(
+                            f"dangling reference: {path}: claim citation "
+                            f"{ref!r} not in bundle or destination"
+                        )
+        except Exception:
+            # Schema validation already ran on `body` in `_validate_content`
+            # and recorded any structural issue. Swallow here so a single
+            # malformed file doesn't mask the more useful upstream error.
+            continue
+
+
+def _check_source_content_address(path: str, body: bytes, issues: list[str]) -> None:
+    """Enforce the Source content-addressing invariant on import.
+
+    A Source's id is the sha256 of its content (README: "content-addressed
+    by sha256"; `storage.put_source` derives the id from the bytes, and
+    `verify.verify_source` re-checks `sha256(content) == id`). But
+    `import_apply` writes `sources/<sha>/{meta.yaml,content}` straight from
+    the tarball, so without this check a hand-built bundle can land a
+    source whose content does not hash to its claimed id. The per-file
+    sha256 gate (#74) only proves the bytes match the manifest, not that
+    they match the content-address — so a manifest-consistent bundle could
+    substitute the evidence behind a legitimate-looking source id. A claim
+    that "cites source X" would then point at bytes that were never hashed
+    to X; `verify_source` would report `stored_ok=False` only after the
+    import already succeeded with a clean `bundle.import` audit event.
+    """
+    parts = path.split("/")
+    if len(parts) < 3 or parts[0] != "sources":
+        return
+    claimed_id = parts[1]
+    leaf = parts[-1]
+    if leaf == "content":
+        actual = sha256_hex(body)
+        if actual != claimed_id:
+            issues.append(
+                f"source content-address mismatch: {path}: content hashes "
+                f"to {actual} but is stored under id {claimed_id}"
+            )
+    elif leaf == "meta.yaml":
+        try:
+            meta = yaml.safe_load(body)
+        except Exception:
+            return  # a parse failure is already surfaced by _validate_content
+        if not isinstance(meta, dict):
+            return
+        mid = meta.get("id")
+        if mid is not None and mid != claimed_id:
+            issues.append(
+                f"source id mismatch: {path}: meta.yaml id {mid!r} does not "
+                f"match its content-address directory {claimed_id!r}"
+            )
+        mhash = meta.get("hash")
+        if mhash is not None and mhash != claimed_id:
+            issues.append(
+                f"source hash mismatch: {path}: meta.yaml hash {mhash!r} does "
+                f"not match its content-address directory {claimed_id!r}"
+            )
+
+
 def import_check(kb_dir: Path, bundle_path: Path) -> ImportCheckResult:
     """Diff a bundle against the destination KB without writing anything."""
     new_files: list[str] = []
@@ -248,14 +465,13 @@ def import_check(kb_dir: Path, bundle_path: Path) -> ImportCheckResult:
     identical: list[str] = []
     issues: list[str] = []
     bundle_id = ""
+    incoming: dict[str, bytes] = {}
 
     with tarfile.open(bundle_path, "r:gz") as tar:
         try:
             mf_member = tar.getmember(MANIFEST_NAME)
         except KeyError:
-            return ImportCheckResult(
-                False, "", [], [], [], ["bundle missing manifest.json"]
-            )
+            return ImportCheckResult(False, "", [], [], [], ["bundle missing manifest.json"])
         manifest = json.loads(tar.extractfile(mf_member).read().decode())  # type: ignore[union-attr]
         bundle_id = manifest.get("bundle_id", "")
         bundle_schema = manifest.get("schema_version")
@@ -306,11 +522,29 @@ def import_check(kb_dir: Path, bundle_path: Path) -> ImportCheckResult:
                 issues.append(f"hash mismatch: {member.name}")
                 continue
             _validate_content(member.name, body, issues)
+            _check_source_content_address(member.name, body, issues)
+            incoming[member.name] = body
+        for path in manifest_paths:
+            try:
+                tar.getmember(path)
+            except KeyError:
+                issues.append(f"manifest lists missing file: {path}")
+    # Graph-integrity pass: the storage layer's put_relation / put_page
+    # validators run on direct writes, but import_apply writes member
+    # bytes straight to disk, so the only place to enforce referential
+    # integrity for a bundle is here. Refs are resolved against the
+    # post-merge id set (destination KB plus incoming bundle), so a
+    # self-contained bundle that ships an entity alongside the relation
+    # pointing at it still imports cleanly.
+    _check_graph_integrity(kb_dir, incoming, issues)
 
     return ImportCheckResult(
-        ok=not issues, bundle_id=bundle_id,
-        new_files=new_files, conflicts=conflicts,
-        identical=identical, issues=issues,
+        ok=not issues,
+        bundle_id=bundle_id,
+        new_files=new_files,
+        conflicts=conflicts,
+        identical=identical,
+        issues=issues,
     )
 
 
@@ -320,6 +554,7 @@ def import_apply(
     *,
     on_conflict: str = "skip",
     actor: str = "vouch-import",
+    on_progress: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """Apply a bundle. `on_conflict` ∈ {"skip", "overwrite", "fail"}.
 
@@ -365,8 +600,7 @@ def import_apply(
             # the audit-truthfulness anti-pattern #74 was about.
             if sha256_hex(body) != expected_sha:
                 raise RuntimeError(
-                    f"refusing to import: hash mismatch at write time: "
-                    f"{member.name}"
+                    f"refusing to import: hash mismatch at write time: {member.name}"
                 )
             val_issues: list[str] = []
             _validate_content(member.name, body, val_issues)
@@ -375,6 +609,8 @@ def import_apply(
                 continue
             dest.write_bytes(body)
             written.append(member.name)
+            if on_progress is not None:
+                on_progress(member.name)
     result = {
         "bundle_id": check.bundle_id,
         "written": written,
@@ -383,7 +619,9 @@ def import_apply(
         "on_conflict": on_conflict,
     }
     audit.log_event(
-        kb_dir, event="bundle.import", actor=actor,
+        kb_dir,
+        event="bundle.import",
+        actor=actor,
         object_ids=[check.bundle_id],
         data={
             "written": len(written),

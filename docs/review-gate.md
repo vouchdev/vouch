@@ -40,6 +40,7 @@ vouch status               # snapshot
 vouch pending              # what's waiting
 vouch show <id>            # full proposal details
 vouch approve <id>         # → durable artifact + decided/
+vouch approve <id> <id>    # approve several reviewed proposals at once
 vouch reject  <id> --reason "duplicates auth-uses-jwt"
 ```
 
@@ -151,10 +152,14 @@ next review; you can remove the entries with `git rm` afterwards.
 Update your local `.gitignore` so it stops happening.
 
 **Q: Can I approve in bulk?**
-Today, one at a time. `--batch` is planned for 0.1
-([ROADMAP](../ROADMAP.md)). Until then,
-`vouch pending --json | jq -r '.[].id' | xargs -n1 vouch approve` is
-the workaround — read what you're approving first.
+Yes. Review proposals, then approve them together:
+
+```bash
+vouch approve <id> <id> --reason "reviewed together"
+```
+
+Default is all-or-nothing: if any id is invalid or already decided,
+nothing is approved. Use `--keep-going` for best-effort approval.
 
 **Q: What if I want a *softer* gate — "warn, don't block"?**
 You don't. If you want soft, use a tool without a gate. vouch's
