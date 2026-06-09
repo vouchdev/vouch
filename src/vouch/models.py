@@ -23,6 +23,24 @@ def utcnow_iso() -> str:
     return utcnow().isoformat()
 
 
+def _safe_artifact_id(v: str) -> str:
+    """Reject ids that would escape kb_dir when used as filesystem paths.
+
+    Storage operations map artifact ids directly to paths via
+    ``KBStore._yaml(sub, obj_id)`` → ``kb_dir/sub/{obj_id}.yaml``.  An id
+    containing ``/``, ``\\``, ``..``, or a NUL byte would silently escape
+    ``kb_dir`` on write.  ``Source.id`` is already constrained to a 64-char
+    hex sha256; this guard closes the same gap for every other artifact type.
+    """
+    if not v or not v.strip():
+        raise ValueError("id must not be empty or whitespace-only")
+    if "/" in v or "\\" in v or "\x00" in v or ".." in v:
+        raise ValueError(
+            "id must not contain path-traversal characters (/, \\\\, .., NUL)"
+        )
+    return v
+
+
 # --- enums (mirror AKBP schemas) ------------------------------------------
 
 
@@ -162,6 +180,11 @@ class Evidence(BaseModel):
 
     id: str
     source_id: str
+
+    @field_validator("id")
+    @classmethod
+    def _id_safe(cls, v: str) -> str:
+        return _safe_artifact_id(v)
     source_type: SourceType | None = None
     locator: str = Field(description="span ref: 'L10-L20', 't=00:14:23', '#section-3'")
     quote: str | None = None
@@ -179,6 +202,11 @@ class Claim(BaseModel):
     id: str
     text: str
     type: ClaimType = ClaimType.OBSERVATION
+
+    @field_validator("id")
+    @classmethod
+    def _id_safe(cls, v: str) -> str:
+        return _safe_artifact_id(v)
     status: ClaimStatus = ClaimStatus.WORKING
     confidence: float = Field(default=0.7, ge=0.0, le=1.0)
     evidence: list[str] = Field(
@@ -209,6 +237,11 @@ class Entity(BaseModel):
     id: str
     name: str
     type: EntityType
+
+    @field_validator("id")
+    @classmethod
+    def _id_safe(cls, v: str) -> str:
+        return _safe_artifact_id(v)
     aliases: list[str] = Field(default_factory=list)
     description: str | None = None
     page: str | None = Field(default=None, description="Optional page id for this entity")
@@ -221,6 +254,11 @@ class Relation(BaseModel):
 
     id: str
     source: str = Field(description="id of the source endpoint")
+
+    @field_validator("id")
+    @classmethod
+    def _id_safe(cls, v: str) -> str:
+        return _safe_artifact_id(v)
     relation: RelationType
     target: str = Field(description="id of the target endpoint")
     confidence: float = Field(default=0.7, ge=0.0, le=1.0)
@@ -238,6 +276,11 @@ class Page(BaseModel):
     id: str
     title: str
     body: str = ""
+
+    @field_validator("id")
+    @classmethod
+    def _id_safe(cls, v: str) -> str:
+        return _safe_artifact_id(v)
     type: PageType = PageType.CONCEPT
     status: PageStatus = PageStatus.DRAFT
     claims: list[str] = Field(default_factory=list)
@@ -273,6 +316,11 @@ class Session(BaseModel):
 
     id: str
     agent: str
+
+    @field_validator("id")
+    @classmethod
+    def _id_safe(cls, v: str) -> str:
+        return _safe_artifact_id(v)
     task: str | None = None
     started_at: datetime = Field(default_factory=utcnow)
     ended_at: datetime | None = None
@@ -301,6 +349,11 @@ class Proposal(BaseModel):
 
     id: str
     kind: ProposalKind
+
+    @field_validator("id")
+    @classmethod
+    def _id_safe(cls, v: str) -> str:
+        return _safe_artifact_id(v)
     proposed_by: str
     session_id: str | None = None
     proposed_at: datetime = Field(default_factory=utcnow)
