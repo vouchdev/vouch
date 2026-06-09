@@ -179,6 +179,13 @@ class Claim(BaseModel):
     id: str
     text: str
     type: ClaimType = ClaimType.OBSERVATION
+
+    @field_validator("text")
+    @classmethod
+    def _text_not_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("text must not be empty or whitespace-only")
+        return v
     status: ClaimStatus = ClaimStatus.WORKING
     confidence: float = Field(default=0.7, ge=0.0, le=1.0)
     evidence: list[str] = Field(
@@ -209,6 +216,13 @@ class Entity(BaseModel):
     id: str
     name: str
     type: EntityType
+
+    @field_validator("name")
+    @classmethod
+    def _name_not_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("name must not be empty or whitespace-only")
+        return v
     aliases: list[str] = Field(default_factory=list)
     description: str | None = None
     page: str | None = Field(default=None, description="Optional page id for this entity")
@@ -238,6 +252,13 @@ class Page(BaseModel):
     id: str
     title: str
     body: str = ""
+
+    @field_validator("title")
+    @classmethod
+    def _title_not_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("title must not be empty or whitespace-only")
+        return v
     type: PageType = PageType.CONCEPT
     status: PageStatus = PageStatus.DRAFT
     claims: list[str] = Field(default_factory=list)
