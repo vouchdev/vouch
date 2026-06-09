@@ -179,6 +179,15 @@ def test_propose_claim_rejects_unknown_source(store: KBStore) -> None:
         propose_claim(store, text="t", evidence=["0" * 64], proposed_by="agent")
 
 
+def test_propose_claim_propagates_corrupt_source_error(store: KBStore) -> None:
+    src = store.put_source(b"real content")
+    meta = store.kb_dir / "sources" / src.id / "meta.yaml"
+    meta.write_text("{ broken: yaml: [")
+    with pytest.raises(Exception) as exc_info:
+        propose_claim(store, text="t", evidence=[src.id], proposed_by="agent")
+    assert "unknown source/evidence id" not in str(exc_info.value)
+
+
 def test_propose_claim_dry_run_does_not_persist(store: KBStore) -> None:
     src = store.put_source(b"e")
     pr = propose_claim(store, text="hi", evidence=[src.id],

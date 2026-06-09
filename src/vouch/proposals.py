@@ -91,10 +91,10 @@ def propose_claim(
     for eid in evidence:
         try:
             store.get_source(eid)
-        except Exception:
+        except ArtifactNotFoundError:
             try:
                 store.get_evidence(eid)
-            except Exception as e:
+            except ArtifactNotFoundError as e:
                 raise ProposalError(f"unknown source/evidence id: {eid}") from e
     payload = {
         "id": slug_hint or _slugify(text),
