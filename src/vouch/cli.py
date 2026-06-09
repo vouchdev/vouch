@@ -1263,27 +1263,67 @@ def diff(old_id: str, new_id: str, as_json: bool) -> None:
 @click.option("--port", default=None, type=int,
               help="HTTP bind port (transport=http; default 8731).")
 @click.option("--token", default=None, envvar="VOUCH_HTTP_TOKEN",
-              help="Bearer token for HTTP /rpc (or env VOUCH_HTTP_TOKEN). "
+              help="Bearer token for HTTP /rpc + /mcp (or env VOUCH_HTTP_TOKEN). "
+                   "Combine with --config for a multi-token accept-list. "
                    "Required to bind a non-loopback host.")
+@click.option("--config", "config_path", default=None,
+              type=click.Path(dir_okay=False),
+              help="Path to a config.yaml with a `serve:` section "
+                   "(default: .vouch/config.yaml if present, then ./config.yaml). "
+                   "Supplies `bearer_tokens:` (list) or `bearer_token: env:VAR`.")
 @click.option("--allow-public", is_flag=True,
-              help="Permit binding a non-loopback host (requires --token).")
+              help="Permit binding a non-loopback host (requires at least one token).")
 def serve(transport: str, host: str, port: int | None, token: str | None,
-          allow_public: bool) -> None:
-    """Run the MCP server (stdio), the JSONL tool server, or the HTTP server."""
+          config_path: str | None, allow_public: bool) -> None:
+    """Run the MCP server (stdio), the JSONL tool server, or the HTTP server.
+
+    HTTP transport surfaces three protocols against the same kb.* surface:
+
+    \b
+        POST /mcp        MCP-over-Streamable-HTTP (Claude.ai Custom Connector,
+                         Claude mobile, Managed Agents, Messages-API
+                         mcp_servers, Computer Use)
+        POST /messages   alias for /mcp (older Claude surfaces)
+        POST /rpc        vouch-native JSONL envelope (legacy clients)
+
+    GET /health, /healthz, and /capabilities are always unauthenticated.
+    """
     if transport == "stdio":
         from .server import run_stdio
         run_stdio()
-    elif transport == "jsonl":
+        return
+    if transport == "jsonl":
         from .jsonl_server import run_jsonl
         run_jsonl()
+        return
+
+    from .http_server import DEFAULT_PORT, ServeConfigError, load_serve_config, run_http
+    bind_port = port if port is not None else DEFAULT_PORT
+
+    # Locate config.yaml: explicit --config wins, else look for project-local
+    # .vouch/config.yaml, then ./config.yaml. Missing file is fine — the CLI
+    # is fully usable with --token alone.
+    cfg_candidates: list[Path]
+    if config_path:
+        cfg_candidates = [Path(config_path)]
     else:
-        from .http_server import DEFAULT_PORT, run_http
-        bind_port = port if port is not None else DEFAULT_PORT
-        try:
-            run_http(host, bind_port, token=token, allow_public=allow_public)
-        except RuntimeError as e:
-            # e.g. the non-loopback bind guard — show a clean Error: line.
-            raise click.ClickException(str(e)) from e
+        cfg_candidates = [Path(".vouch/config.yaml"), Path("config.yaml")]
+    tokens: list[str] = []
+    for cand in cfg_candidates:
+        if cand.exists():
+            try:
+                serve_cfg = load_serve_config(cand)
+            except ServeConfigError as e:
+                raise click.ClickException(f"serve config {cand}: {e}") from e
+            tokens = list(serve_cfg.tokens)
+            break
+
+    try:
+        run_http(host, bind_port, token=token, tokens=tokens,
+                 allow_public=allow_public)
+    except RuntimeError as e:
+        # e.g. the non-loopback bind guard — show a clean Error: line.
+        raise click.ClickException(str(e)) from e
 
 
 # --- pr-cache: dedup PR raises against a target repo ----------------------

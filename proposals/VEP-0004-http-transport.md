@@ -2,14 +2,20 @@
 vep: 0004
 title: HTTP transport
 author: dripsmvcp
-status: draft
+status: accepted
 created: 2026-05-26
-landed-in: ""
+landed-in: "0.2.0"
 supersedes: []
 superseded-by: ""
 ---
 
 # VEP-0004: HTTP transport
+
+> **Status (2026-06-09):** Accepted. Initial vouch-native shape shipped in
+> [PR #104](https://github.com/vouchdev/vouch/pull/104). Spec-compliant
+> upgrade — MCP-over-Streamable-HTTP, multi-token accept-list, config.yaml
+> `serve:` section, `adapters/http-tunnel/` reference deployment — added by
+> the PR that closes [#176](https://github.com/vouchdev/vouch/issues/176).
 
 ## Summary
 
@@ -19,6 +25,14 @@ one long-lived process that multiple clients can connect to over the
 network instead of each spawning a local subprocess. Binds `127.0.0.1`
 by default; a bearer token is required before it will bind any
 non-loopback address.
+
+The accepted shape exposes **three protocols against the same surface**:
+the MCP-over-Streamable-HTTP standard (`POST /mcp` and `/messages` alias)
+that Claude.ai Custom Connectors, Claude mobile (write), Anthropic Managed
+Agents, the Messages-API `mcp_servers` field, and Computer Use all speak;
+the vouch-native JSONL envelope at `POST /rpc` for lightweight scripted
+clients; and unauthenticated `/healthz`, `/health`, `/capabilities` probes
+for monitoring + connector validation.
 
 ## Motivation
 
@@ -60,13 +74,16 @@ over MCP and JSONL is reachable over HTTP, with the **same parameter and
 result shapes** defined in [spec/methods.md](../spec/methods.md). No new
 methods, no renamed methods, no changed parameter shapes.
 
-### Endpoints
+### Endpoints (final accepted shape)
 
-| Method & path        | Body / result                                              |
-|----------------------|------------------------------------------------------------|
-| `POST /rpc`          | JSONL envelope in, JSONL envelope out (identical to VEP-0002) |
-| `GET /capabilities`  | `kb.capabilities` JSON (unauthenticated; advertises the surface) |
-| `GET /healthz`       | `{"ok": true}` liveness probe (unauthenticated)            |
+| Method & path        | Body / result                                              | Auth |
+|----------------------|------------------------------------------------------------|------|
+| `POST /mcp`          | MCP-over-Streamable-HTTP (JSON-RPC 2.0; `initialize`, `tools/list`, `tools/call`) | bearer |
+| `POST /messages`     | alias for `/mcp` — historical Claude surfaces probe this path | bearer |
+| `POST /rpc`          | JSONL envelope in, JSONL envelope out (identical to VEP-0002) | bearer |
+| `GET /capabilities`  | `kb.capabilities` JSON (advertises the surface)            | open |
+| `GET /healthz`       | `{"ok": true}` liveness probe                              | open |
+| `GET /health`        | alias for `/healthz` — Claude.ai connector validator       | open |
 
 `POST /rpc` is the whole surface. Request and response envelopes are
 byte-for-byte the JSONL envelopes from VEP-0002:
@@ -177,22 +194,38 @@ for the expected scale (a handful of clients against one KB); it is not a
 high-throughput server and we don't claim it is. `state.db` is opened per
 the existing store semantics; no new caching is introduced.
 
-## Open questions
+## Open questions (resolved)
 
-- **Bespoke REST vs MCP streamable-HTTP.** The issue mentions "a future
-  Claude plugin." MCP defines a streamable-HTTP transport; a plugin may
-  prefer that over a vouch-specific `POST /rpc`. Should v1 ship the simple
-  JSONL-over-HTTP endpoint (this proposal), the MCP streamable-HTTP
-  transport, or both? Leaning JSONL-over-HTTP first (zero deps, matches the
-  existing envelope) with MCP-HTTP as a later VEP if a plugin needs it.
-- **Default port.** `8731` is a placeholder. Pick something unlikely to
-  collide; document it.
-- **Per-method authz.** Should read-only methods be reachable with a
-  weaker (or no) token while writes require the full token? Deferred unless
-  reviewers want it in v1.
-- **Config vs flags.** Should `host`/`port`/`token` also be settable under
-  a `serve:` block in `config.yaml`? (That would be a `config.yaml`
-  semantics change and might warrant its own note.)
+- ~~**Bespoke REST vs MCP streamable-HTTP.**~~ Resolved: **both**. The
+  vouch-native `/rpc` envelope ships for scripted clients that already
+  speak it (no behavioural change vs PR #104), and `/mcp` is an
+  MCP-over-Streamable-HTTP endpoint built by mounting the FastMCP ASGI
+  app from the same kb.* surface. Five Claude surfaces that need the
+  spec-compliant path (Claude.ai Custom Connectors, Claude mobile write,
+  Managed Agents, Messages-API `mcp_servers`, Computer Use) drove this
+  choice; #176 made it concrete.
+- ~~**Default port.**~~ Resolved: `8731` (vouch's first deploy used it,
+  no collisions reported, documented in `vouch serve --help`).
+- ~~**Config vs flags.**~~ Resolved: **both**. CLI flags (`--token`,
+  `--config`) are unchanged; `config.yaml` gains a `serve:` section:
+
+  ```yaml
+  serve:
+    bearer_tokens:       # multi-token accept-list for fleet operators
+      - alpha
+      - beta
+    # OR a single value, optionally via an env-var reference:
+    bearer_token: env:VOUCH_TOKEN
+  ```
+
+  The flag and the config compose: any tokens from either source feed
+  into the same accept-list. Multi-token rotation (mint a new token, add
+  it to the list, retire the old one) is a strict ergonomic win for
+  fleets where every agent has its own credential.
+- **Per-method authz.** Still deferred — VEP-0005 (richer scopes on
+  Claim/Source) is the right place to land it once it goes from draft
+  to accepted, because the per-method authz model only matters once
+  artifacts can be tagged with visibility scopes.
 
 ## Alternatives considered
 

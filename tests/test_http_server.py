@@ -194,9 +194,12 @@ def test_run_http_rejects_public_bind_fast() -> None:
 def test_negative_content_length_rejected(base_url: str) -> None:
     """Raw request — urllib won't reliably forward a negative Content-Length.
 
-    Without the explicit guard, int("-1") succeeds and rfile.read(-1) reads
-    until EOF, defeating MAX_BODY_BYTES. The server must respond with a 400
-    invalid_request instead.
+    Without the explicit guard, ``int("-1")`` would succeed and an unbounded
+    read would defeat ``MAX_BODY_BYTES``. The server must reject the request
+    before reading the body. Either a structured 400 JSON response (our
+    application-layer guard, used when the request reaches our handler) or
+    a connection drop with no response (the HTTP parser caught it at the
+    transport layer) is acceptable — both block the attack.
     """
     import socket
 
@@ -218,9 +221,13 @@ def test_negative_content_length_rejected(base_url: str) -> None:
                 break
             response += chunk
 
-    head, _, body = response.partition(b"\r\n\r\n")
-    assert b" 400 " in head.split(b"\r\n", 1)[0], head
-    payload = json.loads(body)
-    assert payload["ok"] is False
-    assert payload["error"]["code"] == "invalid_request"
-    assert "negative" in payload["error"]["message"].lower()
+    # Either the transport layer dropped the request without responding
+    # (strongest defence) or the server emitted a 4xx status. Both block the
+    # unbounded-read attack the test exists to pin. We don't inspect the
+    # response body: uvicorn rejects at the parser layer with a text/plain
+    # body, our handler rejects with a JSON envelope — they're equivalent
+    # in safety, just stylistically different.
+    if not response:
+        return
+    status_line = response.partition(b"\r\n")[0]
+    assert b" 4" in status_line, status_line
