@@ -7,6 +7,16 @@ All notable changes to vouch are documented here. Format follows
 ## [Unreleased]
 
 ### Added
+- `vouch sync --vault <dir>` — bidirectional sync between the KB and an
+  Obsidian/Logseq-style markdown vault. Forward (vault → KB): edits to
+  `<vault>/vouch/pages/<id>.md` become page-edit proposals citing a
+  `vault:<relpath>` source. Backward (KB → vault): approved pages mirror
+  to `<vault>/vouch/pages/` and approved claims surface as markdown stubs
+  in `<vault>/vouch/claims/` with Obsidian wikilink backlinks to citing
+  pages. `--watch` keeps a polling loop alive; `--direction` lets you
+  run forward-only or backward-only. The starter KB now seeds an
+  approved "Edit in Obsidian" walkthrough page so new users discover the
+  workflow the moment they `vouch init` (#181).
 - `vouch install-mcp <host>` — one-command adapter writer that drops the
   right MCP config templates into a project tree, idempotently. Eight hosts
   ship in the catalogue: `claude-code`, `claude-desktop`, `cursor`,

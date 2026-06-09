@@ -28,6 +28,7 @@ from . import migrations as migrations_mod
 from . import pr_cache as prc_mod
 from . import sessions as sess_mod
 from . import sync as sync_mod
+from . import vault_sync as vault_sync_mod
 from . import verify as verify_mod
 from .capabilities import capabilities as build_caps
 from .context import build_context_pack
@@ -1561,6 +1562,81 @@ def install_mcp(host: str | None, list_hosts: bool, path: str,
         f"Done — {len(result.written)} written, "
         f"{len(result.appended)} appended, {len(result.skipped)} skipped "
         f"under {target}"
+    )
+
+
+# --- sync: bidirectional vouch <-> Obsidian-style vault -------------------
+
+
+@cli.command(name="sync")
+@click.option("--vault", "vault_dir", required=True,
+              type=click.Path(file_okay=False),
+              help="Path to an Obsidian-style markdown vault. "
+                   "Mirroring happens under <vault>/vouch/.")
+@click.option("--direction", default="both", show_default=True,
+              type=click.Choice(["both", "forward", "backward"]),
+              help="forward = vault→KB (file page-edit proposals), "
+                   "backward = KB→vault (mirror approved pages + claim stubs).")
+@click.option("--actor", default="vault-sync", show_default=True,
+              help="Proposer name recorded on every page-edit proposal.")
+@click.option("--watch", is_flag=True,
+              help="Stay alive and re-sync the vault every --poll seconds.")
+@click.option("--poll", default=2.0, show_default=True, type=float,
+              help="Polling interval (seconds) when --watch is set.")
+def sync_cmd(vault_dir: str, direction: str, actor: str,
+             watch: bool, poll: float) -> None:
+    """Sync the KB with an Obsidian-compatible markdown vault (VEP-style #181).
+
+    \b
+    Forward (vault→KB):
+        Edits to <vault>/vouch/pages/<id>.md become page-edit proposals
+        in .vouch/proposed/, citing a vault:<relpath> source so the review
+        gate can see exactly which bytes triggered the proposal.
+
+    \b
+    Backward (KB→vault):
+        Approved pages mirror into <vault>/vouch/pages/. Approved claims
+        get a markdown stub under <vault>/vouch/claims/ with Obsidian
+        wikilink backlinks to citing pages so the graph view connects them.
+
+    \b
+    Re-runs are idempotent — only real edits become proposals, the rest is
+    a no-op. Add --watch to keep a polling loop alive while you edit.
+    """
+    store = _load_store()
+    vault_path = Path(vault_dir).resolve()
+    try:
+        if watch:
+            click.echo(
+                f"Watching {vault_path} every {poll}s "
+                f"(direction={direction}, actor={actor}); Ctrl-C to stop."
+            )
+            ticks = vault_sync_mod.watch_vault(
+                store, vault_path,
+                direction=direction, actor=actor, poll_interval=poll,
+            )
+            click.echo(f"Stopped after {ticks} tick(s).")
+            return
+        result = vault_sync_mod.sync_vault(
+            store, vault_path, direction=direction, actor=actor,
+        )
+    except vault_sync_mod.VaultSyncError as e:
+        raise click.ClickException(str(e)) from e
+
+    for pid in result.pages_mirrored:
+        click.echo(f"  ↓ pages/{pid}.md  (mirrored)")
+    for cid in result.claims_mirrored:
+        click.echo(f"  ↓ claims/{cid}.md  (mirrored)")
+    for pid in result.pages_proposed:
+        click.echo(f"  ↑ pages/{pid}  (proposal filed)")
+    for rel in result.pages_skipped_unchanged:
+        click.echo(f"  · {rel}  (unchanged)")
+    for rel in result.pages_skipped_unknown_id:
+        click.echo(f"  ! {rel}  (skipped — could not parse page id)")
+    click.echo(
+        f"Done — {len(result.pages_mirrored)} pages and "
+        f"{len(result.claims_mirrored)} claims mirrored, "
+        f"{len(result.pages_proposed)} proposals filed."
     )
 
 

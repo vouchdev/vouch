@@ -424,7 +424,11 @@ class KBStore:
             if not (self._source_dir(sid) / "meta.yaml").exists():
                 raise ValueError(f"page {page.id} references unknown source {sid}")
         try:
-            with self._page_path(page.id).open("x") as f:
+            # Explicit UTF-8: page bodies are user / agent prose and routinely
+            # contain non-ASCII (em-dashes, smart quotes, unicode in claims).
+            # The default text-mode encoding follows the locale (Latin-1 on a
+            # bare Linux container), which would mangle anything past 0x7F.
+            with self._page_path(page.id).open("x", encoding="utf-8") as f:
                 f.write(_serialize_page(page))
         except FileExistsError as e:
             raise ValueError(
@@ -437,13 +441,16 @@ class KBStore:
         p = self._page_path(page_id)
         if not p.exists():
             raise ArtifactNotFoundError(f"page {page_id}")
-        return _deserialize_page(p.read_text())
+        return _deserialize_page(p.read_text(encoding="utf-8"))
 
     def list_pages(self) -> list[Page]:
         pdir = self.kb_dir / "pages"
         if not pdir.is_dir():
             return []
-        return [_deserialize_page(p.read_text()) for p in sorted(pdir.glob("*.md"))]
+        return [
+            _deserialize_page(p.read_text(encoding="utf-8"))
+            for p in sorted(pdir.glob("*.md"))
+        ]
 
     # --- entities ----------------------------------------------------------
 
