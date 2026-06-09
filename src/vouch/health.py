@@ -263,12 +263,17 @@ def _write_embeddings(  # type: ignore[no-untyped-def]
 ) -> None:
     """Write embedding vectors into *conn* (caller owns the connection/commit).
 
-    No-ops silently if no embedder is registered or its deps are absent.
+    No-ops when the embeddings extra is not installed or no embedder is
+    registered. Other embedder startup failures propagate so rebuild_index
+    does not silently swap in an index with an empty embedding_index.
     """
     try:
         from .embeddings import get_embedder
+    except ImportError:
+        return
+    try:
         embedder = get_embedder()
-    except Exception:
+    except (KeyError, ImportError):
         return
     texts: list[tuple[str, str, str]] = []
     for c in claims:
