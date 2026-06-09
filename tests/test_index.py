@@ -86,14 +86,9 @@ def test_doctor_detects_blown_index(store: KBStore) -> None:
     src = store.put_source(b"e")
     store.put_claim(Claim(id="c1", text="detectable claim", evidence=[src.id]))
 
-    # Build the index so state.db exists, then wipe it to simulate the bug.
+    # Build the index so state.db exists, then wipe FTS rows to simulate the bug.
     health.rebuild_index(store)
-    with index_db.open_db(store.kb_dir) as conn:
-        conn.executescript(
-            "DELETE FROM claims_fts;"
-            "DELETE FROM pages_fts;"
-            "DELETE FROM entities_fts;"
-        )
+    index_db.reset(store.kb_dir)
 
     report = health.doctor(store)
     codes = {f.code for f in report.findings}
