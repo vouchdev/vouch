@@ -95,7 +95,7 @@ def test_json_formatter_includes_exception_when_present():
 
 def test_configure_logging_no_env_var_is_noop():
     selected = configure_logging()
-    assert selected == "text"
+    assert selected.format == "text"
     logger = logging.getLogger(VOUCH_LOGGER_NAME)
     assert not any(isinstance(h, _VouchManagedHandler) for h in logger.handlers)
     assert logger.propagate is True
@@ -105,7 +105,7 @@ def test_configure_logging_no_env_var_is_noop():
 def test_configure_logging_explicit_text_values_are_noop(monkeypatch, value):
     monkeypatch.setenv("VOUCH_LOG_FORMAT", value)
     selected = configure_logging()
-    assert selected == "text"
+    assert selected.format == "text"
     logger = logging.getLogger(VOUCH_LOGGER_NAME)
     assert not any(isinstance(h, _VouchManagedHandler) for h in logger.handlers)
     assert logger.propagate is True
@@ -114,7 +114,7 @@ def test_configure_logging_explicit_text_values_are_noop(monkeypatch, value):
 def test_configure_logging_json_installs_handler(monkeypatch):
     monkeypatch.setenv("VOUCH_LOG_FORMAT", "json")
     selected = configure_logging()
-    assert selected == "json"
+    assert selected.format == "json"
     logger = logging.getLogger(VOUCH_LOGGER_NAME)
     managed = [h for h in logger.handlers if isinstance(h, _VouchManagedHandler)]
     assert len(managed) == 1
@@ -134,10 +134,10 @@ def test_configure_logging_is_idempotent(monkeypatch):
 
 def test_configure_logging_switches_back_to_text(monkeypatch):
     monkeypatch.setenv("VOUCH_LOG_FORMAT", "json")
-    configure_logging()
+    configure_logging(force=True)
     monkeypatch.delenv("VOUCH_LOG_FORMAT", raising=False)
-    selected = configure_logging()
-    assert selected == "text"
+    selected = configure_logging(force=True)
+    assert selected.format == "text"
     logger = logging.getLogger(VOUCH_LOGGER_NAME)
     assert not any(isinstance(h, _VouchManagedHandler) for h in logger.handlers)
 
@@ -165,13 +165,12 @@ def test_json_handler_emits_one_object_per_line(monkeypatch):
     lines = [ln for ln in buf.getvalue().splitlines() if ln.strip()]
     assert len(lines) == 2
     first = json.loads(lines[0])
-    assert first == {
-        "actor": "alice",
-        "event": "session.crystallize",
-        "level": "INFO",
-        "logger": "vouch.sessions",
-        "object_ids": ["sess-1", "claim-2"],
-    }
+    assert first["actor"] == "alice"
+    assert first["event"] == "session.crystallize"
+    assert first["level"] == "INFO"
+    assert first["logger"] == "vouch.sessions"
+    assert first["object_ids"] == ["sess-1", "claim-2"]
+    assert "time" in first
     second = json.loads(lines[1])
     assert second["level"] == "WARNING"
     assert second["event"] == "proposal.approve_failed"
