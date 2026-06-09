@@ -26,7 +26,7 @@ def test_jsonl_search_request(store: KBStore, monkeypatch) -> None:
                            "params": {"query": "findable"}})
     assert resp["ok"]
     assert resp["id"] == "r1"
-    assert any(it["id"] == "c1" for it in resp["result"])
+    assert any(it["id"] == "c1" for it in resp["result"]["hits"])
 
 
 def test_jsonl_context_coerces_string_max_chars(store: KBStore, monkeypatch) -> None:

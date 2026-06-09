@@ -1216,6 +1216,9 @@ def crystallize(session_id: str, no_page: bool) -> None:
 @click.option("--rerank/--no-rerank", default=False)
 @click.option("--hyde/--no-hyde", default=False)
 @click.option("--explain/--no-explain", default=False)
+@click.option("--json", "as_json", is_flag=True, help="Emit hits as JSON.")
+@click.option("--project", default=None, help="Viewer project for scope filtering.")
+@click.option("--agent", default=None, help="Viewer agent for scope filtering.")
 def search(
     query: str,
     limit: int,
@@ -1226,12 +1229,22 @@ def search(
     rerank: bool,
     hyde: bool,
     explain: bool,
+    as_json: bool,
+    project: str | None,
+    agent: str | None,
 ) -> None:
     """Search the KB."""
     from . import index_db
     from .embeddings.fusion import rrf_fuse
+    from .scoping import filter_hits, scoped_fetch_limit, viewer_from
 
     store = _load_store()
+    viewer = viewer_from(
+        config_path=store.config_path,
+        project=project,
+        agent=agent,
+    )
+    fetch_limit = scoped_fetch_limit(limit, viewer)
     if top_k is not None:
         limit = top_k
     if semantic is True:
@@ -1250,21 +1263,23 @@ def search(
         hits = index_db.search_semantic(
             store.kb_dir,
             q,
-            limit=limit,
+            limit=fetch_limit,
             min_score=min_score,
         )
         used = "embedding" if hits else used
     if not hits and backend in ("auto", "fts5"):
-        hits = index_db.search(store.kb_dir, q, limit=limit)
+        hits = index_db.search(store.kb_dir, q, limit=fetch_limit)
         used = "fts5" if hits else used
     if not hits and backend in ("auto", "substring"):
-        hits = store.search_substring(q, limit=limit)
+        hits = store.search_substring(q, limit=fetch_limit)
         used = "substring"
     if backend == "hybrid":
-        emb = index_db.search_semantic(store.kb_dir, q, limit=limit * 2)
-        fts = index_db.search(store.kb_dir, q, limit=limit * 2)
-        hits = rrf_fuse(emb, fts, limit=limit)
+        emb = index_db.search_semantic(store.kb_dir, q, limit=fetch_limit * 2)
+        fts = index_db.search(store.kb_dir, q, limit=fetch_limit * 2)
+        hits = rrf_fuse(emb, fts, limit=fetch_limit)
         used = "hybrid"
+
+    hits = filter_hits(store, hits, viewer, limit=limit)
 
     if rerank and hits:
         try:
@@ -1274,6 +1289,18 @@ def search(
             hits = do_rerank(query=query, hits=hits, reranker=default_reranker(), top_k=limit)
         except ImportError:
             click.echo("warning: rerank extras not installed; skipping rerank", err=True)
+
+    if as_json:
+        _emit_json({
+            "backend": used,
+            "viewer": {"project": viewer.project, "agent": viewer.agent},
+            "hits": [
+                {"kind": k, "id": i, "snippet": snip, "score": score,
+                 "backend": used}
+                for k, i, snip, score in hits
+            ],
+        })
+        return
 
     for k, i, snip, score in hits:
         if explain:
@@ -1288,8 +1315,16 @@ def search(
 @click.option("--max-chars", default=None, type=int)
 @click.option("--require-citations", is_flag=True)
 @click.option("--min-items", default=0, type=int)
+@click.option("--project", default=None, help="Viewer project for scope filtering.")
+@click.option("--agent", default=None, help="Viewer agent for scope filtering.")
 def context(
-    task: str, limit: int, max_chars: int | None, require_citations: bool, min_items: int
+    task: str,
+    limit: int,
+    max_chars: int | None,
+    require_citations: bool,
+    min_items: int,
+    project: str | None,
+    agent: str | None,
 ) -> None:
     """Build a ContextPack ready to inject into an agent prompt."""
     store = _load_store()
@@ -1300,6 +1335,8 @@ def context(
         max_chars=max_chars,
         min_items=min_items,
         require_citations=require_citations,
+        project=project,
+        agent=agent,
     )
     _emit_json(pack)
 

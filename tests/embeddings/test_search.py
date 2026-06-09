@@ -109,8 +109,8 @@ def test_jsonl_search_uses_embedding_backend(
         "params": {"query": "claim about logins"},
     })
     assert resp["ok"] is True
-    assert resp["result"]
-    assert resp["result"][0]["backend"] in ("embedding", "fts5", "substring")
+    assert resp["result"]["hits"]
+    assert resp["result"]["backend"] in ("embedding", "fts5", "substring")
 
 
 def test_kb_search_defaults_to_semantic_then_fts5(

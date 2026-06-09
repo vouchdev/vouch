@@ -82,4 +82,10 @@ def capabilities() -> Capabilities:
         retrieval=retrieval,
         review_gated=True,
         transports=["mcp", "jsonl", "http"],
+        scoping={
+            "enabled": True,
+            "viewer_params": ["project", "agent"],
+            "env_vars": ["VOUCH_PROJECT", "VOUCH_AGENT"],
+            "config_path": "retrieval.scope",
+        },
     )

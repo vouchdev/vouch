@@ -23,6 +23,7 @@ from . import sessions as sess_mod
 from . import verify as verify_mod
 from .capabilities import capabilities as build_caps
 from .context import build_context_pack
+from .scoping import filter_hits, scoped_fetch_limit, viewer_from
 from .logging_config import configure_logging
 from .models import ProposalStatus
 from .proposals import (
@@ -95,28 +96,39 @@ def kb_search(
     limit: int = 10,
     backend: str = "auto",
     min_score: float = 0.0,
+    project: str | None = None,
+    agent: str | None = None,
 ) -> dict[str, Any]:
     """Search the KB.
 
     backend: "auto" (default, embedding then fts5 then substring),
     "embedding", "fts5", "substring", or "hybrid".
+    project/agent: optional viewer context for scope filtering.
     """
     from . import index_db
     store = _store()
+    viewer = viewer_from(
+        config_path=store.config_path,
+        project=project,
+        agent=agent,
+    )
+    fetch_limit = scoped_fetch_limit(limit, viewer)
     hits: list[tuple[str, str, str, float]] = []
 
     def _to_dicts(h: list[tuple[str, str, str, float]], used: str) -> dict[str, Any]:
+        scoped = filter_hits(store, h, viewer, limit=limit)
         return {
             "backend": used,
+            "viewer": {"project": viewer.project, "agent": viewer.agent},
             "hits": [
                 {"kind": k, "id": i, "snippet": sn, "score": sc, "backend": used}
-                for k, i, sn, sc in h
+                for k, i, sn, sc in scoped
             ],
         }
 
     if backend in ("auto", "embedding"):
         hits = index_db.search_semantic(
-            store.kb_dir, query, limit=limit, min_score=min_score,
+            store.kb_dir, query, limit=fetch_limit, min_score=min_score,
         )
         if hits:
             return _to_dicts(hits, "embedding")
@@ -125,7 +137,7 @@ def kb_search(
 
     if backend in ("auto", "fts5"):
         try:
-            hits = index_db.search(store.kb_dir, query, limit=limit)
+            hits = index_db.search(store.kb_dir, query, limit=fetch_limit)
         except Exception:
             hits = []
         if hits:
@@ -134,7 +146,7 @@ def kb_search(
             return _to_dicts([], "fts5")
 
     if backend in ("auto", "substring"):
-        hits = store.search_substring(query, limit=limit)
+        hits = store.search_substring(query, limit=fetch_limit)
         return _to_dicts(hits, "substring")
 
     if backend == "hybrid":
@@ -145,13 +157,13 @@ def kb_search(
         # low-relevance noise otherwise) and survive FTS failures the same
         # way the dedicated fts5 branch does.
         emb = index_db.search_semantic(
-            store.kb_dir, query, limit=limit * 2, min_score=min_score,
+            store.kb_dir, query, limit=fetch_limit * 2, min_score=min_score,
         )
         try:
-            fts = index_db.search(store.kb_dir, query, limit=limit * 2)
+            fts = index_db.search(store.kb_dir, query, limit=fetch_limit * 2)
         except Exception:
             fts = []
-        hits = rrf_fuse(emb, fts, limit=limit)
+        hits = rrf_fuse(emb, fts, limit=fetch_limit)
         return _to_dicts(hits, "hybrid")
 
     raise ValueError(f"unknown backend: {backend}")
@@ -164,11 +176,14 @@ def kb_context(
     max_chars: int | None = None,
     min_items: int = 0,
     require_citations: bool = False,
+    project: str | None = None,
+    agent: str | None = None,
 ) -> dict[str, Any]:
     """Build a ContextPack ready to inject into an agent prompt."""
     return build_context_pack(  # type: ignore[return-value]
         _store(), query=task, limit=limit, max_chars=max_chars,
         min_items=min_items, require_citations=require_citations,
+        project=project, agent=agent,
     )
 
 

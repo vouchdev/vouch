@@ -1,14 +1,39 @@
 {
   "$defs": {
-    "Scope": {
-      "enum": [
-        "private",
-        "project",
-        "team",
-        "public"
-      ],
-      "title": "Scope",
-      "type": "string"
+    "ArtifactScope": {
+      "description": "Structured scope: visibility tier plus optional project/agent binding.",
+      "properties": {
+        "agent": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Agent"
+        },
+        "project": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Project"
+        },
+        "visibility": {
+          "$ref": "#/$defs/Visibility",
+          "default": "project"
+        }
+      },
+      "title": "ArtifactScope",
+      "type": "object"
     },
     "SourceType": {
       "enum": [
@@ -25,6 +50,17 @@
         "folder"
       ],
       "title": "SourceType",
+      "type": "string"
+    },
+    "Visibility": {
+      "description": "How widely an artifact is visible within retrieval surfaces.",
+      "enum": [
+        "private",
+        "project",
+        "team",
+        "public"
+      ],
+      "title": "Visibility",
       "type": "string"
     }
   },
@@ -81,8 +117,7 @@
       "type": "object"
     },
     "scope": {
-      "$ref": "#/$defs/Scope",
-      "default": "project"
+      "$ref": "#/$defs/ArtifactScope"
     },
     "tags": {
       "items": {
