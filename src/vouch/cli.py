@@ -374,18 +374,28 @@ def fsck() -> None:
     sys.exit(0 if report.ok else 1)
 
 
-@cli.command()
-@click.option("--check", "check_only", is_flag=True, help="Only check whether migration is needed.")
-@click.option("--dry-run", is_flag=True, help="Show planned changes without writing.")
-@click.option("--to-version", type=int, default=None, help="Target KB format version.")
+@cli.group(invoke_without_command=True)
+@click.option("--check", "check_only", is_flag=True, help="Only check if a migration is needed.")
+@click.option("--dry-run", is_flag=True, help="Show planned format changes without writing.")
+@click.option("--to-version", type=int, default=None, help="Target KB format (integer) version.")
 @click.option("--json", "as_json", is_flag=True, help="Emit JSON instead of text.")
+@click.pass_context
 def migrate(
+    ctx: click.Context,
     check_only: bool,
     dry_run: bool,
     to_version: int | None,
     as_json: bool,
 ) -> None:
-    """Upgrade the on-disk .vouch/ layout to the supported format."""
+    """Migrate the KB.
+
+    With no subcommand, runs the legacy integer *format* migration of the
+    .vouch/ directory layout. The subcommands (status / plan / apply / rollback
+    / verify) drive the semver model-schema migrations keyed off
+    .vouch/schema_version.
+    """
+    if ctx.invoked_subcommand is not None:
+        return
     if check_only and dry_run:
         raise click.ClickException("--check and --dry-run are mutually exclusive")
 
@@ -427,6 +437,128 @@ def migrate(
             )
 
     if check_only and result.steps:
+        sys.exit(1)
+
+
+@migrate.command("status")
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON instead of text.")
+def migrate_status(as_json: bool) -> None:
+    """Show the KB schema version, target, and pending migrations."""
+    store = _load_store()
+    with _cli_errors():
+        result = migrations_mod.schema_status(store)
+    if as_json:
+        _emit_json(result)
+        return
+    click.echo(f"schema: {result['schema_version']} -> {result['target_version']}")
+    if result["up_to_date"]:
+        click.echo("up to date")
+    else:
+        click.echo(f"pending: {', '.join(result['pending'])}")
+
+
+@migrate.command("plan")
+@click.option("--to", "to_version", default=None, help="Target schema version (semver).")
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON instead of text.")
+def migrate_plan(to_version: str | None, as_json: bool) -> None:
+    """Dry-run: list every file each pending migration would change."""
+    store = _load_store()
+    with _cli_errors():
+        result = migrations_mod.schema_plan(store, to_version=to_version)
+    if as_json:
+        _emit_json(result)
+        return
+    if not result["needed"]:
+        click.echo(f"schema: {result['current_version']} (up to date)")
+        return
+    click.echo(f"schema: {result['current_version']} -> {result['target_version']}")
+    for step in result["steps"]:
+        click.echo(
+            f"- {step['manifest_id']}: {step['from_version']} -> {step['to_version']} "
+            f"({step['artifact']}, {step['file_count']} file(s))"
+        )
+        for rel in step["changed"]:
+            click.echo(f"  * {rel}")
+    click.echo(f"total: {result['total_files']} file(s)")
+
+
+@migrate.command("apply")
+@click.option("--to", "to_version", default=None, help="Target schema version (semver).")
+@click.option("--yes", is_flag=True, help="Skip the confirmation prompt (CI).")
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON instead of text.")
+def migrate_apply(to_version: str | None, yes: bool, as_json: bool) -> None:
+    """Apply pending schema migrations (audit-logged, atomic, reversible)."""
+    store = _load_store()
+    with _cli_errors():
+        preview = migrations_mod.schema_plan(store, to_version=to_version)
+        if not preview["needed"]:
+            if as_json:
+                _emit_json(
+                    {
+                        "applied": False,
+                        "from_version": preview["current_version"],
+                        "to_version": preview["current_version"],
+                        "manifests": [],
+                        "files": 0,
+                    }
+                )
+            else:
+                click.echo(f"schema: {preview['current_version']} (up to date)")
+            return
+        if not yes:
+            click.confirm(
+                f"Apply {len(preview['steps'])} migration(s) "
+                f"({preview['current_version']} -> {preview['target_version']}, "
+                f"{preview['total_files']} file(s))?",
+                abort=True,
+            )
+        result = migrations_mod.schema_apply(store, to_version=to_version, actor=_whoami())
+        # state.db is derived; rebuild it under the new layout.
+        health.rebuild_index(store)
+    if as_json:
+        _emit_json(result)
+    else:
+        click.echo(
+            f"schema: {result['from_version']} -> {result['to_version']} "
+            f"({result['files']} file(s), {len(result['manifests'])} manifest(s))"
+        )
+
+
+@migrate.command("rollback")
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON instead of text.")
+def migrate_rollback(as_json: bool) -> None:
+    """Reverse the most recently applied schema migration."""
+    store = _load_store()
+    with _cli_errors():
+        result = migrations_mod.schema_rollback(store, actor=_whoami())
+        health.rebuild_index(store)
+    if as_json:
+        _emit_json(result)
+    else:
+        click.echo(
+            f"schema: {result['from_version']} -> {result['to_version']} "
+            f"(rolled back {result['files']} file(s))"
+        )
+
+
+@migrate.command("verify")
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON instead of text.")
+def migrate_verify(as_json: bool) -> None:
+    """Parse-load every artifact under the current schema version."""
+    store = _load_store()
+    with _cli_errors():
+        result = migrations_mod.schema_verify(store)
+    if as_json:
+        _emit_json(result)
+    elif result["ok"]:
+        click.echo(
+            f"verified {result['checked']} artifact(s) at schema {result['schema_version']}"
+        )
+    else:
+        click.echo(f"FAILED: {len(result['errors'])} of {result['checked']} artifact(s)")
+        for err in result["errors"]:
+            click.echo(f"  ✗ {err['path']}: {err['error']}")
+    if not result["ok"]:
         sys.exit(1)
 
 
