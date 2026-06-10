@@ -510,6 +510,43 @@ def _h_embeddings_stats(_: dict) -> dict:
     }
 
 
+def _h_why(p: dict) -> dict:
+    from . import provenance as prov
+
+    return prov.why(_store(), claim_id=p["claim_id"], depth=int(p.get("depth", 3)))
+
+
+def _h_trace(p: dict) -> dict:
+    from . import provenance as prov
+
+    return prov.trace(_store(), from_id=p["from"], to_id=p["to"])
+
+
+def _h_impact(p: dict) -> dict:
+    from . import provenance as prov
+
+    return prov.impact(
+        _store(),
+        claim_id=p["claim_id"],
+        depth=int(p.get("depth", 1)),
+        op=p.get("op"),
+    )
+
+
+def _h_graph_export(p: dict) -> dict:
+    from . import provenance as prov
+
+    fmt = p.get("format", "dot")
+    graph = prov.graph_export(_store(), session=p.get("session"), fmt=fmt)
+    return {"format": fmt, "graph": graph}
+
+
+def _h_provenance_rebuild(_: dict) -> dict:
+    from . import provenance as prov
+
+    return {"edges": prov.rebuild_prov_edges(_store())}
+
+
 HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.capabilities": _h_capabilities,
     "kb.status": _h_status,
@@ -556,6 +593,11 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.dedup_scan": _h_dedup_scan,
     "kb.eval_embeddings": _h_eval_embeddings,
     "kb.embeddings_stats": _h_embeddings_stats,
+    "kb.why": _h_why,
+    "kb.trace": _h_trace,
+    "kb.impact": _h_impact,
+    "kb.graph_export": _h_graph_export,
+    "kb.provenance_rebuild": _h_provenance_rebuild,
 }
 
 

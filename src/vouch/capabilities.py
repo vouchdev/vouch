@@ -59,6 +59,11 @@ METHODS = [
     "kb.dedup_scan",
     "kb.eval_embeddings",
     "kb.embeddings_stats",
+    "kb.why",
+    "kb.trace",
+    "kb.impact",
+    "kb.graph_export",
+    "kb.provenance_rebuild",
 ]
 
 

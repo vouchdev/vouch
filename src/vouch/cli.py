@@ -27,6 +27,7 @@ from . import lifecycle as life
 from . import metrics as metrics_mod
 from . import migrations as migrations_mod
 from . import pr_cache as prc_mod
+from . import provenance as prov_mod
 from . import sessions as sess_mod
 from . import stats as stats_mod
 from . import sync as sync_mod
@@ -1194,6 +1195,109 @@ def index() -> None:
     with _cli_errors():
         stats = health.rebuild_index(store, on_progress=_progress_cb("indexing"))
     click.echo(f"indexed: {stats}")
+
+
+# --- provenance: why / trace / impact / graph -----------------------------
+
+
+@cli.command()
+@click.argument("claim_id")
+@click.option("--depth", default=3, show_default=True, type=int,
+              help="How many hops of provenance to expand.")
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON instead of a tree.")
+def why(claim_id: str, depth: int, as_json: bool) -> None:
+    """Explain why a claim exists: cites, session, supersedes chain, approval.
+
+    \b
+    Examples:
+      vouch why my-claim-id
+      vouch why my-claim-id --depth 5 --json
+    """
+    store = _load_store()
+    with _cli_errors():
+        result = prov_mod.why(store, claim_id=claim_id, depth=depth)
+    if as_json:
+        _emit_json(result)
+        return
+    _echo(prov_mod.render_why(result))
+
+
+@cli.command()
+@click.argument("from_id")
+@click.option("--to", "to_id", required=True, help="The artifact to trace a path to.")
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON instead of text.")
+def trace(from_id: str, to_id: str, as_json: bool) -> None:
+    """Find the shortest typed-edge path between two artifacts.
+
+    Exits non-zero with `no path` when the two artifacts are disconnected.
+    """
+    store = _load_store()
+    with _cli_errors():
+        result = prov_mod.trace(store, from_id=from_id, to_id=to_id)
+    if as_json:
+        _emit_json(result)
+    else:
+        _echo(prov_mod.render_trace(result))
+    if not result["found"]:
+        sys.exit(1)
+
+
+@cli.command()
+@click.argument("claim_id")
+@click.option("--depth", default=1, show_default=True, type=int,
+              help="How many hops of dependents to expand.")
+@click.option("--if", "if_op", default=None,
+              type=click.Choice([op.value for op in prov_mod.LifecycleOp]),
+              help="Dry-run a lifecycle op and report breakage (exit non-zero if any).")
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON instead of a tree.")
+def impact(claim_id: str, depth: int, if_op: str | None, as_json: bool) -> None:
+    """Show what depends on a claim, and what breaks if you change it.
+
+    \b
+    Examples:
+      vouch impact my-claim-id
+      vouch impact my-claim-id --if archive
+    """
+    store = _load_store()
+    with _cli_errors():
+        result = prov_mod.impact(store, claim_id=claim_id, depth=depth, op=if_op)
+    if as_json:
+        _emit_json(result)
+    else:
+        _echo(prov_mod.render_impact(result))
+    if if_op is not None and result["blocking"]:
+        sys.exit(1)
+
+
+@cli.command()
+@click.option("--session", default=None, help="Restrict to one agent run's subgraph.")
+@click.option("--format", "fmt", default="dot", show_default=True,
+              type=click.Choice(["dot", "mermaid"]),
+              help="Output format for the DAG.")
+def graph(session: str | None, fmt: str) -> None:
+    """Render the provenance DAG as Graphviz dot or a mermaid flowchart."""
+    store = _load_store()
+    with _cli_errors():
+        text = prov_mod.graph_export(store, session=session, fmt=fmt)
+    click.echo(text, nl=False)
+
+
+@cli.group()
+def provenance() -> None:
+    """Provenance graph cache operations."""
+
+
+@provenance.command("rebuild")
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON instead of text.")
+def provenance_rebuild(as_json: bool) -> None:
+    """Rebuild the prov_edges cache from durable files (treated as derived state)."""
+    store = _load_store()
+    with _cli_errors():
+        count = prov_mod.rebuild_prov_edges(store)
+    if as_json:
+        _emit_json({"edges": count})
+        return
+    click.echo(f"provenance: rebuilt {count} edges")
 
 
 @cli.command()

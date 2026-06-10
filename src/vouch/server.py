@@ -689,6 +689,50 @@ def kb_embeddings_stats() -> dict[str, Any]:
     }
 
 
+# === provenance (why / trace / impact / graph) ===========================
+
+
+@mcp.tool()
+def kb_why(claim_id: str, *, depth: int = 3) -> dict[str, Any]:
+    """Backward provenance for a claim: cites, session, supersedes, approval.
+
+    depth: how many hops of provenance to expand (default 3).
+    """
+    from . import provenance as prov
+    return prov.why(_store(), claim_id=claim_id, depth=depth)
+
+
+@mcp.tool()
+def kb_trace(from_id: str, to_id: str) -> dict[str, Any]:
+    """Shortest typed-edge path between two artifacts (or found=false)."""
+    from . import provenance as prov
+    return prov.trace(_store(), from_id=from_id, to_id=to_id)
+
+
+@mcp.tool()
+def kb_impact(
+    claim_id: str, *, depth: int = 1, op: str | None = None
+) -> dict[str, Any]:
+    """Forward impact: dependents, and breakage if op (archive/contradict/supersede)."""
+    from . import provenance as prov
+    return prov.impact(_store(), claim_id=claim_id, depth=depth, op=op)
+
+
+@mcp.tool()
+def kb_graph_export(*, session: str | None = None, format: str = "dot") -> dict[str, Any]:
+    """Render the provenance DAG (or one session's subgraph) as dot/mermaid."""
+    from . import provenance as prov
+    graph = prov.graph_export(_store(), session=session, fmt=format)
+    return {"format": format, "graph": graph}
+
+
+@mcp.tool()
+def kb_provenance_rebuild() -> dict[str, Any]:
+    """Rebuild the prov_edges cache from durable files; returns edge count."""
+    from . import provenance as prov
+    return {"edges": prov.rebuild_prov_edges(_store())}
+
+
 def _current_model_name() -> str:
     try:
         from .embeddings import get_embedder
