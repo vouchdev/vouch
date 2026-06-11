@@ -107,5 +107,10 @@ ignore_missing_imports = true
 # The web module guards its own imports with a clean ImportError message so
 # the runtime story stays clean even without the extra.
 [[tool.mypy.overrides]]
-module = ["fastapi", "fastapi.*", "uvicorn", "uvicorn.*", "starlette", "starlette.*"]
+module = [
+    "fastapi", "fastapi.*",
+    "jinja2", "jinja2.*",
+    "uvicorn", "uvicorn.*",
+    "starlette", "starlette.*",
+]
 ignore_missing_imports = true
