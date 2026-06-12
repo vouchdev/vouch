@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=vouch
+GenericName=Knowledge Base Review Console
+Comment=Review agent-proposed claims and pages in the browser
+Exec=AppRun
+Icon=vouch-review-ui
+Categories=Development;Office;Utility;
+Keywords=knowledge-base;mcp;llm;agent;review;vouch;
+Terminal=false
+StartupNotify=false

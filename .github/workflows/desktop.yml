@@ -1,0 +1,95 @@
+name: desktop
+
+# Build the vouch review-ui AppImage for Ubuntu/x86_64.
+#
+# Triggers:
+#   * push to main / a release branch — builds the AppImage so we know the
+#     desktop recipe stays buildable (artifact retained 7 days).
+#   * version tag (v*) — builds the AppImage and uploads it as a release
+#     asset alongside the wheel/sdist that `release.yml` already publishes.
+#   * manual dispatch — same as push.
+#
+# Note: `desktop/requirements.txt` currently uses `local+vouch` so the
+# AppImage bundles the working-tree source. Once vouch-kb is published on
+# PyPI with the [web] extra, swap to `vouch-kb[web]==<version>` to pin the
+# desktop artifact to a published release.
+
+on:
+  push:
+    branches: [main, release/*]
+    tags: ["v*"]
+    paths:
+      - "desktop/**"
+      - "src/vouch/**"
+      - ".github/workflows/desktop.yml"
+  pull_request:
+    paths:
+      - "desktop/**"
+      - "src/vouch/**"
+      - ".github/workflows/desktop.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write  # only used by the release-upload step on tag events
+
+jobs:
+  build-appimage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # python-appimage shells out to appimagetool, which needs FUSE on
+      # most distros — but ubuntu-latest images ship libfuse2 these days,
+      # so we just install python-appimage itself.
+      - name: install python-appimage
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install python-appimage
+
+      # `local+vouch` in desktop/requirements.txt looks for an importable
+      # `vouch` module on the host Python — install the package editable so
+      # the bundler can find it.
+      - name: install vouch from working tree (for local+vouch)
+        run: python -m pip install -e .
+
+      - name: build AppImage
+        run: |
+          python -m python_appimage build app desktop/ \
+            --python-version 3.12 \
+            --linux-tag manylinux2014_x86_64
+          # python-appimage names the output after the appdir basename:
+          mv desktop-x86_64.AppImage vouch-review-ui-x86_64.AppImage || true
+          ls -la *.AppImage
+
+      - name: smoke test (boots and serves /healthz)
+        run: |
+          ./vouch-review-ui-x86_64.AppImage --no-open-browser --bind 127.0.0.1:8851 &
+          APP_PID=$!
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            sleep 1
+            if curl -sf http://127.0.0.1:8851/healthz; then
+              echo
+              echo "smoke test ok"
+              kill $APP_PID || true
+              exit 0
+            fi
+          done
+          echo "smoke test failed: AppImage did not respond on /healthz"
+          kill $APP_PID || true
+          exit 1
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vouch-review-ui-x86_64.AppImage
+          path: vouch-review-ui-x86_64.AppImage
+          retention-days: 7
+
+      - name: attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: vouch-review-ui-x86_64.AppImage

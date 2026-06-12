@@ -1,0 +1,28 @@
+# python-appimage installs these into the bundled CPython at build time.
+#
+# This file currently uses the PRE-RELEASE pattern: `local+vouch` bundles
+# the working-tree source so the AppImage builds even before vouch-kb cuts
+# a release that ships the [web] extra (PR #195). The explicit [web]
+# dependencies below match what `pip install vouch-kb[web]` would pull.
+#
+# Once vouch-kb is published on PyPI with the [web] extra, swap to:
+#   vouch-kb[web]
+# and delete the explicit lines below.
+#
+# Note: avoid `<` in version specifiers — python-appimage runs pip via
+# shell=True with unquoted args, so `<1` would be parsed as a redirect.
+
+local+vouch
+
+# [web] extra (explicit until vouch-kb's published version ships it)
+fastapi>=0.115
+jinja2>=3
+python-multipart>=0.0.9
+uvicorn>=0.30
+
+# vouch core runtime deps (normally pulled by `vouch-kb`, but `local+vouch`
+# bypasses the wheel metadata)
+pydantic>=2.13.4
+click>=8.4.0
+pyyaml>=6
+mcp>=1.0
