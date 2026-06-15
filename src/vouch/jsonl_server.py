@@ -149,7 +149,7 @@ def _h_context(p: dict) -> dict:
         _store(),
         query=p["task"],
         limit=int(p.get("limit", 10)),
-        max_chars=p.get("max_chars"),
+        max_chars=int(p["max_chars"]) if p.get("max_chars") is not None else None,
         min_items=int(p.get("min_items", 0)),
         require_citations=bool(p.get("require_citations", False)),
         fail_on_warnings=bool(p.get("fail_on_warnings", False)),
