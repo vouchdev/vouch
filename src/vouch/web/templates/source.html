@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}source {{ source.id[:12] }} · vouch review{% endblock %}
+
+{% block content %}
+<article class="source-detail">
+  <header class="section-head">
+    <h1><span class="kind kind-source">source</span> {{ source.title or source.locator }}</h1>
+    <a class="back" href="/">← queue</a>
+  </header>
+
+  <dl class="meta-grid">
+    <dt>id</dt><dd><code>{{ source.id }}</code></dd>
+    <dt>type</dt><dd>{{ source.type }}</dd>
+    <dt>locator</dt><dd>{{ source.locator }}</dd>
+    <dt>media type</dt><dd>{{ source.media_type }}</dd>
+    <dt>size</dt><dd>{{ source.byte_size }} bytes</dd>
+    <dt>added</dt><dd>{{ source.created_at }}</dd>
+  </dl>
+
+  <section class="payload">
+    <h2>reverse index — claims citing this source</h2>
+    {% if not citing %}
+      <p class="empty">no durable claim cites this source yet.</p>
+    {% else %}
+      <ul class="cite-list">
+        {% for c in citing %}
+          <li class="cite-row status-{{ c.status }}">
+            <span class="status-pill status-pill-{{ c.status }}">{{ c.status }}</span>
+            <code class="cid">{{ c.id }}</code>
+            <span class="cite-text">{{ c.text }}</span>
+          </li>
+        {% endfor %}
+      </ul>
+    {% endif %}
+  </section>
+</article>
+{% endblock %}

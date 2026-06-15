@@ -6,6 +6,10 @@ All notable changes to vouch are documented here. Format follows
 
 ## [Unreleased]
 
+### Fixed
+- `vouch serve` now fails fast with a clear `vouch init` hint when no `.vouch/` KB is present, instead of starting a server that immediately misbehaves (#95).
+
+### Added
 ### Added
 - `vouch sync --vault <dir>` — bidirectional sync between the KB and an
   Obsidian/Logseq-style markdown vault. Forward (vault → KB): edits to
@@ -132,17 +136,6 @@ All notable changes to vouch are documented here. Format follows
   the same tarball. `import_apply`, `import_check`, and `export_check`
   now validate every member path and raise on unsafe names.
 - Fix `vouch search` CLI: assign backend label per code path so substring fallback results are no longer mislabelled as `fts5`; update stale docstring to reflect multi-backend search surface (#52).
-- Close the review-gate bypass in `sessions.crystallize` (#76). The
-  durable session-summary page wrote `sess.task`, `sess.note`, and
-  `sess.agent` verbatim into rendered markdown, letting an agent
-  land arbitrary content into `pages/` by calling
-  `kb.session_start(task=...)` and getting any one claim approved
-  via crystallize. The summary body now contains only fields the
-  proposing agent cannot influence (session id, server-clock
-  timestamps, list of approved artifact ids). The
-  `session.crystallize` audit event now also includes the summary
-  page id in `object_ids` when a page is written, so `vouch audit`
-  truthfully attributes the write.
 - `context._retrieve` now honors `retrieval.backend` in `config.yaml`
   instead of always running embeddings first (#92). Accepts `auto`
   (default — embedding → FTS5 → substring), `embedding`, `fts5`, or
@@ -205,6 +198,17 @@ All notable changes to vouch are documented here. Format follows
   `invalid_claim` findings ("edit the YAML to add a citation, or
   delete the file") instead of bailing out — so existing KBs get a
   clean repair list rather than a traceback.
+- Close the review-gate bypass in `sessions.crystallize` (#76). The
+  durable session-summary page wrote `sess.task`, `sess.note`, and
+  `sess.agent` verbatim into rendered markdown, letting an agent
+  land arbitrary content into `pages/` by calling
+  `kb.session_start(task=...)` and getting any one claim approved
+  via crystallize. The summary body now contains only fields the
+  proposing agent cannot influence (session id, server-clock
+  timestamps, list of approved artifact ids). The
+  `session.crystallize` audit event now also includes the summary
+  page id in `object_ids` when a page is written, so `vouch audit`
+  truthfully attributes the write.
 
 ## [0.0.1] — 2026-05-17
 
@@ -232,6 +236,5 @@ Initial alpha. Surface intentionally small; expect breaking changes pre-1.0.
 - Claim validation: at least one source/evidence citation required.
 - Per-agent attribution via `VOUCH_AGENT` env var.
 
-[Unreleased]: https://github.com/vouchdev/vouch/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/vouchdev/vouch/compare/v0.0.1...v0.1.0
-[0.0.1]: https://github.com/vouchdev/vouch/releases/tag/v0.0.1
+[Unreleased]: https://github.com/plind-junior/vouch/compare/v0.0.1...HEAD
+[0.0.1]: https://github.com/plind-junior/vouch/releases/tag/v0.0.1

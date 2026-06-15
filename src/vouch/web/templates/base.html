@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{% block title %}vouch review{% endblock %}</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <meta name="vouch-auth" content="{{ 'on' if auth_enabled else 'off' }}">
+</head>
+<body data-active="{{ active|default('') }}">
+  <header class="masthead">
+    <div class="brand">
+      <span class="brand-mark">▌</span>
+      <span class="brand-text">vouch · review console</span>
+    </div>
+    <nav class="nav">
+      <a href="/" {% if active == "queue" %}aria-current="page"{% endif %}>queue</a>
+      <a href="/audit" {% if active == "audit" %}aria-current="page"{% endif %}>audit</a>
+      <span id="live" class="live live-off" title="realtime channel">●&nbsp;live</span>
+    </nav>
+  </header>
+  <main class="content">
+    {% block content %}{% endblock %}
+  </main>
+  <footer class="colophon">
+    <span>localhost-first · approve via plain form POST (works JS-off) ·
+      <kbd>j</kbd>/<kbd>k</kbd> move · <kbd>a</kbd> approve · <kbd>?</kbd> help</span>
+  </footer>
+  <script src="/static/app.js" defer></script>
+</body>
+</html>

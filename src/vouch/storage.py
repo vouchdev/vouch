@@ -52,6 +52,12 @@ KB_DIRNAME = ".vouch"
 CONFIG_FILENAME = "config.yaml"
 KB_FORMAT_VERSION = 1
 
+# Semver model-schema version stamped on bootstrap; the migration runner
+# (vouch.migrations) advances it. Distinct from KB_FORMAT_VERSION, which is the
+# integer directory-layout version in config.yaml.
+SCHEMA_VERSION = "0.1.0"
+SCHEMA_VERSION_FILENAME = "schema_version"
+
 SUBDIRS = (
     "claims", "pages", "sources", "entities", "relations",
     "evidence", "sessions", "proposed", "decided",
@@ -206,6 +212,9 @@ class KBStore:
             (kb.kb_dir / sub).mkdir(exist_ok=True)
         if not kb.config_path.exists():
             kb.config_path.write_text(_yaml_dump(_starter_config()))
+        schema_version_file = kb.kb_dir / SCHEMA_VERSION_FILENAME
+        if not schema_version_file.exists():
+            schema_version_file.write_text(SCHEMA_VERSION + "\n")
         gi = kb.kb_dir / ".gitignore"
         if not gi.exists():
             # state.db is derived; proposed/ is the agent's scratch space.

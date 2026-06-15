@@ -72,9 +72,7 @@ class StarterSeedResult:
         return self.created_source or self.created_claim or self.created_page
 
 
-def seed_starter_kb(
-    store: KBStore, *, approved_by: str = "vouch-init"
-) -> StarterSeedResult:
+def seed_starter_kb(store: KBStore, *, approved_by: str = "vouch-init") -> StarterSeedResult:
     source, created_source = _starter_source(store)
     created_claim = _starter_claim(store, source_id=source.id, approved_by=approved_by)
     created_page = _starter_page(store, source_id=source.id)
@@ -238,32 +236,35 @@ def seed_gittensor_kb(store: KBStore, *, approved_by: str = "vouch-init") -> See
     try:
         store.get_entity(GITTENSOR_ENTITY_ID)
     except ArtifactNotFoundError:
-        store.put_entity(Entity(
-            id=GITTENSOR_ENTITY_ID,
-            name="Gittensor SN74",
-            type=EntityType.PROJECT,
-            description=(
-                "Bittensor subnet SN74 that rewards merged open-source "
-                "contributions with TAO."
-            ),
-        ))
+        store.put_entity(
+            Entity(
+                id=GITTENSOR_ENTITY_ID,
+                name="Gittensor SN74",
+                type=EntityType.PROJECT,
+                description=(
+                    "Bittensor subnet SN74 that rewards merged open-source contributions with TAO."
+                ),
+            )
+        )
         created.append(GITTENSOR_ENTITY_ID)
 
     for claim_id, text in _GITTENSOR_CLAIMS:
         try:
             store.get_claim(claim_id)
         except ArtifactNotFoundError:
-            store.put_claim(Claim(
-                id=claim_id,
-                text=text,
-                type=ClaimType.FACT,
-                status=ClaimStatus.STABLE,
-                confidence=0.9,
-                evidence=[source.id],
-                entities=[GITTENSOR_ENTITY_ID],
-                tags=["gittensor", "sn74"],
-                approved_by=approved_by,
-            ))
+            store.put_claim(
+                Claim(
+                    id=claim_id,
+                    text=text,
+                    type=ClaimType.FACT,
+                    status=ClaimStatus.STABLE,
+                    confidence=0.9,
+                    evidence=[source.id],
+                    entities=[GITTENSOR_ENTITY_ID],
+                    tags=["gittensor", "sn74"],
+                    approved_by=approved_by,
+                )
+            )
             created.append(claim_id)
 
     return SeedResult(template="gittensor", created=created)

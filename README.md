@@ -40,10 +40,7 @@ Skip it if:
 ## Install
 
 ```bash
-# from PyPI (published as vouch-kb; the command is still `vouch`)
-pipx install vouch-kb
-
-# …or from the cloned repo, in a venv
+# from the cloned repo, in a venv
 pip install -e '.[dev]'
 ```
 
@@ -62,7 +59,6 @@ vouch status                     # one-line summary
 vouch pending                    # list pending proposals
 vouch show <id>                  # full details
 vouch approve <id>               # → durable artifact
-vouch approve <id> <id> ...    # approve several reviewed proposals at once
 vouch reject <id> --reason "..."
 vouch expire --apply                  # optional: clear stale pending proposals
 
@@ -152,7 +148,7 @@ vouch migrate [--check] [--dry-run]         # upgrade .vouch/ format safely
 vouch pending                               # list pending proposals
 vouch review [--limit N] [--type KIND]      # guided proposal review queue
 vouch show <proposal-id>
-vouch approve <proposal-id>... [--reason ...] [--keep-going]
+vouch approve <proposal-id> [--reason ...]
 vouch reject <proposal-id> --reason "..."
 vouch expire [--apply] [--days N] [--json]   # GC stale pending proposals
 

@@ -1,8 +1,10 @@
-"""On-disk KB format migrations.
+"""Legacy integer "KB format" migrations.
 
-The migration layer only changes source-of-truth files under `.vouch/`.
-Derived caches such as state.db are rebuilt by the CLI after a successful
-apply.
+This predates the semver model-schema runner (see :mod:`.runner`) and governs the
+*directory layout* version stamped in ``config.yaml`` (``KB_FORMAT_VERSION``) —
+making sure the ``.vouch/`` subdir tree and ``.gitignore`` exist. It is reached
+by ``vouch migrate`` with no subcommand and is preserved verbatim; the semver
+runner is a separate, additive concern keyed off ``.vouch/schema_version``.
 """
 
 from __future__ import annotations
@@ -13,7 +15,7 @@ from typing import Any
 
 import yaml
 
-from .storage import KB_FORMAT_VERSION, SUBDIRS, KBStore, _starter_config
+from ..storage import KB_FORMAT_VERSION, SUBDIRS, KBStore, _starter_config
 
 
 class MigrationError(RuntimeError):

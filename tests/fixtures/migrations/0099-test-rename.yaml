@@ -1,0 +1,8 @@
+from_version: "0.1.0"
+to_version: "0.2.0"
+artifact: claims
+description: "test fixture: rename a legacy field on claims"
+transforms:
+  - rename: {from: old_note, to: note_tag}
+reverse:
+  - rename: {from: note_tag, to: old_note}
