@@ -6,6 +6,12 @@
   <img src="docs/banner.svg" alt="vouch — propose → review → commit → retrieve" width="100%"/>
 </p>
 
+<p align="center">
+  <a href="https://github.com/vouchdev/vouch/actions/workflows/ci.yml"><img src="https://github.com/vouchdev/vouch/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
+  <a href="https://pypi.org/project/vouch-kb/"><img src="https://img.shields.io/pypi/v/vouch-kb.svg" alt="PyPI"></a>
+  <a href="https://pypi.org/project/vouch-kb/"><img src="https://img.shields.io/pypi/pyversions/vouch-kb.svg" alt="Python versions"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/vouchdev/vouch.svg" alt="MIT licensed"></a>
+</p>
 
 > Agents should not start every session with amnesia — but they shouldn't get to write whatever they want either.
 
