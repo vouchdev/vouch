@@ -18,8 +18,10 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 from . import audit, bundle, health
+from . import hot_memory as hot_mod
 from . import lifecycle as life
 from . import sessions as sess_mod
+from . import skills as skills_mod
 from . import verify as verify_mod
 from .capabilities import capabilities as build_caps
 from .context import build_context_pack
@@ -86,19 +88,25 @@ def kb_search(
 
     backend: "auto" (default, embedding then fts5 then substring),
     "embedding", "fts5", "substring", or "hybrid".
+
+    Response carries an ``_meta.vouch_hot_memory`` sidebar — recently
+    approved claims relevant to the query that didn't necessarily match
+    the index but the agent should still know about.
     """
     from . import index_db
     store = _store()
     hits: list[tuple[str, str, str, float]] = []
 
     def _to_dicts(h: list[tuple[str, str, str, float]], used: str) -> dict[str, Any]:
-        return {
-            "backend": used,
-            "hits": [
-                {"kind": k, "id": i, "snippet": sn, "score": sc, "backend": used}
-                for k, i, sn, sc in h
-            ],
-        }
+        hits_list: list[dict[str, Any]] = [
+            {"kind": k, "id": i, "snippet": sn, "score": sc, "backend": used}
+            for k, i, sn, sc in h
+        ]
+        result: dict[str, Any] = {"backend": used, "hits": hits_list}
+        return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+            result, store, query=query,
+            exclude_ids=[str(hit["id"]) for hit in hits_list],
+        )
 
     if backend in ("auto", "embedding"):
         hits = index_db.search_semantic(
@@ -151,10 +159,21 @@ def kb_context(
     min_items: int = 0,
     require_citations: bool = False,
 ) -> dict[str, Any]:
-    """Build a ContextPack ready to inject into an agent prompt."""
-    return build_context_pack(  # type: ignore[return-value]
-        _store(), query=task, limit=limit, max_chars=max_chars,
+    """Build a ContextPack ready to inject into an agent prompt.
+
+    The response carries an ``_meta.vouch_hot_memory`` sidebar of recently
+    approved claims so the agent doesn't need a second round-trip to know
+    what just changed.
+    """
+    store = _store()
+    pack = build_context_pack(  # type: ignore[assignment]
+        store, query=task, limit=limit, max_chars=max_chars,
         min_items=min_items, require_citations=require_citations,
+    )
+    pack_items = pack.get("items") if isinstance(pack, dict) else None
+    exclude = [it.get("id") for it in pack_items] if isinstance(pack_items, list) else []
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        pack, store, query=task, exclude_ids=[i for i in exclude if i],
     )
 
 
@@ -169,11 +188,21 @@ def kb_read_page(page_id: str) -> dict[str, Any]:
 
 @mcp.tool()
 def kb_read_claim(claim_id: str) -> dict[str, Any]:
-    """Return a claim with its citation list."""
+    """Return a claim with its citation list + a hot-memory sidebar.
+
+    The ``_meta.vouch_hot_memory`` field surfaces recently approved claims
+    that mention the same terms as this one — useful for catching a fresh
+    contradiction or supersedes target before the agent acts on stale info.
+    """
+    store = _store()
     try:
-        return _store().get_claim(claim_id).model_dump(mode="json")
+        claim = store.get_claim(claim_id)
     except ArtifactNotFoundError as e:
         raise ValueError(str(e)) from e
+    result = claim.model_dump(mode="json")
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        result, store, query=claim.text, exclude_ids=[claim.id],
+    )
 
 
 @mcp.tool()
@@ -650,6 +679,31 @@ def kb_embeddings_stats() -> dict[str, Any]:
         "counts": counts,
         "query_cache": query_cache_stats(store.kb_dir),
     }
+
+
+@mcp.tool()
+def kb_list_skills() -> list[dict[str, Any]]:
+    """Enumerate every Claude Code skill / slash command visible to vouch.
+
+    Scans, in priority order:
+      1. ``<kb_root>/.claude/skills/<name>/SKILL.md`` — project-local skills
+      2. ``<kb_root>/.claude/commands/<name>.md``     — project-local commands
+      3. ``~/.claude/skills/<name>/SKILL.md``         — user-global skills
+      4. ``~/.claude/commands/<name>.md``             — user-global commands
+
+    Project entries override user ones with the same name. Returns
+    ``[{name, description, scope, kind, path}]``.
+    """
+    return skills_mod.list_skills(_store())
+
+
+@mcp.tool()
+def kb_get_skill(name: str) -> dict[str, Any]:
+    """Return the full markdown body of a named skill / slash command."""
+    try:
+        return skills_mod.get_skill(_store(), name)
+    except KeyError as e:
+        raise ValueError(str(e)) from e
 
 
 def _current_model_name() -> str:

@@ -26,8 +26,10 @@ from pathlib import Path
 from typing import Any
 
 from . import audit, bundle, health
+from . import hot_memory as hot_mod
 from . import lifecycle as life
 from . import sessions as sess_mod
+from . import skills as skills_mod
 from . import verify as verify_mod
 from .capabilities import capabilities as build_caps
 from .context import build_context_pack
@@ -127,8 +129,9 @@ def _h_search(p: dict) -> list[dict]:
 
 
 def _h_context(p: dict) -> dict:
-    return build_context_pack(  # type: ignore[return-value]
-        _store(),
+    store = _store()
+    pack = build_context_pack(  # type: ignore[assignment]
+        store,
         query=p["task"],
         limit=int(p.get("limit", 10)),
         max_chars=p.get("max_chars"),
@@ -137,6 +140,13 @@ def _h_context(p: dict) -> dict:
         fail_on_warnings=bool(p.get("fail_on_warnings", False)),
         fail_on_budget_truncation=bool(p.get("fail_on_budget_truncation", False)),
     )
+    # Hot-memory sidebar: dedup against ids the pack already surfaced so we
+    # don't echo the same claims back as both items and hot memory.
+    pack_items = pack.get("items") if isinstance(pack, dict) else None
+    exclude = [it.get("id") for it in pack_items] if isinstance(pack_items, list) else []
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        pack, store, query=p["task"], exclude_ids=[i for i in exclude if i],
+    )
 
 
 def _h_read_page(p: dict) -> dict:
@@ -144,7 +154,14 @@ def _h_read_page(p: dict) -> dict:
 
 
 def _h_read_claim(p: dict) -> dict:
-    return _store().get_claim(p["claim_id"]).model_dump(mode="json")
+    store = _store()
+    claim = store.get_claim(p["claim_id"])
+    result = claim.model_dump(mode="json")
+    # Hot-memory keyed by the claim's own text gives the agent adjacent
+    # recently-approved claims that may revise or extend it.
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        result, store, query=claim.text, exclude_ids=[claim.id],
+    )
 
 
 def _h_read_entity(p: dict) -> dict:
@@ -468,6 +485,20 @@ def _h_embeddings_stats(_: dict) -> dict:
     }
 
 
+def _h_list_skills(_: dict) -> list[dict]:
+    return skills_mod.list_skills(_store())
+
+
+def _h_get_skill(p: dict) -> dict:
+    name = p.get("name")
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError("`name` is required")
+    try:
+        return skills_mod.get_skill(_store(), name)
+    except KeyError as e:
+        raise ValueError(str(e)) from e
+
+
 HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.capabilities": _h_capabilities,
     "kb.status": _h_status,
@@ -512,6 +543,8 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.dedup_scan": _h_dedup_scan,
     "kb.eval_embeddings": _h_eval_embeddings,
     "kb.embeddings_stats": _h_embeddings_stats,
+    "kb.list_skills": _h_list_skills,
+    "kb.get_skill": _h_get_skill,
 }
 
 

@@ -57,6 +57,8 @@ METHODS = [
     "kb.dedup_scan",
     "kb.eval_embeddings",
     "kb.embeddings_stats",
+    "kb.list_skills",
+    "kb.get_skill",
 ]
 
 
