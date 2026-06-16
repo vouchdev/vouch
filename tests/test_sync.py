@@ -205,3 +205,83 @@ def test_sync_rejects_source_content_address_mismatch(tmp_path: Path) -> None:
     with pytest.raises(RuntimeError, match="content-address mismatch"):
         sync.sync_apply(dest.kb_dir, incoming.root)
     assert not (dest.kb_dir / "sources" / dir_id / "content").exists()
+
+
+# --- TOCTOU / double-load fix (#217) -------------------------------------
+#
+# sync_apply must load the source exactly once and pass the same
+# _SyncSource instance to sync_check so the validated snapshot and the
+# write loop are guaranteed to operate on the same data. Before the fix,
+# sync_apply called _load_source() independently and then sync_check
+# called it again internally, opening a TOCTOU window for bundles and
+# causing redundant directory walks for KB sources.
+
+
+def test_sync_apply_loads_source_exactly_once_for_kb(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """sync_apply must not reload the KB directory source after sync_check."""
+    incoming = _store(tmp_path / "incoming")
+    _claim(incoming, "c1", "alpha")
+    dest = _store(tmp_path / "dest")
+
+    load_calls: list[Path] = []
+    original_load = sync._load_source
+
+    def counting_load(path: Path) -> sync._SyncSource:
+        load_calls.append(path)
+        return original_load(path)
+
+    monkeypatch.setattr(sync, "_load_source", counting_load)
+
+    sync.sync_apply(dest.kb_dir, incoming.root, actor="tester")
+
+    assert len(load_calls) == 1, (
+        f"_load_source called {len(load_calls)} times; expected 1. "
+        "sync_apply must pass its already-loaded _SyncSource into sync_check."
+    )
+    assert dest.get_claim("c1").text == "alpha"
+
+
+def test_sync_apply_loads_bundle_source_exactly_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """For bundle sources the tarball must be opened exactly once by
+    _load_source during sync_apply — not once per _load_source call."""
+    incoming = _store(tmp_path / "incoming")
+    _claim(incoming, "c1", "beta")
+    bundle_path = tmp_path / "incoming.tar.gz"
+    bundle.export(incoming.kb_dir, dest=bundle_path)
+    dest = _store(tmp_path / "dest")
+
+    load_calls: list[Path] = []
+    original_load = sync._load_source
+
+    def counting_load(path: Path) -> sync._SyncSource:
+        load_calls.append(path)
+        return original_load(path)
+
+    monkeypatch.setattr(sync, "_load_source", counting_load)
+
+    result = sync.sync_apply(dest.kb_dir, bundle_path, actor="tester")
+
+    assert len(load_calls) == 1, (
+        f"_load_source called {len(load_calls)} times for bundle; expected 1."
+    )
+    assert "claims/c1.yaml" in result["written"]
+    assert dest.get_claim("c1").text == "beta"
+
+
+def test_sync_check_with_src_uses_preloaded_source(tmp_path: Path) -> None:
+    """_sync_check_with_src must use the supplied _SyncSource directly
+    without calling _load_source again."""
+    incoming = _store(tmp_path / "incoming")
+    _claim(incoming, "c1", "gamma")
+    dest = _store(tmp_path / "dest")
+
+    preloaded = sync._load_source(incoming.root)
+    report = sync._sync_check_with_src(dest.kb_dir, preloaded)
+
+    assert report.ok
+    assert "claims/c1.yaml" in report.new_files
+

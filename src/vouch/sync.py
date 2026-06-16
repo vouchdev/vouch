@@ -222,7 +222,16 @@ def _validation_issues_for_source(
 
 def sync_check(kb_dir: Path, source_path: Path) -> SyncCheckResult:
     """Compare another KB or bundle with ``kb_dir`` without writing."""
-    src = _load_source(source_path)
+    return _sync_check_with_src(kb_dir, _load_source(source_path))
+
+
+def _sync_check_with_src(kb_dir: Path, src: _SyncSource) -> SyncCheckResult:
+    """Core sync check logic operating on an already-loaded _SyncSource.
+
+    Separated from the public `sync_check` so `sync_apply` can pass its
+    already-loaded source directly without reloading, closing the TOCTOU
+    window described in #217.
+    """
     issues = _validation_issues_for_source(src, kb_dir=kb_dir)
     new_files: list[str] = []
     identical: list[str] = []
@@ -295,7 +304,7 @@ def sync_apply(
         raise ValueError(f"on_conflict must be fail|skip|propose, got {on_conflict}")
 
     src = _load_source(source_path)
-    check = sync_check(kb_dir, source_path)
+    check = _sync_check_with_src(kb_dir, src)
     if check.issues:
         raise RuntimeError(f"refusing to sync: {check.issues[0]}")
     if on_conflict == "fail" and check.conflicts:
