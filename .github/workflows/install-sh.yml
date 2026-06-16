@@ -1,0 +1,63 @@
+name: install-sh
+
+# Validates install.sh on every push that touches it:
+#   * shellcheck (lint)
+#   * POSIX-syntax check via dash
+#   * end-to-end smoke run on a fresh ubuntu-latest — installs the published
+#     vouch-kb wheel via pipx and verifies `vouch --version`
+#
+# The smoke run intentionally exercises the published PyPI artifact, not the
+# in-repo source, so we catch installation breakage that doesn't show up in
+# the regular pytest suite (e.g. a stale [web] extra reference).
+
+on:
+  push:
+    branches: [main, release/*]
+    paths:
+      - "install.sh"
+      - ".github/workflows/install-sh.yml"
+  pull_request:
+    paths:
+      - "install.sh"
+      - ".github/workflows/install-sh.yml"
+  workflow_dispatch:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: shellcheck
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y shellcheck dash
+          shellcheck --version
+          shellcheck install.sh
+
+      - name: posix syntax (dash -n)
+        run: dash -n install.sh
+
+  smoke:
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: --help works
+        run: sh ./install.sh --help
+
+      - name: end-to-end install + smoke
+        run: |
+          set -e
+          sh ./install.sh --no-claude
+          # pipx's bin dir isn't necessarily on PATH for the verification
+          # step — re-export from pipx itself.
+          PIPX_BIN=$(python -m pipx environment --value PIPX_BIN_DIR)
+          export PATH="$PIPX_BIN:$PATH"
+          vouch --version
+          vouch capabilities | head -20
