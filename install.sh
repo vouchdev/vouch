@@ -138,10 +138,28 @@ pick_python() {
 
 # --- phase 2: ensure pipx -------------------------------------------------
 
+ensure_pipx_bin_on_path() {
+    # PIPX_BIN_DIR (typically ~/.local/bin) holds the `vouch` shim that pipx
+    # writes. On many Ubuntu/Debian setups it's NOT on PATH by default even
+    # when pipx itself is — the shim exists, smoke_test would still fail.
+    # Run this unconditionally so re-runs against a pre-installed pipx
+    # still produce a usable shell.
+    py="$1"
+    pipx_bin=$("$py" -m pipx environment --value PIPX_BIN_DIR 2>/dev/null || true)
+    if [ -z "$pipx_bin" ]; then
+        pipx_bin="$HOME/.local/bin"
+    fi
+    case ":$PATH:" in
+        *":$pipx_bin:"*) ;;
+        *) PATH="$pipx_bin:$PATH"; export PATH ;;
+    esac
+}
+
 ensure_pipx() {
     py="$1"
     if has_cmd pipx; then
         ok "pipx already installed ($(pipx --version 2>/dev/null | head -1))"
+        ensure_pipx_bin_on_path "$py"
         return 0
     fi
     info "pipx not found — installing into user site (no sudo)"
@@ -153,17 +171,10 @@ ensure_pipx() {
     fi
     "$py" -m pipx ensurepath >/dev/null 2>&1 || true
 
-    # `ensurepath` edits ~/.profile / ~/.zshrc to add pipx's bin dir, but the
-    # current process's PATH is already fixed. Add it explicitly so the rest
-    # of this script can find `vouch`.
-    pipx_bin=$("$py" -m pipx environment --value PIPX_BIN_DIR 2>/dev/null || true)
-    if [ -z "$pipx_bin" ]; then
-        pipx_bin="$HOME/.local/bin"
-    fi
-    case ":$PATH:" in
-        *":$pipx_bin:"*) ;;
-        *) PATH="$pipx_bin:$PATH"; export PATH ;;
-    esac
+    # `ensurepath` edits ~/.profile / ~/.zshrc to add pipx's bin dir, but
+    # the current process's PATH is already fixed. Add it explicitly so
+    # the rest of this script can find `vouch`.
+    ensure_pipx_bin_on_path "$py"
 
     if ! has_cmd pipx; then
         err "pipx installed but not on PATH — restart your shell, then re-run"
@@ -181,9 +192,20 @@ install_vouch() {
         target="${PKG_NAME}==${PIN_VERSION}"
     fi
 
+    already_installed=0
     if pipx list 2>/dev/null | grep -q "package $PKG_NAME"; then
+        already_installed=1
+    fi
+
+    if [ "$already_installed" -eq 1 ] && [ -n "$PIN_VERSION" ]; then
+        # --version was requested AND the package is already installed:
+        # `pipx upgrade` would ignore the pin and pull latest. Force a
+        # clean reinstall to the exact pin instead.
+        info "re-installing $target (honouring --version pin)"
+        pipx install --force "$target" >/dev/null
+    elif [ "$already_installed" -eq 1 ]; then
         info "upgrading existing $PKG_NAME"
-        if ! pipx upgrade --pip-args="" "$PKG_NAME" >/dev/null 2>&1; then
+        if ! pipx upgrade "$PKG_NAME" >/dev/null 2>&1; then
             warn "pipx upgrade failed — falling back to reinstall"
             pipx install --force "$target" >/dev/null
         fi
