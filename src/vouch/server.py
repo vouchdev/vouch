@@ -23,16 +23,20 @@ from . import sessions as sess_mod
 from . import verify as verify_mod
 from .capabilities import capabilities as build_caps
 from .context import build_context_pack
+from .logging_config import configure_logging
 from .models import ProposalStatus
 from .proposals import (
+    EXPIRE_ACTOR,
     ProposalError,
     approve,
+    expire_pending,
     propose_claim,
     propose_entity,
     propose_page,
     propose_relation,
     reject,
 )
+from .stats import collect_stats
 from .storage import (
     ArtifactNotFoundError,
     KBNotFoundError,
@@ -69,6 +73,16 @@ def kb_capabilities() -> dict[str, Any]:
 def kb_status() -> dict[str, Any]:
     """Return KB artifact counts and health summary."""
     return health.status(_store())
+
+
+@mcp.tool()
+def kb_stats(*, days: int = 30) -> dict[str, Any]:
+    """Observability: pending by agent, review rates, citation coverage.
+
+    days: decision window in days; 0 means all-time.
+    """
+    since = None if days == 0 else days
+    return collect_stats(_store(), since_days=since)
 
 
 # === read tools (unrestricted) ============================================
@@ -300,7 +314,7 @@ def kb_propose_claim(
 ) -> dict[str, Any]:
     """Propose a new claim. Becomes durable only after `kb_approve`."""
     try:
-        pr = propose_claim(
+        result = propose_claim(
             _store(), text=text, evidence=evidence,
             claim_type=claim_type, confidence=confidence,
             entities=entities, tags=tags, rationale=rationale,
@@ -309,7 +323,7 @@ def kb_propose_claim(
         )
     except (ProposalError, ArtifactNotFoundError, ValueError) as e:
         raise ValueError(str(e)) from e
-    return _proposal_response(pr, dry_run)
+    return _proposal_response(result, dry_run)
 
 
 @mcp.tool()
@@ -384,8 +398,9 @@ def kb_propose_relation(
     return _proposal_response(pr, dry_run)
 
 
-def _proposal_response(pr, dry_run: bool) -> dict[str, Any]:
-    return {
+def _proposal_response(result, dry_run: bool) -> dict[str, Any]:
+    pr = result.proposal if hasattr(result, "proposal") else result
+    out: dict[str, Any] = {
         "proposal_id": pr.id,
         "status": pr.status.value,
         "kind": pr.kind.value,
@@ -395,6 +410,10 @@ def _proposal_response(pr, dry_run: bool) -> dict[str, Any]:
             if dry_run else "pending human approval via `vouch approve <id>`"
         ),
     }
+    warnings = getattr(result, "warnings", None)
+    if warnings:
+        out["warnings"] = warnings
+    return out
 
 
 # === review-gate decisions (agents can approve on their own KBs if the
@@ -419,6 +438,24 @@ def kb_reject(proposal_id: str, reason: str) -> dict[str, Any]:
     except (ArtifactNotFoundError, ValueError, ProposalError) as e:
         raise ValueError(str(e)) from e
     return {"proposal_id": proposal_id, "status": "rejected", "reason": reason}
+
+
+@mcp.tool()
+def kb_expire(apply: bool = False, days: int | None = None) -> dict[str, Any]:
+    """Expire stale pending proposals (dry-run unless apply=True)."""
+    try:
+        result = expire_pending(
+            _store(), apply=apply, expired_by=EXPIRE_ACTOR, days=days,
+        )
+    except (ArtifactNotFoundError, ValueError, ProposalError) as e:
+        raise ValueError(str(e)) from e
+    return {
+        "threshold_days": result.threshold_days,
+        "enabled": result.threshold_days > 0,
+        "dry_run": not apply,
+        "would_expire": [p.id for p in result.would_expire],
+        "expired": [p.id for p in result.expired],
+    }
 
 
 # === lifecycle ============================================================
@@ -652,6 +689,50 @@ def kb_embeddings_stats() -> dict[str, Any]:
     }
 
 
+# === provenance (why / trace / impact / graph) ===========================
+
+
+@mcp.tool()
+def kb_why(claim_id: str, *, depth: int = 3) -> dict[str, Any]:
+    """Backward provenance for a claim: cites, session, supersedes, approval.
+
+    depth: how many hops of provenance to expand (default 3).
+    """
+    from . import provenance as prov
+    return prov.why(_store(), claim_id=claim_id, depth=depth)
+
+
+@mcp.tool()
+def kb_trace(from_id: str, to_id: str) -> dict[str, Any]:
+    """Shortest typed-edge path between two artifacts (or found=false)."""
+    from . import provenance as prov
+    return prov.trace(_store(), from_id=from_id, to_id=to_id)
+
+
+@mcp.tool()
+def kb_impact(
+    claim_id: str, *, depth: int = 1, op: str | None = None
+) -> dict[str, Any]:
+    """Forward impact: dependents, and breakage if op (archive/contradict/supersede)."""
+    from . import provenance as prov
+    return prov.impact(_store(), claim_id=claim_id, depth=depth, op=op)
+
+
+@mcp.tool()
+def kb_graph_export(*, session: str | None = None, format: str = "dot") -> dict[str, Any]:
+    """Render the provenance DAG (or one session's subgraph) as dot/mermaid."""
+    from . import provenance as prov
+    graph = prov.graph_export(_store(), session=session, fmt=format)
+    return {"format": format, "graph": graph}
+
+
+@mcp.tool()
+def kb_provenance_rebuild() -> dict[str, Any]:
+    """Rebuild the prov_edges cache from durable files; returns edge count."""
+    from . import provenance as prov
+    return {"edges": prov.rebuild_prov_edges(_store())}
+
+
 def _current_model_name() -> str:
     try:
         from .embeddings import get_embedder
@@ -662,4 +743,5 @@ def _current_model_name() -> str:
 
 def run_stdio() -> None:
     """Entry point used by `vouch serve`."""
+    configure_logging()
     mcp.run()

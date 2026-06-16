@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}{{ proposal.id }} · vouch review{% endblock %}
+
+{% block content %}
+<article class="claim-detail">
+  <header class="section-head">
+    <h1>
+      <span class="kind kind-{{ proposal.kind }}">{{ proposal.kind }}</span>
+      {{ proposal.id }}
+    </h1>
+    <a class="back" href="/">← queue</a>
+  </header>
+
+  <dl class="meta-grid">
+    <dt>proposed by</dt><dd>{{ proposal.proposed_by }}</dd>
+    <dt>proposed at</dt><dd>{{ proposal.proposed_at }}</dd>
+    <dt>status</dt><dd>{{ proposal.status }}</dd>
+    {% if proposal.rationale %}
+      <dt>rationale</dt><dd>{{ proposal.rationale }}</dd>
+    {% endif %}
+  </dl>
+
+  <section class="payload">
+    <h2>payload</h2>
+    <p class="preview-large">{{ preview }}</p>
+    <details>
+      <summary>full payload</summary>
+      <pre>{{ proposal.payload | tojson(indent=2) }}</pre>
+    </details>
+  </section>
+
+  {% if proposal.status == "pending" %}
+    <section class="actions actions-large">
+      <form method="post" action="/approve/{{ proposal.id }}" class="inline">
+        <input type="text" name="reason" placeholder="reason (optional)">
+        <button type="submit" class="approve">approve</button>
+      </form>
+      <form method="post" action="/reject/{{ proposal.id }}" class="inline">
+        <input type="text" name="reason" placeholder="reason (required)" required>
+        <button type="submit" class="reject">reject</button>
+      </form>
+    </section>
+  {% endif %}
+</article>
+{% endblock %}

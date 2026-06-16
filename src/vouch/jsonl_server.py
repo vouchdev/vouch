@@ -22,6 +22,7 @@ import os
 import sys
 import traceback
 from collections.abc import Callable
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
@@ -31,22 +32,33 @@ from . import sessions as sess_mod
 from . import verify as verify_mod
 from .capabilities import capabilities as build_caps
 from .context import build_context_pack
+from .logging_config import configure_logging
 from .models import ProposalStatus
 from .proposals import (
+    EXPIRE_ACTOR,
     ProposalError,
     approve,
+    expire_pending,
     propose_claim,
     propose_entity,
     propose_page,
     propose_relation,
     reject,
 )
+from .stats import collect_stats
 from .storage import (
     ArtifactNotFoundError,
     KBNotFoundError,
     KBStore,
     discover_root,
 )
+
+# Per-request actor override. The HTTP transport sets this from the
+# X-Vouch-Agent header so audit attribution is correct without mutating
+# process-wide env (each ThreadingHTTPServer request thread gets its own
+# context, so this is concurrency-safe). stdio/JSONL leave it unset and
+# fall back to VOUCH_AGENT.
+_actor: ContextVar[str | None] = ContextVar("vouch_actor", default=None)
 
 
 def _store() -> KBStore:
@@ -57,7 +69,7 @@ def _store() -> KBStore:
 
 
 def _agent() -> str:
-    return os.environ.get("VOUCH_AGENT", "unknown-agent")
+    return _actor.get() or os.environ.get("VOUCH_AGENT", "unknown-agent")
 
 
 # --- per-method handlers ---------------------------------------------------
@@ -69,6 +81,12 @@ def _h_capabilities(_: dict) -> dict:
 
 def _h_status(_: dict) -> dict:
     return health.status(_store())
+
+
+def _h_stats(p: dict) -> dict:
+    days = int(p.get("days", 30))
+    since = None if days == 0 else days
+    return collect_stats(_store(), since_days=since)
 
 
 def _h_search(p: dict) -> list[dict]:
@@ -131,7 +149,7 @@ def _h_context(p: dict) -> dict:
         _store(),
         query=p["task"],
         limit=int(p.get("limit", 10)),
-        max_chars=p.get("max_chars"),
+        max_chars=int(p["max_chars"]) if p.get("max_chars") is not None else None,
         min_items=int(p.get("min_items", 0)),
         require_citations=bool(p.get("require_citations", False)),
         fail_on_warnings=bool(p.get("fail_on_warnings", False)),
@@ -222,7 +240,7 @@ def _h_register_source_from_path(p: dict) -> dict:
 
 
 def _h_propose_claim(p: dict) -> dict:
-    pr = propose_claim(
+    result = propose_claim(
         _store(),
         text=p["text"],
         evidence=list(p["evidence"]),
@@ -236,8 +254,16 @@ def _h_propose_claim(p: dict) -> dict:
         dry_run=bool(p.get("dry_run", False)),
         proposed_by=_agent(),
     )
-    return {"proposal_id": pr.id, "status": pr.status.value, "kind": pr.kind.value,
-            "dry_run": bool(p.get("dry_run", False))}
+    pr = result.proposal
+    out: dict = {
+        "proposal_id": pr.id,
+        "status": pr.status.value,
+        "kind": pr.kind.value,
+        "dry_run": bool(p.get("dry_run", False)),
+    }
+    if result.warnings:
+        out["warnings"] = result.warnings
+    return out
 
 
 def _h_propose_page(p: dict) -> dict:
@@ -293,6 +319,22 @@ def _h_approve(p: dict) -> dict:
 def _h_reject(p: dict) -> dict:
     reject(_store(), p["proposal_id"], rejected_by=_agent(), reason=p["reason"])
     return {"proposal_id": p["proposal_id"], "status": "rejected"}
+
+
+def _h_expire(p: dict) -> dict:
+    result = expire_pending(
+        _store(),
+        apply=bool(p.get("apply")),
+        expired_by=EXPIRE_ACTOR,
+        days=p.get("days"),
+    )
+    return {
+        "threshold_days": result.threshold_days,
+        "enabled": result.threshold_days > 0,
+        "dry_run": not bool(p.get("apply")),
+        "would_expire": [pr.id for pr in result.would_expire],
+        "expired": [pr.id for pr in result.expired],
+    }
 
 
 def _h_supersede(p: dict) -> dict:
@@ -468,9 +510,47 @@ def _h_embeddings_stats(_: dict) -> dict:
     }
 
 
+def _h_why(p: dict) -> dict:
+    from . import provenance as prov
+
+    return prov.why(_store(), claim_id=p["claim_id"], depth=int(p.get("depth", 3)))
+
+
+def _h_trace(p: dict) -> dict:
+    from . import provenance as prov
+
+    return prov.trace(_store(), from_id=p["from"], to_id=p["to"])
+
+
+def _h_impact(p: dict) -> dict:
+    from . import provenance as prov
+
+    return prov.impact(
+        _store(),
+        claim_id=p["claim_id"],
+        depth=int(p.get("depth", 1)),
+        op=p.get("op"),
+    )
+
+
+def _h_graph_export(p: dict) -> dict:
+    from . import provenance as prov
+
+    fmt = p.get("format", "dot")
+    graph = prov.graph_export(_store(), session=p.get("session"), fmt=fmt)
+    return {"format": fmt, "graph": graph}
+
+
+def _h_provenance_rebuild(_: dict) -> dict:
+    from . import provenance as prov
+
+    return {"edges": prov.rebuild_prov_edges(_store())}
+
+
 HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.capabilities": _h_capabilities,
     "kb.status": _h_status,
+    "kb.stats": _h_stats,
     "kb.search": _h_search,
     "kb.context": _h_context,
     "kb.read_page": _h_read_page,
@@ -491,6 +571,7 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.propose_relation": _h_propose_relation,
     "kb.approve": _h_approve,
     "kb.reject": _h_reject,
+    "kb.expire": _h_expire,
     "kb.supersede": _h_supersede,
     "kb.contradict": _h_contradict,
     "kb.archive": _h_archive,
@@ -512,6 +593,11 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.dedup_scan": _h_dedup_scan,
     "kb.eval_embeddings": _h_eval_embeddings,
     "kb.embeddings_stats": _h_embeddings_stats,
+    "kb.why": _h_why,
+    "kb.trace": _h_trace,
+    "kb.impact": _h_impact,
+    "kb.graph_export": _h_graph_export,
+    "kb.provenance_rebuild": _h_provenance_rebuild,
 }
 
 
@@ -551,6 +637,7 @@ def handle_request(envelope: dict) -> dict:
 
 def run_jsonl(stdin=None, stdout=None) -> None:
     """Read one request per line, write one response per line."""
+    configure_logging()
     stdin = stdin or sys.stdin
     stdout = stdout or sys.stdout
     for line in stdin:

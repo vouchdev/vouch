@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% set active = "audit" %}
+{% block title %}audit · vouch review{% endblock %}
+
+{% block content %}
+<section class="audit">
+  <header class="section-head">
+    <h1>audit timeline</h1>
+    <span class="count">{{ count }} review decisions</span>
+  </header>
+
+  {% if not rows %}
+    <p class="empty">no review decisions yet — the timeline lights up as proposals are approved or rejected.</p>
+  {% else %}
+    <ol class="audit-list">
+      {% for row in rows %}
+        <li class="audit-row">
+          <div class="audit-head">
+            <span class="event">{{ row.event }}</span>
+            <span class="by">by {{ row.actor }}</span>
+            <time datetime="{{ row.at }}">{{ row.at }}</time>
+          </div>
+          {% if row.object_ids %}
+            <div class="objects">
+              {% for oid in row.object_ids %}<code>{{ oid }}</code>{% endfor %}
+            </div>
+          {% endif %}
+          {% if row.reason %}
+            <p class="reason">{{ row.reason }}</p>
+          {% endif %}
+        </li>
+      {% endfor %}
+    </ol>
+  {% endif %}
+</section>
+{% endblock %}

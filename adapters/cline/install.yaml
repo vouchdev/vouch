@@ -1,0 +1,15 @@
+# Cline (VSCode extension) adapter manifest.
+#
+# Cline supports per-workspace MCP servers via the VSCode settings JSON
+# (`.vscode/settings.json` under the `cline.mcpServers` key) and a
+# user-global form under `~/.cline/mcp_servers.json`. Workspace settings
+# win for that workspace, so the writer drops both:
+#   - the standalone `cline_mcp_servers.json` (paste-ready into the global file)
+#   - a `.vscode/settings.json` fragment (workspace-scoped, ready as-is).
+host: cline
+pretty: Cline (VSCode)
+tiers:
+  T1:
+    - { src: cline_mcp_servers.json, dst: .cline/mcp_servers.json }
+  T2:
+    - { src: vscode_settings.json, dst: .vscode/settings.json }

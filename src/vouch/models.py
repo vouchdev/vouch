@@ -185,6 +185,22 @@ class Claim(BaseModel):
         default_factory=list,
         description="Source ids OR Evidence ids — both are valid citations",
     )
+
+    @field_validator("evidence")
+    @classmethod
+    def _at_least_one_citation(cls, v: list[str]) -> list[str]:
+        # The "claims must cite sources" guarantee (README §"Why this exists"
+        # point 3; CONTRIBUTING §"Things we won't merge") used to live only
+        # in proposals.propose_claim, so every other write path —
+        # store.put_claim, store.update_claim, and bundle.import_apply via
+        # _validate_content — accepted evidence=[] and silently landed an
+        # uncited claim. Enforcing on the model closes all paths at once.
+        if not v:
+            raise ValueError(
+                "claim must cite at least one Source or Evidence id "
+                "(README §'Object model'; CONTRIBUTING §'Things we won't merge')"
+            )
+        return v
     entities: list[str] = Field(default_factory=list)
     supersedes: list[str] = Field(default_factory=list)
     superseded_by: str | None = None

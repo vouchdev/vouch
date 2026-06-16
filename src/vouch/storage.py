@@ -27,6 +27,7 @@ import hashlib
 import logging
 import os
 import re
+import sqlite3
 import stat
 from pathlib import Path
 from typing import Any
@@ -49,6 +50,13 @@ _embed_log = logging.getLogger("vouch.embeddings")
 
 KB_DIRNAME = ".vouch"
 CONFIG_FILENAME = "config.yaml"
+KB_FORMAT_VERSION = 1
+
+# Semver model-schema version stamped on bootstrap; the migration runner
+# (vouch.migrations) advances it. Distinct from KB_FORMAT_VERSION, which is the
+# integer directory-layout version in config.yaml.
+SCHEMA_VERSION = "0.1.0"
+SCHEMA_VERSION_FILENAME = "schema_version"
 
 SUBDIRS = (
     "claims", "pages", "sources", "entities", "relations",
@@ -66,10 +74,15 @@ class ArtifactNotFoundError(KeyError):
 
 def _starter_config() -> dict[str, Any]:
     return {
-        "version": 1,
-        "review": {"require_human_approval": True},
+        "version": KB_FORMAT_VERSION,
+        "review": {
+            "require_human_approval": True,
+            "expire_pending_after_days": 90,
+        },
         "retrieval": {
-            "backends": ["fts5", "substring"],
+            # auto = embedding -> fts5 -> substring; or pin one of
+            # embedding | fts5 | substring. See context._retrieve.
+            "backend": "auto",
             "default_limit": 10,
         },
         "agents": {
@@ -89,8 +102,25 @@ def sha256_hex(data: bytes) -> str:
 def discover_root(start: Path | None = None) -> Path:
     """Walk up from `start` looking for a `.vouch` directory.
 
-    Mirrors how git locates its repo root.
+    Mirrors how git locates its repo root. The walk can be skipped entirely
+    by setting `VOUCH_KB_PATH=/abs/path/.vouch` (documented in
+    `adapters/generic-mcp/README.md`) — useful when the host launches the
+    server from a default cwd (e.g. Claude Desktop on macOS / Windows).
     """
+    forced = os.environ.get("VOUCH_KB_PATH")
+    if forced:
+        kb = Path(forced).resolve()
+        if not kb.is_dir():
+            raise KBNotFoundError(
+                f"VOUCH_KB_PATH={forced!r} is not an existing directory"
+            )
+        if kb.name != KB_DIRNAME:
+            raise KBNotFoundError(
+                f"VOUCH_KB_PATH must point at a {KB_DIRNAME!r} directory, "
+                f"got {forced!r}"
+            )
+        return kb.parent
+
     cur = (start or Path.cwd()).resolve()
     while True:
         if (cur / KB_DIRNAME).is_dir():
@@ -119,6 +149,7 @@ def _serialize_page(page: Page) -> str:
 
 
 def _deserialize_page(text: str) -> Page:
+    text = text.replace("\r\n", "\n")
     m = _FRONTMATTER_RE.match(text)
     if not m:
         raise ValueError("page file missing YAML frontmatter")
@@ -151,8 +182,14 @@ class KBStore:
             raise ValueError(
                 f"path must be inside project root ({self.root}): {resolved}"
             )
+        if resolved.is_dir():
+            raise ValueError(f"not a regular file: {resolved}")
+        flags = os.O_RDONLY
+        # POSIX can reject a symlink swapped in after resolve(); Windows has
+        # no O_NOFOLLOW, so it falls back to the regular-file check below.
+        flags |= getattr(os, "O_NOFOLLOW", 0)
         try:
-            fd = os.open(resolved, os.O_RDONLY | os.O_NOFOLLOW)
+            fd = os.open(resolved, flags)
         except OSError as e:
             raise ValueError(f"cannot read {resolved}: {e}") from e
         try:
@@ -175,6 +212,9 @@ class KBStore:
             (kb.kb_dir / sub).mkdir(exist_ok=True)
         if not kb.config_path.exists():
             kb.config_path.write_text(_yaml_dump(_starter_config()))
+        schema_version_file = kb.kb_dir / SCHEMA_VERSION_FILENAME
+        if not schema_version_file.exists():
+            schema_version_file.write_text(SCHEMA_VERSION + "\n")
         gi = kb.kb_dir / ".gitignore"
         if not gi.exists():
             # state.db is derived; proposed/ is the agent's scratch space.
@@ -278,6 +318,40 @@ class KBStore:
                 out.append(Source.model_validate(_yaml_load(meta.read_text())))
         return out
 
+    # --- graph-integrity helpers ------------------------------------------
+
+    # Closes the structural counterpart of the #81 fix: every graph artifact
+    # (Relation source/target/evidence, Page entities/sources) must resolve
+    # to a known artifact in the KB before it lands on disk. The invariant
+    # was already articulated as a `dangling_relation` finding in
+    # `health.lint` (`src/vouch/health.py:135-145`) but no write path
+    # enforced it, so every approve / lifecycle / bundle / sync surface
+    # silently landed graph edges and pages pointing at nothing.
+
+    def _node_exists(self, node_id: str) -> bool:
+        """True if `node_id` resolves to a Claim, Page, Entity, or Source."""
+        if not node_id:
+            return False
+        if self._claim_path(node_id).exists():
+            return True
+        if self._page_path(node_id).exists():
+            return True
+        if self._entity_path(node_id).exists():
+            return True
+        return (self._source_dir(node_id) / "meta.yaml").exists()
+
+    def _evidence_ref_exists(self, ref_id: str) -> bool:
+        """True if `ref_id` resolves to a Source or Evidence record.
+
+        Matches the citation surface that `put_claim` already accepts:
+        either a content-hash Source id or an Evidence id.
+        """
+        if not ref_id:
+            return False
+        if (self._source_dir(ref_id) / "meta.yaml").exists():
+            return True
+        return self._evidence_path(ref_id).exists()
+
     # --- claims ------------------------------------------------------------
 
     def put_claim(self, claim: Claim) -> Claim:
@@ -318,8 +392,32 @@ class KBStore:
     def update_claim(self, claim: Claim) -> Claim:
         if not self._claim_path(claim.id).exists():
             raise ArtifactNotFoundError(f"claim {claim.id}")
+        # Re-validate the in-memory Claim before persisting so model
+        # invariants (e.g. evidence must be non-empty — see #81) hold
+        # even when a caller mutated fields in place after get_claim().
+        # The Claim model's field validators only run at construction
+        # time; mutation alone bypasses them unless we round-trip.
+        Claim.model_validate(claim.model_dump(mode="json"))
         self._claim_path(claim.id).write_text(_yaml_dump(claim.model_dump(mode="json")))
         self._embed_and_store(kind="claim", id=claim.id, text=claim.text)
+        # Keep the FTS5 row in sync with the on-disk claim so lifecycle
+        # mutations (archive, supersede, contradict, confirm) are reflected
+        # in retrieval immediately. Without this, claims_fts.status stays
+        # frozen at first-index time and retracted claims keep matching
+        # kb.search / kb.context.
+        from . import index_db as _index_db
+
+        try:
+            with _index_db.open_db(self.kb_dir) as conn:
+                _index_db.index_claim(
+                    conn, id=claim.id, text=claim.text,
+                    type=claim.type.value, status=claim.status.value,
+                    tags=list(claim.tags),
+                )
+        except sqlite3.Error as e:
+            _embed_log.warning(
+                "claim %s: FTS5 reindex skipped on update (%s)", claim.id, e,
+            )
         return claim
 
     # --- pages -------------------------------------------------------------
@@ -328,8 +426,18 @@ class KBStore:
         for cid in page.claims:
             if not self._claim_path(cid).exists():
                 raise ValueError(f"page {page.id} references unknown claim {cid}")
+        for eid in page.entities:
+            if not self._entity_path(eid).exists():
+                raise ValueError(f"page {page.id} references unknown entity {eid}")
+        for sid in page.sources:
+            if not (self._source_dir(sid) / "meta.yaml").exists():
+                raise ValueError(f"page {page.id} references unknown source {sid}")
         try:
-            with self._page_path(page.id).open("x") as f:
+            # Explicit UTF-8: page bodies are user / agent prose and routinely
+            # contain non-ASCII (em-dashes, smart quotes, unicode in claims).
+            # The default text-mode encoding follows the locale (Latin-1 on a
+            # bare Linux container), which would mangle anything past 0x7F.
+            with self._page_path(page.id).open("x", encoding="utf-8") as f:
                 f.write(_serialize_page(page))
         except FileExistsError as e:
             raise ValueError(
@@ -342,13 +450,16 @@ class KBStore:
         p = self._page_path(page_id)
         if not p.exists():
             raise ArtifactNotFoundError(f"page {page_id}")
-        return _deserialize_page(p.read_text())
+        return _deserialize_page(p.read_text(encoding="utf-8"))
 
     def list_pages(self) -> list[Page]:
         pdir = self.kb_dir / "pages"
         if not pdir.is_dir():
             return []
-        return [_deserialize_page(p.read_text()) for p in sorted(pdir.glob("*.md"))]
+        return [
+            _deserialize_page(p.read_text(encoding="utf-8"))
+            for p in sorted(pdir.glob("*.md"))
+        ]
 
     # --- entities ----------------------------------------------------------
 
@@ -381,7 +492,27 @@ class KBStore:
 
     # --- relations ---------------------------------------------------------
 
+    def _validate_relation_refs(self, rel: Relation) -> None:
+        if not self._node_exists(rel.source):
+            raise ValueError(
+                f"relation {rel.id} references unknown source endpoint "
+                f"{rel.source!r} (must be an existing claim, page, entity, "
+                f"or source id)"
+            )
+        if not self._node_exists(rel.target):
+            raise ValueError(
+                f"relation {rel.id} references unknown target endpoint "
+                f"{rel.target!r} (must be an existing claim, page, entity, "
+                f"or source id)"
+            )
+        for eid in rel.evidence:
+            if not self._evidence_ref_exists(eid):
+                raise ValueError(
+                    f"relation {rel.id} cites unknown source/evidence {eid!r}"
+                )
+
     def put_relation(self, rel: Relation) -> Relation:
+        self._validate_relation_refs(rel)
         try:
             with self._relation_path(rel.id).open("x") as f:
                 f.write(_yaml_dump(rel.model_dump(mode="json")))
@@ -409,6 +540,12 @@ class KBStore:
                 text=f"{rel.source} {rel.relation.value} {rel.target}",
             )
             return rel
+        # Validate before the exclusive create. Skipping validation for the
+        # "already on disk" branch above is deliberate — a relation that's
+        # already durable was validated when it landed; re-checking would
+        # turn supersede/contradict retries into spurious failures whenever
+        # the linked claim was subsequently archived or retracted.
+        self._validate_relation_refs(rel)
         try:
             with path.open("x") as f:
                 f.write(_yaml_dump(rel.model_dump(mode="json")))

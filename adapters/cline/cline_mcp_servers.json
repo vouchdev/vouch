@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "vouch": {
+      "command": "vouch",
+      "args": ["serve"],
+      "env": {
+        "VOUCH_AGENT": "cline"
+      }
+    }
+  }
+}

@@ -1,0 +1,31 @@
+# Vouch — knowledge base
+
+This repo uses **vouch** for durable agent knowledge. The KB lives in
+`.vouch/` and is reviewed in PRs like any other code.
+
+## How to remember things
+
+To preserve a fact, decision, or workflow across sessions:
+
+1. Register evidence: `kb_register_source` (or
+   `kb_register_source_from_path` for a file).
+2. Propose a claim that cites it: `kb_propose_claim`. Every claim
+   MUST cite at least one source or evidence id.
+3. For richer write-ups, propose pages: `kb_propose_page` with a
+   markdown body that references claims.
+
+You **cannot** write durable knowledge directly. Proposals land in
+`.vouch/proposed/` and require human approval via `vouch approve`.
+This is intentional.
+
+## How to read
+
+- `kb_search` for keyword search.
+- `kb_context` to fill a working set for a task ("what does this KB know
+  about X?").
+- `kb_read_*` for specific ids.
+
+## Identity
+
+Set `VOUCH_AGENT=cursor` in your env (or the MCP entry's `env:` block) so the
+audit log can attribute writes to this host.

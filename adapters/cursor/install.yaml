@@ -1,0 +1,17 @@
+# Cursor adapter manifest.
+#
+# T1 = Cursor's project-local MCP config at `<project>/.cursor/mcp.json`.
+# Cursor honours this on workspace open; the user-level form at
+# `~/.cursor/mcp.json` is intentionally out of scope (see #179 acceptance —
+# we don't touch user-global config from a project-scoped install).
+# T2 = AGENTS.md fenced snippet (Cursor reads AGENTS.md the way Claude Code reads CLAUDE.md).
+host: cursor
+pretty: Cursor
+fence:
+  begin: "<!-- BEGIN vouch -->"
+  end: "<!-- END vouch -->"
+tiers:
+  T1:
+    - { src: mcp.json, dst: .cursor/mcp.json }
+  T2:
+    - { src: AGENTS.md.snippet, dst: AGENTS.md, fenced_append: true }

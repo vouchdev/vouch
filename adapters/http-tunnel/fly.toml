@@ -1,0 +1,50 @@
+# fly.io deployment for `vouch serve --transport http`.
+#
+# Run from this directory:
+#   fly launch --copy-config --name <your-app>
+#   fly secrets set VOUCH_TOKEN="$(openssl rand -hex 32)"
+#   fly volumes create vouchdata --size 1
+#   fly deploy
+#
+# Then point Claude.ai's Custom Connector at https://<your-app>.fly.dev/mcp
+# with the same VOUCH_TOKEN as the bearer.
+
+# REPLACE with your app name before `fly deploy`. Either run
+# `fly launch --name <your-app> --copy-config` (which rewrites this line for
+# you), or edit it here. `fly deploy` will refuse the literal "REPLACEME-vouch".
+app = "REPLACEME-vouch"
+primary_region = "iad"
+
+[build]
+dockerfile = "Dockerfile"
+
+[env]
+# vouch reads VOUCH_HTTP_TOKEN as a single-value fallback for serve's --token.
+# We re-bind it to VOUCH_TOKEN (the convention used by config.yaml's
+# `bearer_token: env:VOUCH_TOKEN`) at deploy time via `fly secrets`.
+VOUCH_HTTP_PORT = "8731"
+
+[[mounts]]
+source = "vouchdata"
+destination = "/data"
+
+[[services]]
+internal_port = 8731
+protocol = "tcp"
+auto_stop_machines = "stop"
+auto_start_machines = true
+min_machines_running = 0
+
+# fly's edge terminates TLS and forwards the connection over a private mesh.
+[[services.ports]]
+port = 443
+handlers = ["tls", "http"]
+
+[[services.http_checks]]
+# Liveness probe -- /healthz is unauthenticated by design so fly can probe
+# without needing the bearer token.
+path = "/healthz"
+interval = "15s"
+timeout = "5s"
+grace_period = "5s"
+method = "get"
