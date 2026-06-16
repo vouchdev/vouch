@@ -20,6 +20,12 @@ import yaml
 
 from . import index_db
 from .models import ClaimStatus, ContextItem, ContextPack, ContextQuality
+from .scoping import (
+    ViewerContext,
+    filter_hits,
+    scoped_fetch_limit,
+    viewer_from,
+)
 from .storage import ArtifactNotFoundError, KBStore
 
 # Claim statuses that have been explicitly retracted from active circulation.
@@ -67,8 +73,12 @@ def _configured_backend(store: KBStore) -> str:
     return "auto"
 
 
-def _retrieve(store: KBStore, query: str, limit: int
-              ) -> list[tuple[str, str, str, float, str]]:
+def _retrieve(
+    store: KBStore,
+    query: str,
+    limit: int,
+    viewer: ViewerContext,
+) -> list[tuple[str, str, str, float, str]]:
     """Return list of (kind, id, summary, score, backend).
 
     The backend is chosen by `retrieval.backend` in config.yaml:
@@ -78,19 +88,22 @@ def _retrieve(store: KBStore, query: str, limit: int
       - "substring": substring scan only
     """
     backend = _configured_backend(store)
+    fetch_limit = scoped_fetch_limit(limit, viewer)
 
     if backend in ("auto", "embedding"):
-        raw = index_db.search_semantic(store.kb_dir, query, limit=limit)
+        raw = index_db.search_semantic(store.kb_dir, query, limit=fetch_limit)
         if raw:
-            return [(k, i, s, sc, "embedding") for k, i, s, sc in raw]
+            filtered = filter_hits(store, raw, viewer, limit=limit)
+            return [(k, i, s, sc, "embedding") for k, i, s, sc in filtered]
         if backend == "embedding":
             return []
 
     if backend in ("auto", "fts5"):
         try:
-            hits = index_db.search(store.kb_dir, query, limit=limit)
+            hits = index_db.search(store.kb_dir, query, limit=fetch_limit)
             if hits:
-                return [(k, i, s, sc, "fts5") for k, i, s, sc in hits]
+                filtered = filter_hits(store, hits, viewer, limit=limit)
+                return [(k, i, s, sc, "fts5") for k, i, s, sc in filtered]
         except sqlite3.Error:
             # FTS5 unavailable, db missing, or schema mismatch — fall through
             # to substring scan (auto) or empty (explicit fts5). Other
@@ -99,9 +112,11 @@ def _retrieve(store: KBStore, query: str, limit: int
         if backend == "fts5":
             return []
 
+    substring_hits = store.search_substring(query, limit=fetch_limit)
+    filtered = filter_hits(store, substring_hits, viewer, limit=limit)
     return [
         (k, i, s, sc, "substring")
-        for k, i, s, sc in store.search_substring(query, limit=limit)
+        for k, i, s, sc in filtered
     ]
 
 
@@ -134,8 +149,15 @@ def build_context_pack(
     fail_on_warnings: bool = False,
     fail_on_budget_truncation: bool = False,
     explain: bool = False,
+    project: str | None = None,
+    agent: str | None = None,
 ) -> ContextPack | dict[str, Any]:
-    hits = _retrieve(store, query, limit)
+    viewer = viewer_from(
+        config_path=store.config_path,
+        project=project,
+        agent=agent,
+    )
+    hits = _retrieve(store, query, limit, viewer)
     items: list[ContextItem] = []
     for kind, hid, summary, score, backend in hits:
         cites: list[str] = []
@@ -214,6 +236,10 @@ def build_context_pack(
 
     pack = ContextPack(query=query, items=items, quality=quality, warnings=warnings)
     result: dict[str, Any] = pack.model_dump()
+    result["viewer"] = {
+        "project": viewer.project,
+        "agent": viewer.agent,
+    }
     # Determine the backend used (all hits share the same backend in _retrieve).
     result["backend"] = hits[0][4] if hits else "none"
     if explain:

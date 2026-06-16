@@ -89,13 +89,21 @@ def _h_stats(p: dict) -> dict:
     return collect_stats(_store(), since_days=since)
 
 
-def _h_search(p: dict) -> list[dict]:
+def _h_search(p: dict) -> dict:
     from . import index_db
+    from .scoping import filter_hits, scoped_fetch_limit, viewer_from
+
     s = _store()
     q = p["query"]
     limit = int(p.get("limit", 10))
     backend_arg = p.get("backend", "auto")
     min_score = float(p.get("min_score", 0.0))
+    viewer = viewer_from(
+        config_path=s.config_path,
+        project=p.get("project"),
+        agent=p.get("agent"),
+    )
+    fetch_limit = scoped_fetch_limit(limit, viewer)
     hits: list[tuple[str, str, str, float]] = []
     used = backend_arg
 
@@ -108,18 +116,18 @@ def _h_search(p: dict) -> list[dict]:
 
     if backend_arg in ("auto", "embedding"):
         hits = index_db.search_semantic(
-            s.kb_dir, q, limit=limit, min_score=min_score,
+            s.kb_dir, q, limit=fetch_limit, min_score=min_score,
         )
         if hits:
             used = "embedding"
     if not hits and backend_arg in ("auto", "fts5"):
         try:
-            hits = index_db.search(s.kb_dir, q, limit=limit)
+            hits = index_db.search(s.kb_dir, q, limit=fetch_limit)
             used = "fts5" if hits else used
         except Exception:
             hits = []
     if not hits and backend_arg in ("auto", "substring"):
-        hits = s.search_substring(q, limit=limit)
+        hits = s.search_substring(q, limit=fetch_limit)
         used = "substring"
     if backend_arg == "hybrid":
         from .embeddings.fusion import (  # type: ignore[import-not-found,import-untyped,unused-ignore]
@@ -128,19 +136,24 @@ def _h_search(p: dict) -> list[dict]:
         # Hybrid must honour min_score and survive FTS failures the same
         # way the dedicated fts5 branch does.
         emb = index_db.search_semantic(
-            s.kb_dir, q, limit=limit * 2, min_score=min_score,
+            s.kb_dir, q, limit=fetch_limit * 2, min_score=min_score,
         )
         try:
-            fts = index_db.search(s.kb_dir, q, limit=limit * 2)
+            fts = index_db.search(s.kb_dir, q, limit=fetch_limit * 2)
         except Exception:
             fts = []
-        hits = rrf_fuse(emb, fts, limit=limit)
+        hits = rrf_fuse(emb, fts, limit=fetch_limit)
         used = "hybrid"
 
-    return [
-        {"kind": k, "id": i, "snippet": sn, "score": sc, "backend": used}
-        for k, i, sn, sc in hits
-    ]
+    scoped = filter_hits(s, hits, viewer, limit=limit)
+    return {
+        "backend": used,
+        "viewer": {"project": viewer.project, "agent": viewer.agent},
+        "hits": [
+            {"kind": k, "id": i, "snippet": sn, "score": sc, "backend": used}
+            for k, i, sn, sc in scoped
+        ],
+    }
 
 
 
@@ -154,6 +167,8 @@ def _h_context(p: dict) -> dict:
         require_citations=bool(p.get("require_citations", False)),
         fail_on_warnings=bool(p.get("fail_on_warnings", False)),
         fail_on_budget_truncation=bool(p.get("fail_on_budget_truncation", False)),
+        project=p.get("project"),
+        agent=p.get("agent"),
     )
 
 
