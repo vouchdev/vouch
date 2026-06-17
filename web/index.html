@@ -1,0 +1,1084 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vouch — An Anatomical Reference to Agent Memory</title>
+<meta name="description" content="Vouch is muscle memory for AI agents that code — durable, cited, review-gated knowledge that survives every session.">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500;1,600&family=EB+Garamond:ital,wght@0,400;0,500;0,600;1,400;1,500&family=IBM+Plex+Mono:ital,wght@0,300;0,400;0,500;1,400&display=swap">
+
+<style>
+/* ---------- DESIGN TOKENS ---------- */
+:root {
+  --paper:      #f1ead3;
+  --paper-2:    #e8dfc1;
+  --paper-3:    #dccfa6;
+  --ink:        #1a1208;
+  --ink-2:      #3d2f1e;
+  --sepia:      #6e5b3a;
+  --vermillion: #a82c1c;
+  --vermillion-2:#7a1a0c;
+  --rule:       #b89a6a;
+  --font-display: 'Cormorant Garamond', 'EB Garamond', Georgia, serif;
+  --font-body:    'EB Garamond', Georgia, serif;
+  --font-mono:    'IBM Plex Mono', 'Courier New', monospace;
+}
+
+* { box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 19px;
+  line-height: 1.55;
+  font-feature-settings: "lnum" 1, "kern" 1, "liga" 1;
+  -webkit-font-smoothing: antialiased;
+  background-image:
+    radial-gradient(ellipse at top left, rgba(110,91,58,.07), transparent 60%),
+    radial-gradient(ellipse at bottom right, rgba(168,44,28,.04), transparent 50%);
+  position: relative;
+  overflow-x: hidden;
+}
+
+/* paper grain overlay — subtle SVG noise, no-image fallback uses subtle dots */
+body::before {
+  content: "";
+  position: fixed; inset: 0;
+  pointer-events: none;
+  z-index: 1;
+  opacity: .42;
+  mix-blend-mode: multiply;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.10 0 0 0 0 0.07 0 0 0 0 0.04 0 0 0 0.07 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+}
+
+/* vermillion-ink selection */
+::selection { background: var(--vermillion); color: var(--paper); }
+
+/* ---------- TYPE SCALE ---------- */
+h1, h2, h3, h4 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  color: var(--ink);
+  margin: 0;
+  letter-spacing: .002em;
+}
+h1 { font-size: clamp(64px, 13vw, 200px); line-height: .9; letter-spacing: -.012em; }
+h2 { font-size: clamp(34px, 4.4vw, 56px); line-height: 1.08; }
+h3 { font-size: clamp(22px, 2.4vw, 30px); line-height: 1.2; }
+.small-caps {
+  font-variant: small-caps;
+  letter-spacing: .14em;
+  font-feature-settings: "smcp" 1;
+}
+em, i { font-family: var(--font-body); font-style: italic; }
+
+p { margin: 0 0 1.1em 0; max-width: 62ch; }
+.lede { font-size: 1.05em; }
+
+a {
+  color: var(--vermillion);
+  text-decoration: none;
+  border-bottom: 1px solid rgba(168,44,28,.35);
+  transition: border-color .25s ease, color .25s ease;
+}
+a:hover { color: var(--vermillion-2); border-bottom-color: currentColor; }
+
+code, kbd, .mono { font-family: var(--font-mono); font-size: .88em; color: var(--ink-2); }
+code { background: rgba(110,91,58,.10); padding: .06em .35em; border-radius: 2px; }
+
+/* ---------- PAGE GRID ---------- */
+main { position: relative; z-index: 2; }
+
+.plate {
+  position: relative;
+  padding: 96px 6vw 96px;
+  border-bottom: 1px solid var(--rule);
+  background: transparent;
+}
+.plate:nth-of-type(even) {
+  background: linear-gradient(180deg, transparent, rgba(184,154,106,.05), transparent);
+}
+
+/* editorial 12-col grid */
+.col {
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  column-gap: 32px;
+  row-gap: 24px;
+  max-width: 1280px;
+  margin: 0 auto;
+}
+
+/* plate label */
+.plate-label {
+  font-family: var(--font-display);
+  font-style: italic;
+  color: var(--vermillion);
+  font-size: 13px;
+  letter-spacing: .28em;
+  text-transform: uppercase;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 24px;
+}
+.plate-label::before, .plate-label::after {
+  content: "";
+  flex: 0 0 28px;
+  border-top: 1px solid var(--vermillion);
+}
+.plate-label::after { flex: 1; }
+
+/* drop cap */
+.dropcap::first-letter {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 5.2em;
+  float: left;
+  line-height: .82;
+  padding: .04em .14em 0 0;
+  color: var(--vermillion);
+  font-feature-settings: "lnum" 1;
+}
+
+/* horizontal ornaments */
+.rule-double {
+  border: 0;
+  border-top: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
+  height: 4px;
+  margin: 32px 0;
+}
+.fleuron {
+  text-align: center;
+  color: var(--vermillion);
+  font-family: var(--font-display);
+  font-size: 22px;
+  letter-spacing: .2em;
+  margin: 28px 0;
+  user-select: none;
+}
+
+/* marginalia — italic notes anchored beside figures */
+.marginalia {
+  font-style: italic;
+  color: var(--sepia);
+  font-size: 14.5px;
+  line-height: 1.5;
+  border-left: 1px solid var(--rule);
+  padding: 4px 0 4px 14px;
+  margin-top: 8px;
+}
+.marginalia .ref {
+  font-variant: small-caps;
+  letter-spacing: .14em;
+  color: var(--vermillion);
+  font-style: normal;
+  font-size: 12.5px;
+  display: block;
+  margin-bottom: 4px;
+}
+
+/* figure caption */
+figcaption {
+  text-align: center;
+  font-style: italic;
+  font-size: 15px;
+  color: var(--sepia);
+  margin-top: 14px;
+  letter-spacing: .01em;
+}
+
+/* ---------- MASTHEAD ---------- */
+.masthead {
+  padding: 56px 6vw 64px;
+  border-bottom: 3px double var(--rule);
+  background:
+    radial-gradient(ellipse 90% 60% at 50% 0%, rgba(168,44,28,.06), transparent 60%),
+    transparent;
+}
+.masthead-bar {
+  max-width: 1280px;
+  margin: 0 auto 36px;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  font-variant: small-caps;
+  letter-spacing: .22em;
+  font-size: 12.5px;
+  color: var(--sepia);
+}
+.masthead-bar span:nth-child(2) {
+  flex: 1; height: 1px;
+  background: var(--rule);
+  margin: 0 28px;
+  position: relative;
+  top: -4px;
+}
+
+.title-block {
+  max-width: 1280px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 18px;
+  text-align: center;
+}
+.title-block h1 {
+  font-weight: 700;
+  letter-spacing: -.018em;
+  text-transform: none;
+  position: relative;
+}
+.title-block h1 .amp {
+  color: var(--vermillion);
+  font-style: italic;
+  font-weight: 500;
+}
+.title-block .subtitle {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-size: clamp(20px, 2.2vw, 28px);
+  color: var(--ink-2);
+  letter-spacing: .01em;
+}
+.title-block .descriptor {
+  font-variant: small-caps;
+  letter-spacing: .26em;
+  font-size: 13.5px;
+  color: var(--vermillion);
+  margin-top: 4px;
+}
+.title-block .blurb {
+  font-style: italic;
+  color: var(--ink-2);
+  font-size: 18px;
+  max-width: 38em;
+  margin: 6px auto 0;
+}
+
+/* hero ornament */
+.hero-orn {
+  width: 220px;
+  height: 28px;
+  margin: 14px auto 0;
+  color: var(--vermillion);
+}
+
+/* ---------- PRESCRIPTION BOX ---------- */
+.rx {
+  max-width: 760px;
+  margin: 60px auto 12px;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.18), transparent 30%),
+    var(--paper-2);
+  border: 1px solid var(--rule);
+  position: relative;
+  padding: 28px 36px 32px;
+  box-shadow:
+    inset 0 0 0 1px rgba(255,255,255,.4),
+    0 0 0 8px var(--paper),
+    0 0 0 9px var(--rule),
+    20px 22px 0 -6px rgba(110,91,58,.16);
+  display: grid;
+  grid-template-columns: 76px 1fr;
+  gap: 26px;
+  align-items: center;
+}
+.rx::before {
+  content: "";
+  position: absolute;
+  inset: 8px;
+  border: 1px dashed rgba(110,91,58,.35);
+  pointer-events: none;
+}
+.rx-symbol {
+  font-family: var(--font-display);
+  font-size: 92px;
+  font-style: italic;
+  font-weight: 600;
+  color: var(--vermillion);
+  line-height: .8;
+  text-align: center;
+  position: relative;
+}
+.rx-symbol::after {
+  /* the Rx slash */
+  content: "";
+  position: absolute;
+  left: 12%; right: 12%;
+  bottom: 30%;
+  height: 3px;
+  background: var(--vermillion);
+  transform: rotate(-22deg);
+  transform-origin: left;
+}
+.rx-body { font-family: var(--font-body); }
+.rx-line {
+  font-family: var(--font-mono);
+  font-size: 19px;
+  letter-spacing: -.02em;
+  color: var(--ink);
+  background: transparent;
+  padding: 6px 0;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.rx-line .prompt { color: var(--vermillion); }
+.rx-note {
+  font-style: italic;
+  color: var(--sepia);
+  font-size: 14px;
+  margin-top: 8px;
+}
+
+/* ---------- PLATE I — COLD START ---------- */
+#plate-i .col {
+  align-items: center;
+}
+#plate-i .text { grid-column: 1 / span 6; }
+#plate-i .fig  { grid-column: 7 / span 6; position: relative; }
+
+/* ---------- PLATE II — METAPHOR ---------- */
+#plate-ii .col { align-items: start; }
+#plate-ii .text { grid-column: 6 / span 7; order: 2; }
+#plate-ii .fig  { grid-column: 1 / span 5; order: 1; }
+#plate-ii .pull {
+  margin-top: 24px;
+  border-left: 2px solid var(--vermillion);
+  padding: 4px 0 4px 20px;
+  font-family: var(--font-display);
+  font-style: italic;
+  font-size: 26px;
+  line-height: 1.3;
+  color: var(--ink);
+  max-width: 30em;
+}
+
+/* ---------- PLATE III — REVIEW GATE ---------- */
+#plate-iii .col { display: block; max-width: 1280px; }
+#plate-iii .lede-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 48px;
+  margin-bottom: 36px;
+}
+#plate-iii .diagram-wrap {
+  position: relative;
+  background: var(--paper-2);
+  border: 1px solid var(--rule);
+  padding: 32px 28px 28px;
+  margin-top: 12px;
+}
+#plate-iii .diagram-wrap::before {
+  content: "";
+  position: absolute; inset: 8px;
+  border: 1px dashed rgba(110,91,58,.32);
+  pointer-events: none;
+}
+
+/* ---------- PLATE IV — SYMPTOMATOLOGY ---------- */
+.sympto {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 48px;
+  margin-top: 28px;
+}
+.sympto .panel {
+  border-top: 2px solid var(--ink);
+  padding-top: 20px;
+}
+.sympto h4 {
+  font-variant: small-caps;
+  letter-spacing: .12em;
+  font-size: 16px;
+  color: var(--vermillion);
+  margin-bottom: 12px;
+}
+.sympto ol {
+  margin: 0; padding: 0;
+  list-style: none;
+  counter-reset: sx;
+}
+.sympto li {
+  counter-increment: sx;
+  position: relative;
+  padding: 12px 0 12px 36px;
+  border-bottom: 1px dotted var(--rule);
+  font-family: var(--font-body);
+  font-size: 17.5px;
+  line-height: 1.45;
+  color: var(--ink-2);
+}
+.sympto li::before {
+  content: counter(sx, lower-roman) ".";
+  position: absolute; left: 0; top: 12px;
+  font-variant: small-caps;
+  font-family: var(--font-display);
+  font-style: italic;
+  color: var(--vermillion);
+  font-size: 16px;
+}
+
+/* ---------- PLATE V — CATALOGUE ---------- */
+.catalogue {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 48px;
+  margin-top: 28px;
+}
+.cat-group h4 {
+  font-variant: small-caps;
+  letter-spacing: .14em;
+  font-size: 14.5px;
+  color: var(--vermillion);
+  border-bottom: 1px solid var(--rule);
+  padding-bottom: 8px;
+  margin-bottom: 12px;
+}
+.cat-group dl {
+  margin: 0;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+.cat-group dt {
+  font-family: var(--font-mono);
+  font-size: 14.5px;
+  color: var(--ink);
+}
+.cat-group dd {
+  margin: 2px 0 0 0;
+  font-style: italic;
+  color: var(--sepia);
+  font-size: 15.5px;
+}
+
+/* ---------- PLATE VI — PROVENANCE ---------- */
+.principles {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 36px;
+  margin-top: 36px;
+}
+.principle {
+  border-top: 2px solid var(--vermillion);
+  padding-top: 18px;
+}
+.principle .pn {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-size: 38px;
+  color: var(--vermillion);
+  line-height: 1;
+}
+.principle h3 {
+  font-size: 22px;
+  margin: 6px 0 10px;
+  font-weight: 600;
+}
+.principle p {
+  font-size: 16.5px;
+  color: var(--ink-2);
+  margin: 0;
+}
+
+/* ---------- COLOPHON ---------- */
+.colophon {
+  padding: 80px 6vw 64px;
+  background: var(--paper-2);
+  border-top: 3px double var(--rule);
+}
+.colophon .col {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr 1fr;
+  gap: 36px;
+  font-size: 15.5px;
+  color: var(--ink-2);
+}
+.colophon h4 {
+  font-variant: small-caps;
+  letter-spacing: .18em;
+  font-size: 13px;
+  color: var(--vermillion);
+  margin-bottom: 12px;
+}
+.colophon ul { margin: 0; padding: 0; list-style: none; }
+.colophon li { padding: 4px 0; }
+.colophon .signoff {
+  font-family: var(--font-display);
+  font-style: italic;
+  color: var(--sepia);
+  font-size: 17px;
+  margin-top: 24px;
+}
+.foot-rule {
+  max-width: 1280px;
+  margin: 32px auto 18px;
+  border-top: 1px solid var(--rule);
+}
+.foot-meta {
+  max-width: 1280px;
+  margin: 0 auto;
+  display: flex;
+  justify-content: space-between;
+  font-variant: small-caps;
+  letter-spacing: .2em;
+  font-size: 12px;
+  color: var(--sepia);
+}
+
+/* ---------- SVG STYLES ---------- */
+svg .ink   { fill: none; stroke: var(--ink); stroke-width: 1.4; }
+svg .ink-2 { fill: none; stroke: var(--ink-2); stroke-width: 1; }
+svg .verm  { fill: none; stroke: var(--vermillion); stroke-width: 1.6; }
+svg .vermf { fill: var(--vermillion); }
+svg .label { font-family: var(--font-display); font-style: italic; font-size: 13px; fill: var(--ink); }
+svg .label-roman {
+  font-family: var(--font-display);
+  font-size: 14px;
+  fill: var(--vermillion);
+  font-variant: small-caps;
+  letter-spacing: .2em;
+}
+svg .axis { stroke: var(--sepia); stroke-width: .8; fill: none; }
+svg .axis-tick { fill: var(--sepia); font-family: var(--font-body); font-size: 11px; }
+svg .grid { stroke: var(--rule); stroke-width: .4; stroke-dasharray: 2 4; fill: none; }
+svg .dotted { stroke-dasharray: 2 3; }
+svg .pulse { animation: pulse 4s ease-in-out infinite; transform-origin: center; }
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .55; }
+}
+
+/* draw-in animation: paths with stroke-dashoffset reveal on load */
+svg path.draw, svg circle.draw, svg line.draw, svg rect.draw {
+  stroke-dasharray: 1600;
+  stroke-dashoffset: 1600;
+  animation: drawIn 2.4s ease-out forwards;
+  animation-delay: var(--d, 0s);
+}
+@keyframes drawIn {
+  to { stroke-dashoffset: 0; }
+}
+
+/* ---------- RESPONSIVE ---------- */
+@media (max-width: 920px) {
+  body { font-size: 17px; }
+  .plate { padding: 64px 7vw; }
+  #plate-i .text, #plate-i .fig,
+  #plate-ii .text, #plate-ii .fig { grid-column: 1 / -1; }
+  #plate-ii .fig { order: 1; }
+  #plate-ii .text { order: 2; }
+  #plate-iii .lede-row { grid-template-columns: 1fr; gap: 18px; }
+  .sympto, .catalogue { grid-template-columns: 1fr; gap: 28px; }
+  .principles { grid-template-columns: 1fr; gap: 28px; }
+  .rx { grid-template-columns: 60px 1fr; padding: 22px 24px 26px; box-shadow: inset 0 0 0 1px rgba(255,255,255,.4), 0 0 0 6px var(--paper), 0 0 0 7px var(--rule); }
+  .rx-symbol { font-size: 70px; }
+  .colophon .col { grid-template-columns: 1fr; }
+  .foot-meta { flex-direction: column; gap: 6px; }
+  .masthead-bar span:nth-child(2) { display:none; }
+}
+</style>
+</head>
+
+<body>
+
+<main>
+
+  <!-- ============================================================
+       MASTHEAD
+       ============================================================ -->
+  <header class="masthead">
+    <div class="masthead-bar">
+      <span>Open-source monograph</span>
+      <span></span>
+      <span>Vol. I · No. 1 · MMXXVI</span>
+    </div>
+
+    <div class="title-block">
+      <div class="descriptor">An anatomical reference, in one fascicle</div>
+      <h1>Vouch</h1>
+      <div class="subtitle">— muscle memory for agents that code —</div>
+      <p class="blurb">A monograph on durable, cited knowledge:<br>how an artificial agent forms a recall,<br>and how the recall survives the night.</p>
+
+      <!-- hero ornament -->
+      <svg class="hero-orn" viewBox="0 0 220 28" aria-hidden="true">
+        <path class="ink-2" d="M 0,14 L 88,14" />
+        <path class="verm" d="M 92,14 c 4,-7 12,-7 16,0 c 4,7 12,7 16,0" />
+        <circle cx="110" cy="14" r="2" class="vermf" stroke="none"/>
+        <path class="ink-2" d="M 132,14 L 220,14" />
+      </svg>
+    </div>
+
+    <!-- prescription -->
+    <div class="rx" role="img" aria-label="Installation prescription">
+      <div class="rx-symbol" aria-hidden="true">R</div>
+      <div class="rx-body">
+        <div class="small-caps" style="color:var(--sepia); letter-spacing:.18em; font-size:12.5px; margin-bottom:6px;">Indication · Durable agent memory</div>
+        <div class="rx-line"><span class="prompt">$</span> pipx install vouch-kb</div>
+        <div class="rx-line"><span class="prompt">$</span> cd your-project &amp;&amp; vouch init</div>
+        <div class="rx-line"><span class="prompt">$</span> vouch serve <span style="color:var(--sepia)">&nbsp; # mounts the MCP server</span></div>
+        <div class="rx-note">Dosage: once, at the seat of work. The command installed is <code>vouch</code>; the distribution on PyPI is <code>vouch-kb</code>.</div>
+      </div>
+    </div>
+  </header>
+
+
+  <!-- ============================================================
+       PLATE I — THE COLD START
+       ============================================================ -->
+  <section class="plate" id="plate-i">
+    <div class="col">
+
+      <div class="text">
+        <div class="plate-label"><span>Plate I</span><span>Memory loss in the untrained specimen</span></div>
+
+        <p class="lede dropcap">
+          Without intervention, an agent begins forgetting at the instant the session ends. Every new conversation opens cold — a confident expert who has never seen this codebase. It re-derives. It re-asks. It re-fixes the bug you fixed in March. The cleverness is fully preserved; only the <em>memory of having decided</em> is lost.
+        </p>
+        <p>
+          In an untrained nervous system this is called the cold-start problem. A pianist without rehearsal must read every note. A mechanic without callus must measure every bolt. The remedy in flesh is well known: <em>repetition cathects retention</em> — a path traced enough times becomes the path of least resistance. The agent has no such path. Every session is the first session.
+        </p>
+        <p>
+          Vouch furnishes the path. It places, in the project itself, a small persistent organ that records what the agent has done and why — but only after a second pair of eyes signs the record. The cost is one extra step. The benefit is permanence.
+        </p>
+
+        <div class="marginalia">
+          <span class="ref">fig. 1.1 · cold-start</span>
+          The recall curve flattens to zero between sessions when no durable encoding is provided. Sessions are not continuous; they merely abut.
+        </div>
+      </div>
+
+      <div class="fig">
+        <!-- Memory-decay curve diagram -->
+        <svg viewBox="0 0 540 400" aria-label="A curve showing memory dropping to zero between sessions">
+          <!-- frame -->
+          <rect x="20" y="20" width="500" height="360" class="ink-2" fill="none"/>
+          <rect x="32" y="32" width="476" height="336" class="grid" stroke-dasharray="0" stroke="rgba(184,154,106,.35)" fill="none"/>
+
+          <!-- axes -->
+          <line class="axis" x1="60" y1="60" x2="60" y2="340"/>
+          <line class="axis" x1="60" y1="340" x2="500" y2="340"/>
+
+          <!-- grid lines -->
+          <line class="grid" x1="180" y1="60" x2="180" y2="340"/>
+          <line class="grid" x1="300" y1="60" x2="300" y2="340"/>
+          <line class="grid" x1="420" y1="60" x2="420" y2="340"/>
+
+          <!-- session markers (vermillion verticals) -->
+          <line class="verm dotted" x1="180" y1="60" x2="180" y2="340" stroke-dasharray="3 4"/>
+          <line class="verm dotted" x1="300" y1="60" x2="300" y2="340" stroke-dasharray="3 4"/>
+          <line class="verm dotted" x1="420" y1="60" x2="420" y2="340" stroke-dasharray="3 4"/>
+
+          <!-- decay curve -->
+          <path class="ink draw" style="--d:.4s"
+                d="M 60,80 Q 110,80 130,140 T 175,300
+                   M 180,300 Q 210,200 240,180 T 295,300
+                   M 300,300 Q 330,200 360,180 T 415,300
+                   M 420,300 Q 450,220 480,210" />
+
+          <!-- terminal dots -->
+          <circle cx="175" cy="300" r="3" class="vermf draw" style="--d:1.4s; stroke:none"/>
+          <circle cx="295" cy="300" r="3" class="vermf draw" style="--d:1.6s; stroke:none"/>
+          <circle cx="415" cy="300" r="3" class="vermf draw" style="--d:1.8s; stroke:none"/>
+
+          <!-- axis labels -->
+          <text class="axis-tick" x="60" y="356" text-anchor="middle">session 1</text>
+          <text class="axis-tick" x="180" y="356" text-anchor="middle">end</text>
+          <text class="axis-tick" x="300" y="356" text-anchor="middle">session 2</text>
+          <text class="axis-tick" x="420" y="356" text-anchor="middle">session 3</text>
+          <text class="axis-tick" x="500" y="356" text-anchor="end">t →</text>
+
+          <text class="axis-tick" transform="translate(36,200) rotate(-90)" text-anchor="middle">retention →</text>
+
+          <!-- diagnostic label -->
+          <g class="label">
+            <text x="266" y="135">decay across boundary</text>
+            <line x1="240" y1="140" x2="180" y2="200" class="ink-2"/>
+          </g>
+
+          <g class="label-roman">
+            <text x="500" y="50" text-anchor="end">fig. 1·i</text>
+          </g>
+        </svg>
+        <figcaption>Memory loss in the untrained specimen — retention falls to zero at each session boundary.</figcaption>
+      </div>
+
+    </div>
+  </section>
+
+
+  <!-- ============================================================
+       PLATE II — THE METAPHOR
+       ============================================================ -->
+  <section class="plate" id="plate-ii">
+    <div class="col">
+
+      <div class="fig">
+        <!-- Pathway formation diagram — schematic neural-style pathway -->
+        <svg viewBox="0 0 440 480" aria-label="A schematic pathway showing repeated traversal carving a durable channel">
+          <!-- frame -->
+          <rect x="16" y="16" width="408" height="448" class="ink-2" fill="none"/>
+
+          <!-- afferent fibre cluster on left -->
+          <g>
+            <circle cx="70" cy="80" r="14" class="ink draw" style="--d:.2s"/>
+            <circle cx="70" cy="180" r="14" class="ink draw" style="--d:.3s"/>
+            <circle cx="70" cy="280" r="14" class="ink draw" style="--d:.4s"/>
+            <circle cx="70" cy="380" r="14" class="ink draw" style="--d:.5s"/>
+            <text class="label-roman" x="70" y="40" text-anchor="middle">stimuli</text>
+            <text class="label" x="70" y="84" text-anchor="middle" style="fill:var(--paper);font-style:normal;font-weight:600;font-family:var(--font-mono);font-size:11px">i.</text>
+            <text class="label" x="70" y="184" text-anchor="middle" style="fill:var(--paper);font-style:normal;font-weight:600;font-family:var(--font-mono);font-size:11px">ii.</text>
+            <text class="label" x="70" y="284" text-anchor="middle" style="fill:var(--paper);font-style:normal;font-weight:600;font-family:var(--font-mono);font-size:11px">iii.</text>
+            <text class="label" x="70" y="384" text-anchor="middle" style="fill:var(--paper);font-style:normal;font-weight:600;font-family:var(--font-mono);font-size:11px">iv.</text>
+          </g>
+
+          <!-- central pathway: thin paths that converge into a thick artery -->
+          <g class="ink-2">
+            <path class="draw" style="--d:.7s" d="M 88,80 C 160,80 200,160 260,220" />
+            <path class="draw" style="--d:.8s" d="M 88,180 C 170,180 210,200 260,220" />
+            <path class="draw" style="--d:.9s" d="M 88,280 C 170,280 210,240 260,220" />
+            <path class="draw" style="--d:1.0s" d="M 88,380 C 160,380 200,280 260,220" />
+          </g>
+
+          <!-- emerging durable channel — thick vermillion -->
+          <path class="verm draw" style="--d:1.4s; stroke-width:5"
+                d="M 260,220 C 290,220 320,210 360,205" />
+          <circle cx="370" cy="205" r="14" class="vermf draw" style="--d:1.6s" stroke="none"/>
+          <text class="label" x="370" y="208" text-anchor="middle" style="fill:var(--paper);font-style:normal;font-weight:600;font-family:var(--font-mono);font-size:11px">M</text>
+
+          <!-- engram label -->
+          <text class="label-roman" x="370" y="170" text-anchor="middle">engram</text>
+
+          <!-- efferent return path -->
+          <path class="verm draw dotted" style="--d:2s" d="M 370,219 C 340,260 280,290 200,300" />
+          <text class="label" x="200" y="320" text-anchor="middle">recall →</text>
+
+          <!-- axis labels -->
+          <text class="label-roman" x="220" y="445" text-anchor="middle">repetition · review · retention</text>
+
+          <g class="label-roman">
+            <text x="408" y="40" text-anchor="end">fig. 2·i</text>
+          </g>
+        </svg>
+        <figcaption>The mechanism of muscle memory — four traversals collapse into one durable channel.</figcaption>
+      </div>
+
+      <div class="text">
+        <div class="plate-label"><span>Plate II</span><span>The muscle-memory analogue</span></div>
+
+        <p class="lede dropcap">
+          Muscle memory is what the body knows without thinking. The pianist does not recite the fingering of a sonata; her hands remember. The mechanic does not look up the torque of a head bolt; his arm recognises the give. In neurology this is procedural memory — knowledge encoded by repetition into a pathway so well trodden that recall feels involuntary.
+        </p>
+        <p>
+          Vouch is that pathway for an agent. A claim is proposed (the action), a human approves (the rehearsal), the record persists in the repository (the engram). When the next session arrives and the agent reaches for the same problem, the recall is already there. It does not have to be derived again.
+        </p>
+
+        <p class="pull">
+          Vouch is muscle memory for the agent — knowledge encoded by review, recalled without effort.
+        </p>
+
+        <p>
+          The pieces are unromantic and that is the point. Plain markdown on disk. Plain YAML for claims. A SQLite cache it can rebuild from scratch. Every motion logged. The kind of thing you trust enough to commit.
+        </p>
+      </div>
+
+    </div>
+  </section>
+
+
+  <!-- ============================================================
+       PLATE III — THE REVIEW GATE
+       ============================================================ -->
+  <section class="plate" id="plate-iii">
+    <div class="col">
+      <div class="plate-label"><span>Plate III</span><span>Anatomy of the review gate</span></div>
+
+      <div class="lede-row">
+        <p class="lede">
+          The agent's writings do not become memory directly. They are first <em>proposals</em>, held in a vestibule called <code>.vouch/proposed/</code>, which never enters the project's history. From there a human passes them through the review gate — the synapse of the system. Only the approved cross over.
+        </p>
+        <p>
+          The discipline is the same one that keeps a peer-reviewed journal honest: nothing is durable until somebody else has read it. The trade is small and forgiving. A pull request already feels like this.
+        </p>
+      </div>
+
+      <div class="diagram-wrap">
+        <svg viewBox="0 0 1100 360" aria-label="The review gate: propose, review, durable claim, recall">
+
+          <!-- four chambers -->
+          <g class="ink-2">
+            <rect class="draw" style="--d:.2s" x="40"  y="120" width="220" height="140"/>
+            <rect class="draw" style="--d:.4s" x="320" y="120" width="220" height="140"/>
+            <rect class="draw" style="--d:.6s" x="600" y="120" width="220" height="140"/>
+            <rect class="draw" style="--d:.8s" x="880" y="120" width="180" height="140"/>
+          </g>
+
+          <!-- roman numeral chamber labels (top) -->
+          <g class="label-roman" text-anchor="middle">
+            <text x="150"  y="100">i · propose</text>
+            <text x="430"  y="100">ii · review</text>
+            <text x="710"  y="100">iii · durable claim</text>
+            <text x="970"  y="100">iv · recall</text>
+          </g>
+
+          <!-- chamber contents — small inset diagrams -->
+
+          <!-- i. propose: agent writing into a tray -->
+          <g transform="translate(78,148)">
+            <circle cx="20" cy="20" r="14" class="ink draw" style="--d:.9s"/>
+            <text class="label" x="20" y="23" text-anchor="middle" style="font-style:normal;font-weight:600;font-family:var(--font-mono);font-size:10.5px;fill:var(--paper)">A</text>
+            <path class="ink draw" style="--d:1s" d="M 40,28 C 60,40 80,40 100,40"/>
+            <rect class="ink draw" style="--d:1.1s" x="100" y="20" width="60" height="40" />
+            <text class="label" x="130" y="46" text-anchor="middle" style="font-style:normal;font-size:11px;font-family:var(--font-mono)">.yaml</text>
+            <text class="label" x="78" y="92" text-anchor="middle">.vouch/proposed/</text>
+          </g>
+
+          <!-- ii. review: human eye / hand -->
+          <g transform="translate(360,150)">
+            <ellipse cx="48" cy="30" rx="42" ry="18" class="ink draw" style="--d:1.2s"/>
+            <circle cx="48" cy="30" r="11" class="ink draw" style="--d:1.3s"/>
+            <circle cx="48" cy="30" r="5"  class="vermf draw" style="--d:1.4s" stroke="none"/>
+            <path class="verm draw" style="--d:1.5s" d="M 110,30 L 150,30"/>
+            <path class="verm draw" style="--d:1.6s" d="M 142,22 L 150,30 L 142,38"/>
+            <text class="label" x="80" y="92" text-anchor="middle">vouch approve &lt;id&gt;</text>
+          </g>
+
+          <!-- iii. durable claim: engram block -->
+          <g transform="translate(640,148)">
+            <rect class="verm draw" style="--d:1.7s" x="0" y="0" width="160" height="80" stroke-width="2"/>
+            <line class="ink draw" style="--d:1.8s" x1="10" y1="14" x2="120" y2="14"/>
+            <line class="ink draw" style="--d:1.85s" x1="10" y1="28" x2="140" y2="28"/>
+            <line class="ink draw" style="--d:1.9s" x1="10" y1="42" x2="100" y2="42"/>
+            <text class="label" x="14" y="62" style="font-style:normal;font-family:var(--font-mono);font-size:10.5px;fill:var(--vermillion)">cites: src/auth.py</text>
+            <text class="label" x="80" y="92" text-anchor="middle">.vouch/claims/&lt;id&gt;.yaml</text>
+          </g>
+
+          <!-- iv. recall: efferent arrow back to agent -->
+          <g transform="translate(900,150)">
+            <circle cx="120" cy="30" r="14" class="ink draw" style="--d:2s"/>
+            <text class="label" x="120" y="33" text-anchor="middle" style="font-style:normal;font-weight:600;font-family:var(--font-mono);font-size:10.5px;fill:var(--paper)">A</text>
+            <path class="verm draw" style="--d:2.1s" d="M 8,30 L 100,30" stroke-dasharray="4 3"/>
+            <path class="verm draw" style="--d:2.2s" d="M 90,22 L 100,30 L 90,38"/>
+            <text class="label" x="60" y="92" text-anchor="middle">kb_search · kb_context</text>
+          </g>
+
+          <!-- inter-chamber connectors -->
+          <g class="ink-2">
+            <line class="draw" style="--d:.5s" x1="260" y1="190" x2="320" y2="190"/>
+            <line class="draw" style="--d:.7s" x1="540" y1="190" x2="600" y2="190"/>
+            <line class="draw" style="--d:.85s" x1="820" y1="190" x2="880" y2="190"/>
+          </g>
+
+          <!-- gate cap label -->
+          <text class="label-roman" x="430" y="295" text-anchor="middle" style="fill:var(--vermillion)">— synapse —</text>
+          <text class="label" x="430" y="318" text-anchor="middle">a different actor must sign the approval</text>
+
+          <!-- plate ref -->
+          <g class="label-roman">
+            <text x="1060" y="40" text-anchor="end">fig. 3·i</text>
+          </g>
+        </svg>
+        <figcaption>The review gate, in four chambers: propose → review → durable claim → recall. The synapse refuses self-approval; an agent may not certify its own remembrance.</figcaption>
+      </div>
+
+    </div>
+  </section>
+
+
+  <!-- ============================================================
+       PLATE IV — SYMPTOMATOLOGY
+       ============================================================ -->
+  <section class="plate" id="plate-iv">
+    <div class="col" style="display:block;">
+      <div class="plate-label"><span>Plate IV</span><span>Symptomatology, untreated vs. treated</span></div>
+
+      <p class="lede dropcap" style="max-width:48em;">
+        The clinical picture is the easiest way to recognise the condition. Before the prescription, an agent presents with the following constellation of complaints; after, the picture inverts.
+      </p>
+
+      <div class="sympto">
+
+        <div class="panel">
+          <h4>· Before · cold-context, no provenance ·</h4>
+          <ol>
+            <li>re-derives the architecture every session</li>
+            <li>repeats fixes already shipped in march</li>
+            <li>hallucinates a plausible decision because none is on record</li>
+            <li>cites nothing; rationale evaporates after the chat closes</li>
+            <li>contradicts last week's agent with quiet confidence</li>
+            <li>the maintainer answers the same question in slack on tuesdays</li>
+          </ol>
+        </div>
+
+        <div class="panel">
+          <h4>· After · cited, reviewed, retrievable ·</h4>
+          <ol>
+            <li>opens with <code>kb_context</code> and finds prior art</li>
+            <li>before answering, names the claim and its source</li>
+            <li>proposes the new claim cited to the file, the issue, the spec</li>
+            <li>cannot rubber-stamp itself — a human signs the approval</li>
+            <li>supersedes the old decision when revising; the diff is on disk</li>
+            <li>the maintainer answers the question once, in a claim</li>
+          </ol>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+
+  <!-- ============================================================
+       PLATE V — CATALOGUE
+       ============================================================ -->
+  <section class="plate" id="plate-v">
+    <div class="col" style="display:block;">
+      <div class="plate-label"><span>Plate V</span><span>Catalogue of provided pathways</span></div>
+
+      <p class="lede dropcap" style="max-width:46em;">
+        Once installed, the agent gains a small repertoire of motions — methods it may call by name. They divide naturally into <em>recall</em>, <em>proposal</em>, <em>lifecycle</em>, and <em>session</em>. The catalogue is partial; the complete list lives in <code>capabilities.py</code>.
+      </p>
+
+      <div class="catalogue">
+
+        <div class="cat-group">
+          <h4>i · recall (unrestricted)</h4>
+          <dl>
+            <dt>kb_search</dt>           <dd>full-text, embedding, and substring across all artefacts.</dd>
+            <dt>kb_context</dt>          <dd>a budgeted, cited bundle suitable for prompt injection.</dd>
+            <dt>kb_read_claim</dt>       <dd>retrieve a claim by id.</dd>
+            <dt>kb_list_pending</dt>     <dd>show what awaits human review.</dd>
+          </dl>
+        </div>
+
+        <div class="cat-group">
+          <h4>ii · proposal (gated)</h4>
+          <dl>
+            <dt>kb_register_source</dt>  <dd>declare evidence; content-addressed by sha-256.</dd>
+            <dt>kb_propose_claim</dt>    <dd>file a citation-bearing assertion for review.</dd>
+            <dt>kb_propose_page</dt>     <dd>file a longer markdown write-up for review.</dd>
+            <dt>kb_propose_entity</dt>   <dd>name a thing once; relate it everywhere.</dd>
+          </dl>
+        </div>
+
+        <div class="cat-group">
+          <h4>iii · lifecycle (audited)</h4>
+          <dl>
+            <dt>kb_supersede</dt>        <dd>declare an old claim replaced by a new one.</dd>
+            <dt>kb_contradict</dt>       <dd>mark two claims as incompatible; humans pick.</dd>
+            <dt>kb_archive</dt>          <dd>retire a claim without deleting its history.</dd>
+            <dt>kb_confirm</dt>          <dd>re-cite a claim today; resets the staleness clock.</dd>
+          </dl>
+        </div>
+
+        <div class="cat-group">
+          <h4>iv · session (bracketing)</h4>
+          <dl>
+            <dt>kb_session_start</dt>    <dd>open a work block; bundles every later proposal.</dd>
+            <dt>kb_session_end</dt>      <dd>seal the block; backfill the proposal list.</dd>
+            <dt>kb_crystallize</dt>      <dd>approve all the session's pending proposals; write a summary page.</dd>
+            <dt>kb_audit</dt>            <dd>read the append-only ledger; every motion is in it.</dd>
+          </dl>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+
+  <!-- ============================================================
+       PLATE VI — PROVENANCE
+       ============================================================ -->
+  <section class="plate" id="plate-vi">
+    <div class="col" style="display:block;">
+      <div class="plate-label"><span>Plate VI</span><span>The three rules of provenance</span></div>
+
+      <p class="lede" style="max-width:48em;">
+        Three small rules carry most of the discipline. They are the reason the memory can be trusted at all.
+      </p>
+
+      <div class="principles">
+        <article class="principle">
+          <div class="pn">I.</div>
+          <h3>No claim without a citation.</h3>
+          <p>Every assertion names a registered source — a file, a PR, a transcript, a page. The model rejects a claim without one. Provenance is built into the schema, not bolted on.</p>
+        </article>
+        <article class="principle">
+          <div class="pn">II.</div>
+          <h3>No self-approval.</h3>
+          <p>The agent that wrote the proposal may not sign it. A different actor — usually you — must pass the proposal across the synapse. The review gate is the whole point.</p>
+        </article>
+        <article class="principle">
+          <div class="pn">III.</div>
+          <h3>The files are the truth.</h3>
+          <p>Claims, pages, and the audit log live in plain markdown and YAML in your repository. They diff, they grep, they review like code. The SQLite index is a derivable cache and can be rebuilt at will.</p>
+        </article>
+      </div>
+
+      <hr class="rule-double">
+
+      <p style="font-family:var(--font-display); font-style:italic; font-size:22px; color:var(--ink-2); text-align:center; max-width:38em; margin:32px auto 0;">
+        “Files are the source of truth. <span style="color:var(--vermillion)">state.db</span> is a derived cache.<br>Losing it is never fatal.”
+      </p>
+      <div class="fleuron">❦</div>
+
+    </div>
+  </section>
+
+
+  <!-- ============================================================
+       COLOPHON
+       ============================================================ -->
+  <footer class="colophon">
+    <div class="col">
+
+      <div>
+        <h4>Begin a course of treatment</h4>
+        <p style="font-size:16px; line-height:1.55;">
+          One command installs the package; <code>vouch init</code> opens the file under your project. The MCP server attaches to <span class="mono">claude-code</span>, <span class="mono">cursor</span>, <span class="mono">windsurf</span>, <span class="mono">zed</span>, and any host that speaks the protocol.
+        </p>
+        <p class="signoff">— Issued under the MIT licence,<br>&nbsp;&nbsp;&nbsp;by the vouchdev maintainers, MMXXVI.</p>
+      </div>
+
+      <div>
+        <h4>Repositories</h4>
+        <ul>
+          <li><a href="https://github.com/vouchdev/vouch">github.com / vouchdev / vouch</a></li>
+          <li><a href="https://pypi.org/project/vouch-kb/">pypi.org / project / vouch-kb</a></li>
+          <li><a href="https://modelcontextprotocol.io/">modelcontextprotocol.io</a></li>
+        </ul>
+      </div>
+
+      <div>
+        <h4>Further reading</h4>
+        <ul>
+          <li><a href="https://github.com/vouchdev/vouch/blob/main/SPEC.md">SPEC.md — the protocol</a></li>
+          <li><a href="https://github.com/vouchdev/vouch/blob/main/ROADMAP.md">ROADMAP.md — what is next</a></li>
+          <li><a href="https://github.com/vouchdev/vouch/blob/main/docs/PROJECT-INDEX.md">PROJECT-INDEX.md — the codebase map</a></li>
+          <li><a href="https://github.com/vouchdev/vouch/tree/main/adapters">adapters/ — wiring for each host</a></li>
+        </ul>
+      </div>
+
+    </div>
+
+    <div class="foot-rule"></div>
+    <div class="foot-meta">
+      <span>Vouch · An anatomical reference to agent memory</span>
+      <span>Vol. I · No. 1 · MMXXVI</span>
+    </div>
+  </footer>
+
+</main>
+
+</body>
+</html>

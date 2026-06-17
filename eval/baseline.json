@@ -1,0 +1,166 @@
+{
+  "k": 5,
+  "n_queries": 10,
+  "macro": {
+    "p_at_k": 0.18,
+    "r_at_k": 0.9,
+    "mrr": 0.9,
+    "ndcg_at_k": 0.9
+  },
+  "per_query": [
+    {
+      "query": "JWT bearer token authentication",
+      "expected": [
+        "auth-jwt"
+      ],
+      "ranked": [
+        "auth-jwt"
+      ],
+      "scores": {
+        "p_at_k": 0.2,
+        "r_at_k": 1.0,
+        "mrr": 1.0,
+        "ndcg_at_k": 1.0
+      }
+    },
+    {
+      "query": "how long until a session expires",
+      "expected": [
+        "auth-session"
+      ],
+      "ranked": [
+        "deploy-docker",
+        "cache-redis"
+      ],
+      "scores": {
+        "p_at_k": 0.0,
+        "r_at_k": 0.0,
+        "mrr": 0.0,
+        "ndcg_at_k": 0.0
+      }
+    },
+    {
+      "query": "PostgreSQL primary datastore",
+      "expected": [
+        "db-postgres"
+      ],
+      "ranked": [
+        "db-postgres"
+      ],
+      "scores": {
+        "p_at_k": 0.2,
+        "r_at_k": 1.0,
+        "mrr": 1.0,
+        "ndcg_at_k": 1.0
+      }
+    },
+    {
+      "query": "Alembic database migrations on deploy",
+      "expected": [
+        "db-migrations"
+      ],
+      "ranked": [
+        "db-migrations",
+        "deploy-ci"
+      ],
+      "scores": {
+        "p_at_k": 0.2,
+        "r_at_k": 1.0,
+        "mrr": 1.0,
+        "ndcg_at_k": 1.0
+      }
+    },
+    {
+      "query": "Redis cache TTL for query results",
+      "expected": [
+        "cache-redis"
+      ],
+      "ranked": [
+        "cache-redis"
+      ],
+      "scores": {
+        "p_at_k": 0.2,
+        "r_at_k": 1.0,
+        "mrr": 1.0,
+        "ndcg_at_k": 1.0
+      }
+    },
+    {
+      "query": "SQLite FTS5 search fallback",
+      "expected": [
+        "search-fts5"
+      ],
+      "ranked": [
+        "search-fts5",
+        "search-embeddings"
+      ],
+      "scores": {
+        "p_at_k": 0.2,
+        "r_at_k": 1.0,
+        "mrr": 1.0,
+        "ndcg_at_k": 1.0
+      }
+    },
+    {
+      "query": "sentence transformer semantic embeddings",
+      "expected": [
+        "search-embeddings"
+      ],
+      "ranked": [
+        "search-embeddings",
+        "search-fts5"
+      ],
+      "scores": {
+        "p_at_k": 0.2,
+        "r_at_k": 1.0,
+        "mrr": 1.0,
+        "ndcg_at_k": 1.0
+      }
+    },
+    {
+      "query": "continuous integration ruff mypy pytest",
+      "expected": [
+        "deploy-ci"
+      ],
+      "ranked": [
+        "deploy-ci"
+      ],
+      "scores": {
+        "p_at_k": 0.2,
+        "r_at_k": 1.0,
+        "mrr": 1.0,
+        "ndcg_at_k": 1.0
+      }
+    },
+    {
+      "query": "Docker multi-stage image deployment",
+      "expected": [
+        "deploy-docker"
+      ],
+      "ranked": [
+        "deploy-docker"
+      ],
+      "scores": {
+        "p_at_k": 0.2,
+        "r_at_k": 1.0,
+        "mrr": 1.0,
+        "ndcg_at_k": 1.0
+      }
+    },
+    {
+      "query": "public API rate limit per minute",
+      "expected": [
+        "api-rate-limit"
+      ],
+      "ranked": [
+        "api-rate-limit"
+      ],
+      "scores": {
+        "p_at_k": 0.2,
+        "r_at_k": 1.0,
+        "mrr": 1.0,
+        "ndcg_at_k": 1.0
+      }
+    }
+  ]
+}

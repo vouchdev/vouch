@@ -7,11 +7,27 @@ agent: my-agent                  # default actor when VOUCH_AGENT is unset
 retrieval:
   backend: fts5                  # fts5 | substring
   fts5_porter: true              # better stemming for English
+  # Optional default viewer context for scope filtering (VEP-0005).
+  # Explicit request params and VOUCH_PROJECT/VOUCH_AGENT override these.
+  # scope:
+  #   project: billing
+  #   agent: claude-code
 
 review:
   require_citations: true        # claims without citations fail validation
   approver_role: human           # human | trusted-agent
   expire_pending_after_days: 90  # GC threshold for stale proposals (0 = never)
+  similarity_threshold: 0.95      # cosine warn on propose (needs embeddings extra)
+
+# Confidence-gated push context (kb.volunteer_context — #236).
+# When a session opens with a task, vouch watches retrieval salience and
+# surfaces high-relevance approved claims via MCP notification + poll.
+# volunteer:
+#   enabled: true
+#   threshold: 0.85              # normalized relevance (0–1)
+#   throttle_seconds: 30         # min gap between pushes per session
+#   poll_interval_seconds: 2     # background watch interval
+#   max_per_session: 50
 
 # Optional per-agent identity overrides. Keyed by VOUCH_AGENT value.
 agents:

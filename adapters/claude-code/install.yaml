@@ -1,0 +1,24 @@
+# Claude Code adapter manifest.
+#
+# T1 = MCP wire (project-local `.mcp.json` picked up by `claude` on launch).
+# T2 = CLAUDE.md fenced snippet (idempotent append, see install_adapter._install_fenced).
+# T3 = four custom slash commands (`/vouch-recall`, `/vouch-status`,
+#      `/vouch-resolve-issue`, `/vouch-propose-from-pr`).
+# T4 = `.claude/settings.json` with a SessionStart hook + read-only kb_* auto-allow.
+host: claude-code
+pretty: Claude Code
+fence:
+  begin: "<!-- BEGIN vouch -->"
+  end: "<!-- END vouch -->"
+tiers:
+  T1:
+    - { src: .mcp.json, dst: .mcp.json }
+  T2:
+    - { src: CLAUDE.md.snippet, dst: CLAUDE.md, fenced_append: true }
+  T3:
+    - { src: .claude/commands/vouch-recall.md, dst: .claude/commands/vouch-recall.md }
+    - { src: .claude/commands/vouch-status.md, dst: .claude/commands/vouch-status.md }
+    - { src: .claude/commands/vouch-resolve-issue.md, dst: .claude/commands/vouch-resolve-issue.md }
+    - { src: .claude/commands/vouch-propose-from-pr.md, dst: .claude/commands/vouch-propose-from-pr.md }
+  T4:
+    - { src: .claude/settings.json, dst: .claude/settings.json }

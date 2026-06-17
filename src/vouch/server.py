@@ -11,28 +11,37 @@ audit event, so multi-agent setups can attribute writes correctly.
 
 from __future__ import annotations
 
+import asyncio
 import os
 from pathlib import Path
 from typing import Any
 
+import yaml
 from mcp.server.fastmcp import FastMCP
 
-from . import audit, bundle, health
+from . import audit, bundle, health, volunteer_context
 from . import lifecycle as life
+from . import salience as salience_mod
 from . import sessions as sess_mod
 from . import verify as verify_mod
 from .capabilities import capabilities as build_caps
 from .context import build_context_pack
+from .logging_config import configure_logging
 from .models import ProposalStatus
 from .proposals import (
+    EXPIRE_ACTOR,
     ProposalError,
     approve,
+    expire_pending,
     propose_claim,
     propose_entity,
     propose_page,
     propose_relation,
     reject,
+    reject_auto_extracted,
 )
+from .scoping import filter_hits, scoped_fetch_limit, viewer_from
+from .stats import collect_stats
 from .storage import (
     ArtifactNotFoundError,
     KBNotFoundError,
@@ -72,6 +81,16 @@ def kb_status() -> dict[str, Any]:
     return health.status(_store())
 
 
+@mcp.tool()
+def kb_stats(*, days: int = 30) -> dict[str, Any]:
+    """Observability: pending by agent, review rates, citation coverage.
+
+    days: decision window in days; 0 means all-time.
+    """
+    since = None if days == 0 else days
+    return collect_stats(_store(), since_days=since)
+
+
 # === read tools (unrestricted) ============================================
 
 
@@ -82,28 +101,39 @@ def kb_search(
     limit: int = 10,
     backend: str = "auto",
     min_score: float = 0.0,
+    project: str | None = None,
+    agent: str | None = None,
 ) -> dict[str, Any]:
     """Search the KB.
 
     backend: "auto" (default, embedding then fts5 then substring),
     "embedding", "fts5", "substring", or "hybrid".
+    project/agent: optional viewer context for scope filtering.
     """
     from . import index_db
     store = _store()
+    viewer = viewer_from(
+        config_path=store.config_path,
+        project=project,
+        agent=agent,
+    )
+    fetch_limit = scoped_fetch_limit(limit, viewer)
     hits: list[tuple[str, str, str, float]] = []
 
     def _to_dicts(h: list[tuple[str, str, str, float]], used: str) -> dict[str, Any]:
+        scoped = filter_hits(store, h, viewer, limit=limit)
         return {
             "backend": used,
+            "viewer": {"project": viewer.project, "agent": viewer.agent},
             "hits": [
                 {"kind": k, "id": i, "snippet": sn, "score": sc, "backend": used}
-                for k, i, sn, sc in h
+                for k, i, sn, sc in scoped
             ],
         }
 
     if backend in ("auto", "embedding"):
         hits = index_db.search_semantic(
-            store.kb_dir, query, limit=limit, min_score=min_score,
+            store.kb_dir, query, limit=fetch_limit, min_score=min_score,
         )
         if hits:
             return _to_dicts(hits, "embedding")
@@ -112,7 +142,7 @@ def kb_search(
 
     if backend in ("auto", "fts5"):
         try:
-            hits = index_db.search(store.kb_dir, query, limit=limit)
+            hits = index_db.search(store.kb_dir, query, limit=fetch_limit)
         except Exception:
             hits = []
         if hits:
@@ -121,7 +151,7 @@ def kb_search(
             return _to_dicts([], "fts5")
 
     if backend in ("auto", "substring"):
-        hits = store.search_substring(query, limit=limit)
+        hits = store.search_substring(query, limit=fetch_limit)
         return _to_dicts(hits, "substring")
 
     if backend == "hybrid":
@@ -132,16 +162,24 @@ def kb_search(
         # low-relevance noise otherwise) and survive FTS failures the same
         # way the dedicated fts5 branch does.
         emb = index_db.search_semantic(
-            store.kb_dir, query, limit=limit * 2, min_score=min_score,
+            store.kb_dir, query, limit=fetch_limit * 2, min_score=min_score,
         )
         try:
-            fts = index_db.search(store.kb_dir, query, limit=limit * 2)
+            fts = index_db.search(store.kb_dir, query, limit=fetch_limit * 2)
         except Exception:
             fts = []
-        hits = rrf_fuse(emb, fts, limit=limit)
+        hits = rrf_fuse(emb, fts, limit=fetch_limit)
         return _to_dicts(hits, "hybrid")
 
     raise ValueError(f"unknown backend: {backend}")
+
+
+def _load_cfg(store: KBStore) -> dict[str, Any]:
+    try:
+        loaded = yaml.safe_load((store.kb_dir / "config.yaml").read_text())
+    except Exception:
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
 
 
 @mcp.tool()
@@ -151,12 +189,26 @@ def kb_context(
     max_chars: int | None = None,
     min_items: int = 0,
     require_citations: bool = False,
+    session_id: str | None = None,
+    project: str | None = None,
+    agent: str | None = None,
 ) -> dict[str, Any]:
-    """Build a ContextPack ready to inject into an agent prompt."""
-    return build_context_pack(  # type: ignore[return-value]
-        _store(), query=task, limit=limit, max_chars=max_chars,
+    """Build a ContextPack ready to inject into an agent prompt.
+
+    When ``session_id`` is given, the entity-salience reflex records the query
+    and may attach ``_meta.vouch_salience`` (see ``salience`` module).
+    """
+    store = _store()
+    cfg = _load_cfg(store)
+    if session_id:
+        _, window, _ = salience_mod.reflex_cfg(cfg)
+        salience_mod.record_query(session_id, task, window=window)
+    result: dict[str, Any] = build_context_pack(  # type: ignore[assignment]
+        store, query=task, limit=limit, max_chars=max_chars,
         min_items=min_items, require_citations=require_citations,
+        project=project, agent=agent,
     )
+    return salience_mod.attach_salience(result, store, session_id, cfg)
 
 
 @mcp.tool()
@@ -316,7 +368,7 @@ def kb_propose_claim(
 ) -> dict[str, Any]:
     """Propose a new claim. Becomes durable only after `kb_approve`."""
     try:
-        pr = propose_claim(
+        result = propose_claim(
             _store(), text=text, evidence=evidence,
             claim_type=claim_type, confidence=confidence,
             entities=entities, tags=tags, rationale=rationale,
@@ -325,7 +377,7 @@ def kb_propose_claim(
         )
     except (ProposalError, ArtifactNotFoundError, ValueError) as e:
         raise ValueError(str(e)) from e
-    return _proposal_response(pr, dry_run)
+    return _proposal_response(result, dry_run)
 
 
 @mcp.tool()
@@ -400,8 +452,9 @@ def kb_propose_relation(
     return _proposal_response(pr, dry_run)
 
 
-def _proposal_response(pr, dry_run: bool) -> dict[str, Any]:
-    return {
+def _proposal_response(result, dry_run: bool) -> dict[str, Any]:
+    pr = result.proposal if hasattr(result, "proposal") else result
+    out: dict[str, Any] = {
         "proposal_id": pr.id,
         "status": pr.status.value,
         "kind": pr.kind.value,
@@ -411,6 +464,10 @@ def _proposal_response(pr, dry_run: bool) -> dict[str, Any]:
             if dry_run else "pending human approval via `vouch approve <id>`"
         ),
     }
+    warnings = getattr(result, "warnings", None)
+    if warnings:
+        out["warnings"] = warnings
+    return out
 
 
 # === review-gate decisions (agents can approve on their own KBs if the
@@ -435,6 +492,43 @@ def kb_reject(proposal_id: str, reason: str) -> dict[str, Any]:
     except (ArtifactNotFoundError, ValueError, ProposalError) as e:
         raise ValueError(str(e)) from e
     return {"proposal_id": proposal_id, "status": "rejected", "reason": reason}
+
+
+@mcp.tool()
+def kb_reject_extracted(
+    page_id: str | None = None, reason: str | None = None,
+) -> dict[str, Any]:
+    """Mass-reject pending edges the auto-extractor filed (issue #224).
+
+    Scope to one page's edges with `page_id`, or omit it to clear every
+    pending auto-extracted edge across the KB.
+    """
+    try:
+        rejected = reject_auto_extracted(
+            _store(), rejected_by=_agent(), page_id=page_id,
+            **({"reason": reason} if reason else {}),
+        )
+    except (ArtifactNotFoundError, ValueError, ProposalError) as e:
+        raise ValueError(str(e)) from e
+    return {"rejected": [p.id for p in rejected]}
+
+
+@mcp.tool()
+def kb_expire(apply: bool = False, days: int | None = None) -> dict[str, Any]:
+    """Expire stale pending proposals (dry-run unless apply=True)."""
+    try:
+        result = expire_pending(
+            _store(), apply=apply, expired_by=EXPIRE_ACTOR, days=days,
+        )
+    except (ArtifactNotFoundError, ValueError, ProposalError) as e:
+        raise ValueError(str(e)) from e
+    return {
+        "threshold_days": result.threshold_days,
+        "enabled": result.threshold_days > 0,
+        "dry_run": not apply,
+        "would_expire": [p.id for p in result.would_expire],
+        "expired": [p.id for p in result.expired],
+    }
 
 
 # === lifecycle ============================================================
@@ -500,9 +594,22 @@ def kb_source_verify() -> list[dict[str, Any]]:
 
 
 @mcp.tool()
-def kb_session_start(task: str | None = None, note: str | None = None) -> dict[str, Any]:
-    sess = sess_mod.session_start(_store(), agent=_agent(), task=task, note=note)
+async def kb_session_start(task: str | None = None, note: str | None = None) -> dict[str, Any]:
+    store = _store()
+    sess = sess_mod.session_start(store, agent=_agent(), task=task, note=note)
+    ctx = mcp.get_context()
+    if ctx.session is not None:
+        volunteer_context.register_mcp_push(
+            sess.id, ctx.session, asyncio.get_running_loop(),
+        )
     return sess.model_dump(mode="json")
+
+
+@mcp.tool()
+def kb_volunteer_context(session_id: str, *, clear: bool = True) -> dict[str, Any]:
+    """Poll confidence-gated context volunteered for an active session."""
+    offers = volunteer_context.drain_pending(session_id, clear=clear)
+    return {"volunteers": [o.to_dict() for o in offers]}
 
 
 @mcp.tool()
@@ -668,6 +775,50 @@ def kb_embeddings_stats() -> dict[str, Any]:
     }
 
 
+# === provenance (why / trace / impact / graph) ===========================
+
+
+@mcp.tool()
+def kb_why(claim_id: str, *, depth: int = 3) -> dict[str, Any]:
+    """Backward provenance for a claim: cites, session, supersedes, approval.
+
+    depth: how many hops of provenance to expand (default 3).
+    """
+    from . import provenance as prov
+    return prov.why(_store(), claim_id=claim_id, depth=depth)
+
+
+@mcp.tool()
+def kb_trace(from_id: str, to_id: str) -> dict[str, Any]:
+    """Shortest typed-edge path between two artifacts (or found=false)."""
+    from . import provenance as prov
+    return prov.trace(_store(), from_id=from_id, to_id=to_id)
+
+
+@mcp.tool()
+def kb_impact(
+    claim_id: str, *, depth: int = 1, op: str | None = None
+) -> dict[str, Any]:
+    """Forward impact: dependents, and breakage if op (archive/contradict/supersede)."""
+    from . import provenance as prov
+    return prov.impact(_store(), claim_id=claim_id, depth=depth, op=op)
+
+
+@mcp.tool()
+def kb_graph_export(*, session: str | None = None, format: str = "dot") -> dict[str, Any]:
+    """Render the provenance DAG (or one session's subgraph) as dot/mermaid."""
+    from . import provenance as prov
+    graph = prov.graph_export(_store(), session=session, fmt=format)
+    return {"format": format, "graph": graph}
+
+
+@mcp.tool()
+def kb_provenance_rebuild() -> dict[str, Any]:
+    """Rebuild the prov_edges cache from durable files; returns edge count."""
+    from . import provenance as prov
+    return {"edges": prov.rebuild_prov_edges(_store())}
+
+
 def _current_model_name() -> str:
     try:
         from .embeddings import get_embedder
@@ -678,4 +829,5 @@ def _current_model_name() -> str:
 
 def run_stdio() -> None:
     """Entry point used by `vouch serve`."""
+    configure_logging()
     mcp.run()

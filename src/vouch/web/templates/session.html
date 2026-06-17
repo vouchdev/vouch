@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}run {{ session.id }} · vouch review{% endblock %}
+
+{% block content %}
+<article class="session-detail">
+  <header class="section-head">
+    <h1><span class="kind kind-session">run</span> {{ session.id }}</h1>
+    <a class="back" href="/">← queue</a>
+  </header>
+
+  <dl class="meta-grid">
+    <dt>agent</dt><dd>{{ session.agent }}</dd>
+    {% if session.task %}<dt>task</dt><dd>{{ session.task }}</dd>{% endif %}
+    <dt>started</dt><dd>{{ session.started_at }}</dd>
+    {% if session.ended_at %}<dt>ended</dt><dd>{{ session.ended_at }}</dd>{% endif %}
+    {% if session.note %}<dt>note</dt><dd>{{ session.note }}</dd>{% endif %}
+    <dt>pending</dt><dd>{{ pending_count }} of {{ rows|length }} still awaiting review</dd>
+  </dl>
+
+  <section class="payload">
+    <h2>proposals from this run</h2>
+    {% if not rows %}
+      <p class="empty">this run produced no proposals.</p>
+    {% else %}
+      <ul class="queue-list">
+        {% for row in rows %}
+          <li class="queue-row status-{{ row.status }}">
+            <div class="queue-meta">
+              <span class="kind kind-{{ row.kind }}">{{ row.kind }}</span>
+              <a class="proposal-link" href="/claim/{{ row.id }}">{{ row.id }}</a>
+              <span class="status-pill status-pill-{{ row.status }}">{{ row.status }}</span>
+              <time datetime="{{ row.proposed_at }}">{{ row.proposed_at }}</time>
+            </div>
+            <p class="preview">{{ row.preview }}</p>
+          </li>
+        {% endfor %}
+      </ul>
+    {% endif %}
+  </section>
+</article>
+{% endblock %}

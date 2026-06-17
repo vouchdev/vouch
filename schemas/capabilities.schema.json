@@ -38,6 +38,11 @@
       "title": "Review Gated",
       "type": "boolean"
     },
+    "scoping": {
+      "additionalProperties": true,
+      "title": "Scoping",
+      "type": "object"
+    },
     "spec": {
       "default": "akbp-0.1-compatible",
       "title": "Spec",

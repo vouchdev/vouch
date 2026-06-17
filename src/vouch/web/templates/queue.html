@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% set active = "queue" %}
+{% block title %}queue · vouch review{% endblock %}
+
+{% block content %}
+<section class="queue">
+  <header class="section-head">
+    <h1>pending</h1>
+    <span class="count">{{ count }} {% if count == 1 %}proposal{% else %}proposals{% endif %}</span>
+    {% if pages > 1 %}
+      <span class="page-indicator">page {{ page }} / {{ pages }}</span>
+    {% endif %}
+  </header>
+
+  {% if not items %}
+    <p class="empty">no pending proposals — every agent write has been reviewed.</p>
+  {% else %}
+    <ul class="queue-list" id="queue-list">
+      {% for item in items %}
+        <li class="queue-row" id="proposal-{{ item.id }}"
+            data-proposal-id="{{ item.id }}" tabindex="0">
+          <div class="queue-meta">
+            <span class="kind kind-{{ item.kind }}">{{ item.kind }}</span>
+            <a class="proposal-link" href="/claim/{{ item.id }}">{{ item.id }}</a>
+            <span class="by">by {{ item.proposed_by }}</span>
+            {% if item.session_id %}
+              <a class="session-link" href="/session/{{ item.session_id }}"
+                 title="all proposals from this agent run">⊟ run</a>
+            {% endif %}
+            <time datetime="{{ item.proposed_at }}">{{ item.proposed_at }}</time>
+          </div>
+          <p class="preview">{{ item.preview }}</p>
+          <div class="actions">
+            <form method="post" action="/approve/{{ item.id }}" class="inline js-act"
+                  data-act="approve">
+              <button type="submit" class="approve">approve</button>
+            </form>
+            <form method="post" action="/reject/{{ item.id }}" class="inline js-act"
+                  data-act="reject">
+              <input type="text" name="reason" placeholder="reason (required)" required>
+              <button type="submit" class="reject">reject</button>
+            </form>
+          </div>
+        </li>
+      {% endfor %}
+    </ul>
+
+    {% if pages > 1 %}
+      <nav class="pager" aria-label="queue pages">
+        {% if page > 1 %}
+          <a class="pager-prev" href="/?page={{ page - 1 }}">← prev</a>
+        {% else %}
+          <span class="pager-prev disabled">← prev</span>
+        {% endif %}
+        <span class="pager-mid">{{ page }} of {{ pages }}</span>
+        {% if page < pages %}
+          <a class="pager-next" href="/?page={{ page + 1 }}">next →</a>
+        {% else %}
+          <span class="pager-next disabled">next →</span>
+        {% endif %}
+      </nav>
+    {% endif %}
+  {% endif %}
+</section>
+{% endblock %}

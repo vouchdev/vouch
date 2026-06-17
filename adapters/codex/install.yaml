@@ -1,0 +1,10 @@
+# OpenAI Codex CLI adapter manifest.
+#
+# Codex reads `<project>/.codex/config.toml` (also `~/.codex/config.toml` for
+# user-global). We ship the project-local form so `vouch install-mcp codex`
+# doesn't touch home-directory state -- see issue #179 scope decision.
+host: codex
+pretty: OpenAI Codex CLI
+tiers:
+  T1:
+    - { src: config.toml, dst: .codex/config.toml }

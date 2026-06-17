@@ -1,0 +1,11 @@
+# Zed adapter manifest.
+#
+# Zed embeds MCP server config under the `context_servers` key in
+# `.zed/settings.json` (workspace) or `~/.config/zed/settings.json` (user).
+# We ship the workspace form; the file is small enough that the user can
+# paste into their global settings if they prefer that scope.
+host: zed
+pretty: Zed
+tiers:
+  T1:
+    - { src: settings.json, dst: .zed/settings.json }

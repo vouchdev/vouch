@@ -1,0 +1,55 @@
+# Cloudflare Tunnel reference deployment for `vouch serve --transport http`.
+#
+# Why this exists: the vouch instance opens NO inbound port -- the
+# `cloudflared` sidecar dials Cloudflare's edge from inside and proxies
+# requests in. That eliminates an entire class of "is my home network
+# safe?" worries and gives you a stable https://<chosen>.cloudflare URL.
+#
+# Run from this directory:
+#   export VOUCH_TOKEN="$(openssl rand -hex 32)"
+#   export CLOUDFLARE_TUNNEL_TOKEN="<paste from Cloudflare Zero Trust dashboard>"
+#   docker compose up -d
+#
+# Then in the Cloudflare Zero Trust dashboard, set the tunnel's hostname to
+# point at `http://vouch:8731` (the in-compose service name).
+
+services:
+  vouch:
+    build:
+      # Build context is the repo root so the Dockerfile can COPY src/.
+      context: ../../..
+      dockerfile: adapters/http-tunnel/Dockerfile
+    container_name: vouch-http
+    environment:
+      # vouch's CLI flag --token reads VOUCH_HTTP_TOKEN by default; the
+      # config.yaml form (preferred for multi-token rotation) reads whatever
+      # name you reference. We use VOUCH_TOKEN here -- match it in your
+      # .vouch/config.yaml `bearer_token: env:VOUCH_TOKEN`.
+      VOUCH_HTTP_TOKEN: "${VOUCH_TOKEN:?set VOUCH_TOKEN before starting compose}"
+    volumes:
+      # Mount the host's .vouch/ knowledge base read-write into the container.
+      - "${VOUCH_KB_HOST_PATH:-./data}:/data"
+    restart: unless-stopped
+    # Internal network only -- nothing exposed to the host.
+    expose:
+      - "8731"
+    healthcheck:
+      # /healthz is unauthenticated by design (see VEP-0004).
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8731/healthz').read()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  cloudflared:
+    image: cloudflare/cloudflared:2024.10.0
+    container_name: vouch-cloudflared
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      # Token from the Cloudflare Zero Trust dashboard for the tunnel you
+      # created. cloudflared dials *out* with this token -- nothing inbound.
+      TUNNEL_TOKEN: "${CLOUDFLARE_TUNNEL_TOKEN:?set CLOUDFLARE_TUNNEL_TOKEN before starting compose}"
+    depends_on:
+      vouch:
+        condition: service_healthy

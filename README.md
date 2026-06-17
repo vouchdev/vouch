@@ -6,6 +6,12 @@
   <img src="docs/banner.svg" alt="vouch — propose → review → commit → retrieve" width="100%"/>
 </p>
 
+<p align="center">
+  <a href="https://github.com/vouchdev/vouch/actions/workflows/ci.yml"><img src="https://github.com/vouchdev/vouch/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
+  <a href="https://pypi.org/project/vouch-kb/"><img src="https://img.shields.io/pypi/v/vouch-kb.svg" alt="PyPI"></a>
+  <a href="https://pypi.org/project/vouch-kb/"><img src="https://img.shields.io/pypi/pyversions/vouch-kb.svg" alt="Python versions"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/vouchdev/vouch.svg" alt="MIT licensed"></a>
+</p>
 
 > Agents should not start every session with amnesia — but they shouldn't get to write whatever they want either.
 
@@ -40,10 +46,7 @@ Skip it if:
 ## Install
 
 ```bash
-# from PyPI (published as vouch-kb; the command is still `vouch`)
-pipx install vouch-kb
-
-# …or from the cloned repo, in a venv
+# from the cloned repo, in a venv
 pip install -e '.[dev]'
 ```
 
@@ -63,6 +66,7 @@ vouch pending                    # list pending proposals
 vouch show <id>                  # full details
 vouch approve <id>               # → durable artifact
 vouch reject <id> --reason "..."
+vouch expire --apply                  # optional: clear stale pending proposals
 
 # 4. commit
 git add .vouch/ && git commit -m "kb: approve auth-uses-jwt"
@@ -141,13 +145,18 @@ vouch init                                  # set up .vouch/ at PATH
 vouch discover [--path P]                   # find the nearest .vouch/ root
 vouch capabilities                          # emit the JSON capabilities descriptor
 vouch status [--json]                       # KB counts + pending proposals
+vouch stats [--days N] [--json]             # observability: queue, review rates, citations
 vouch lint [--stale-days N]                 # user-actionable problems
 vouch doctor                                # full sweep incl. source verification
+vouch fsck                                  # deep consistency: indexes, lifecycle, decided
+vouch migrate [--check] [--dry-run]         # upgrade .vouch/ format safely
 
 vouch pending                               # list pending proposals
+vouch review [--limit N] [--type KIND]      # guided proposal review queue
 vouch show <proposal-id>
 vouch approve <proposal-id> [--reason ...]
 vouch reject <proposal-id> --reason "..."
+vouch expire [--apply] [--days N] [--json]   # GC stale pending proposals
 
 vouch propose-claim --text ... --source ... [--type ...] [--confidence X]
 vouch propose-page --title ... [--body -] [--claim ID ...]
@@ -176,6 +185,8 @@ vouch export --out path.tar.gz
 vouch export-check path.tar.gz
 vouch import-check path.tar.gz
 vouch import-apply path.tar.gz [--on-conflict skip|overwrite|fail]
+vouch sync-check PATH_OR_BUNDLE
+vouch sync-apply PATH_OR_BUNDLE [--on-conflict fail|skip|propose]
 
 vouch serve [--transport stdio|jsonl]
 ```
@@ -213,6 +224,31 @@ In your project's `.mcp.json`:
 ```
 
 `VOUCH_AGENT` is recorded as `proposed_by` and as the actor on every audit event, so multi-agent setups can attribute writes correctly.
+
+## Running vouch as an OpenClaw plugin
+
+Vouch ships an [OpenClaw](https://github.com/dripsmvcp/openclaw) plugin manifest at the
+repo root — [`openclaw.plugin.json`](openclaw.plugin.json). Drop the vouch repo
+into an OpenClaw deployment and the plugin loader picks it up automatically:
+the MCP server, the four slash commands (`/vouch-recall`, `/vouch-status`,
+`/vouch-resolve-issue`, `/vouch-propose-from-pr`), and the CLAUDE.md fenced
+snippet become available as one bundle.
+
+The manifest declares vouch's trust boundary explicitly — remote callers'
+filesystem access is confined, every write tool routes through the review
+gate, every lifecycle op is audit-logged. The `configSchema` exposes only
+`kb_path`, `agent`, and `transport` — no API keys, no secrets; vouch is
+local-first.
+
+```bash
+# Inside an OpenClaw deployment that vendors plugin repos:
+openclaw plugin add vouchdev/vouch
+openclaw plugin enable vouch
+```
+
+The plugin's `mcpServers.vouch` block matches the same `.mcp.json` shape
+Claude Code uses — both platforms drive the same `vouch serve` process,
+so the kb.* surface is identical regardless of host.
 
 ## JSONL request/response shape
 
@@ -254,11 +290,11 @@ vouch import-apply kb.tar.gz --on-conflict skip  # apply (default skip; never de
 | Area | Current support |
 |------|-----------------|
 | Knowledge base | `.vouch/` folder, YAML claims/entities/relations/evidence/sessions, markdown pages with frontmatter, JSONL audit log, content-addressed sources |
-| CLI | `init`, `discover`, `capabilities`, `status`, `lint`, `doctor`, `pending`, `show`, `approve`, `reject`, `propose-{claim,page,entity,relation}`, `source add`, `source verify`, `supersede`, `contradict`, `archive`, `confirm`, `cite`, `session {start,end}`, `crystallize`, `search`, `context`, `index`, `audit`, `export`, `export-check`, `import-check`, `import-apply`, `serve` |
+| CLI | `init`, `discover`, `capabilities`, `status`, `lint`, `doctor`, `fsck`, `pending`, `show`, `approve`, `reject`, `propose-{claim,page,entity,relation}`, `source add`, `source verify`, `supersede`, `contradict`, `archive`, `confirm`, `cite`, `session {start,end}`, `crystallize`, `search`, `context`, `index`, `audit`, `export`, `export-check`, `import-check`, `import-apply`, `serve` |
 | Tool servers | MCP over stdio + JSONL over stdin/stdout, same `kb.*` surface across both transports, capabilities + knowledge-capability descriptor |
 | Schemas | 13 JSON Schemas (Draft 2020-12) generated from pydantic in [schemas/](schemas/), plus hand-maintained `bundle.manifest` and `jsonl-envelope` schemas |
 | Write safety | review-gated writes via [proposed/](spec/review-gate.md), `dry_run:true` previews, host trust required for `approve`/`reject`, atomic exclusive-create storage, path-traversal blocked on source intake and bundle import |
-| Retrieval | SQLite FTS5 + substring fallback; optional semantic backends (`all-mpnet-base-v2`, `MiniLM-L6`, fastembed-BGE) behind install extras; context packs with citations + quality gate |
+| Retrieval | `retrieval.backend` in `config.yaml` selects the path: `auto` (default — embedding → FTS5 → substring), `embedding`, `fts5`, or `substring`. Semantic backends (`all-mpnet-base-v2`, `MiniLM-L6`, fastembed-BGE) ship behind install extras; `auto` degrades to FTS5 when they aren't installed. Context packs with citations + quality gate |
 | Lifecycle | `supersede`, `contradict`, `archive`, `confirm`, `cite` — direct mutations, all audited |
 | Portability | tar.gz bundles with per-file sha256 `manifest.json`, `export-check`, `import-check`, `import-apply` with skip/overwrite/fail conflict modes |
 | Audit | append-only `audit.log.jsonl`, per-event actor (`VOUCH_AGENT`), object ids, dry-run flag, reversible flag |
@@ -268,7 +304,7 @@ vouch import-apply kb.tar.gz --on-conflict skip  # apply (default skip; never de
 
 ## Status
 
-Pre-1.0. What's *not* in this implementation: vector embeddings (BM25/FTS5 only), per-runtime adapter templates, benchmark fixtures, multi-agent sync, scopes beyond a single field on Claim/Source. If a hole matters to you, file an issue.
+Pre-1.0. What's *not* in this implementation: per-runtime adapter templates, benchmark fixtures, multi-agent sync, scopes beyond a single field on Claim/Source. If a hole matters to you, file an issue.
 
 ## License
 
