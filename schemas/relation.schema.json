@@ -13,7 +13,9 @@
         "similar_to",
         "blocks",
         "implements",
-        "references"
+        "references",
+        "mentions",
+        "relates_to"
       ],
       "title": "RelationType",
       "type": "string"
