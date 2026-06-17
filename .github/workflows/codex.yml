@@ -1,0 +1,34 @@
+name: Owner-triggered Codex review
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  codex-review:
+    if: >
+      github.event.issue.pull_request &&
+      contains(github.event.comment.body, '@codex review') &&
+      github.event.comment.user.login == 'YOUR_GITHUB_USERNAME'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: refs/pull/${{ github.event.issue.number }}/merge
+          persist-credentials: false
+
+      - name: Run Codex
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          prompt: |
+            Review this pull request. Focus on serious correctness, security,
+            test coverage, and repository-specific AGENTS.md guidance.
+          sandbox: read-only
+          safety-strategy: drop-sudo
+          allow-users: plind-junior
