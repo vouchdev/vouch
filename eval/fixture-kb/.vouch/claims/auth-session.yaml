@@ -1,0 +1,17 @@
+id: auth-session
+text: Sessions expire after thirty minutes of inactivity
+type: observation
+status: working
+confidence: 0.7
+evidence:
+- 1410e7845543213186bddf486561536087d01cbefcf7f0c35d0fe6e7b008113e
+entities: []
+supersedes: []
+superseded_by: null
+contradicts: []
+scope: project
+tags: []
+created_at: '2026-06-17T01:54:02.969829Z'
+updated_at: '2026-06-17T01:54:02.969829Z'
+last_confirmed_at: null
+approved_by: null

@@ -1,0 +1,12 @@
+# Continue.dev adapter manifest.
+#
+# Continue reads `<project>/.continue/config.yaml` -- our template carries
+# only the `mcpServers:` block, so installs into a project that already has
+# a config.yaml are intentionally skipped (the dest exists -> ``skipped``).
+# Users with a pre-existing Continue config should merge by hand: the
+# mcpServers entry is one block; eyeballing it is trivial.
+host: continue
+pretty: Continue.dev
+tiers:
+  T1:
+    - { src: config.yaml, dst: .continue/config.yaml }

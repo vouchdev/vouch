@@ -60,11 +60,34 @@ class ClaimStatus(StrEnum):
     REDACTED = "redacted"
 
 
-class Scope(StrEnum):
+class Visibility(StrEnum):
+    """How widely an artifact is visible within retrieval surfaces."""
+
     PRIVATE = "private"
     PROJECT = "project"
     TEAM = "team"
     PUBLIC = "public"
+
+
+# Back-compat alias — external code may still import Scope.
+Scope = Visibility
+
+
+def _coerce_artifact_scope(value: object) -> object:
+    """Accept legacy ``scope: project`` strings and structured objects."""
+    if value is None:
+        return ArtifactScope()
+    if isinstance(value, str):
+        return {"visibility": value}
+    return value
+
+
+class ArtifactScope(BaseModel):
+    """Structured scope: visibility tier plus optional project/agent binding."""
+
+    visibility: Visibility = Visibility.PROJECT
+    project: str | None = None
+    agent: str | None = None
 
 
 class EntityType(StrEnum):
@@ -98,6 +121,8 @@ class RelationType(StrEnum):
     BLOCKS = "blocks"
     IMPLEMENTS = "implements"
     REFERENCES = "references"
+    MENTIONS = "mentions"
+    RELATES_TO = "relates_to"
 
 
 class PageType(StrEnum):
@@ -138,7 +163,7 @@ class Source(BaseModel):
         description="sha256; mirrors id for content-addressed sources",
     )
     immutable: bool = True
-    scope: Scope = Scope.PROJECT
+    scope: ArtifactScope = Field(default_factory=ArtifactScope)
     byte_size: int = 0
     media_type: str = "text/plain"
     created_at: datetime = Field(default_factory=utcnow)
@@ -151,6 +176,11 @@ class Source(BaseModel):
         if len(v) != 64 or any(c not in "0123456789abcdef" for c in v):
             raise ValueError("id must be a lowercase hex sha256 (64 chars)")
         return v
+
+    @field_validator("scope", mode="before")
+    @classmethod
+    def _coerce_scope(cls, v: object) -> object:
+        return _coerce_artifact_scope(v)
 
 
 class Evidence(BaseModel):
@@ -185,6 +215,22 @@ class Claim(BaseModel):
         default_factory=list,
         description="Source ids OR Evidence ids — both are valid citations",
     )
+
+    @field_validator("evidence")
+    @classmethod
+    def _at_least_one_citation(cls, v: list[str]) -> list[str]:
+        # The "claims must cite sources" guarantee (README §"Why this exists"
+        # point 3; CONTRIBUTING §"Things we won't merge") used to live only
+        # in proposals.propose_claim, so every other write path —
+        # store.put_claim, store.update_claim, and bundle.import_apply via
+        # _validate_content — accepted evidence=[] and silently landed an
+        # uncited claim. Enforcing on the model closes all paths at once.
+        if not v:
+            raise ValueError(
+                "claim must cite at least one Source or Evidence id "
+                "(README §'Object model'; CONTRIBUTING §'Things we won't merge')"
+            )
+        return v
     entities: list[str] = Field(default_factory=list)
     supersedes: list[str] = Field(default_factory=list)
     superseded_by: str | None = None
@@ -192,12 +238,17 @@ class Claim(BaseModel):
         default_factory=list,
         description="vouch: claim ids this contradicts",
     )
-    scope: Scope = Scope.PROJECT
+    scope: ArtifactScope = Field(default_factory=ArtifactScope)
     tags: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
     last_confirmed_at: datetime | None = None
     approved_by: str | None = None  # vouch: review-gate audit
+
+    @field_validator("scope", mode="before")
+    @classmethod
+    def _coerce_scope(cls, v: object) -> object:
+        return _coerce_artifact_scope(v)
 
 
 class Entity(BaseModel):
@@ -372,5 +423,13 @@ class Capabilities(BaseModel):
             "kind": "local-cited-review-gated-kb",
             "stores_evidence": True,
             "audit_log": True,
+        }
+    )
+    scoping: dict[str, Any] = Field(
+        default_factory=lambda: {
+            "enabled": True,
+            "viewer_params": ["project", "agent"],
+            "env_vars": ["VOUCH_PROJECT", "VOUCH_AGENT"],
+            "config_path": "retrieval.scope",
         }
     )

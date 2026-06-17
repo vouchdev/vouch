@@ -66,7 +66,9 @@ Two agents will eventually disagree. What it looks like:
 
 - **Duplicate proposals.** Two agents independently propose the same
   fact. The reviewer sees two pending proposals with similar text.
-  Approve one, reject the other with reason "duplicate of prop-XYZ".
+  `kb.propose_claim` / `vouch propose-claim` return non-blocking
+  `warnings` (`similar_approved`, `similar_pending`) when embeddings are
+  available — approve one, reject the other with reason "duplicate of prop-XYZ".
 - **Contradicting claims approved.** Two reviewers approved
   conflicting claims at different times. Use `vouch contradict A B` to
   link them; pick a survivor with `vouch supersede`.
@@ -77,11 +79,17 @@ Two agents will eventually disagree. What it looks like:
 ## Tracking who's busy
 
 ```bash
+vouch stats              # pending by agent, review rates, citation coverage
+vouch stats --json       # same, for dashboards / CI
+```
+
+Or, if you only need the queue breakdown:
+
+```bash
 vouch pending --json | jq -r '.[] | "\(.proposed_by)\t\(.id)"' | sort | uniq -c
 ```
 
-Tells you which agent has the most pending work. Useful when one
-agent has been spammy or is asleep at the wheel.
+Useful when one agent has been spammy or is asleep at the wheel.
 
 ## Crystallisation per agent
 
@@ -94,13 +102,26 @@ vouch session start --task "implement password reset" \
                     --note "tag:agent:claude-code-anna"
 ```
 
+## Distributed sync
+
+When two teammates each have their own `.vouch/` directory, use the
+sync workflow to reconcile them deterministically:
+
+```bash
+vouch sync-check ../other-repo
+vouch sync-apply ../other-repo --on-conflict fail
+```
+
+`sync-check` accepts either another repo / `.vouch` directory or a
+bundle. It reports new files, identical files, and conflicts without
+writing anything. `sync-apply` imports non-conflicting files only; it
+never overwrites reviewed knowledge. Use `--on-conflict skip` to leave
+conflicts untouched, or `--on-conflict propose` to write a local conflict
+report under `proposed/sync-reports/` for human review. `config.yaml`
+stays local to each KB and is not synced.
+
 ## What doesn't work yet
 
-- **Distributed `.vouch/` directories that sync.** Today it's one
-  filesystem. If two teammates each have their own `.vouch/` and want
-  them to merge, the path is bundle export + import-check, manually,
-  for now. See [bundles.md](bundles.md) and the multi-agent-sync
-  roadmap item.
 - **Live merge conflicts.** Two agents editing the same proposal at
   once isn't a scenario vouch addresses — agents create proposals,
   they don't edit existing ones.

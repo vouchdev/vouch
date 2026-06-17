@@ -1,0 +1,17 @@
+id: cache-redis
+text: Redis caches hot query results with a sixty second TTL
+type: observation
+status: working
+confidence: 0.7
+evidence:
+- 1410e7845543213186bddf486561536087d01cbefcf7f0c35d0fe6e7b008113e
+entities: []
+supersedes: []
+superseded_by: null
+contradicts: []
+scope: project
+tags: []
+created_at: '2026-06-17T01:54:02.970908Z'
+updated_at: '2026-06-17T01:54:02.970909Z'
+last_confirmed_at: null
+approved_by: null

@@ -74,6 +74,18 @@ CREATE TABLE IF NOT EXISTS embedding_dupes (
     cosine          REAL NOT NULL,
     detected_at     TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS prov_edges (
+    src_id          TEXT NOT NULL,
+    dst_id          TEXT NOT NULL,
+    kind            TEXT NOT NULL,
+    event_ts        TEXT NOT NULL DEFAULT '',
+    session_id      TEXT,
+    PRIMARY KEY (src_id, dst_id, kind)
+);
+
+CREATE INDEX IF NOT EXISTS prov_edges_dst ON prov_edges(dst_id);
+CREATE INDEX IF NOT EXISTS prov_edges_kind ON prov_edges(kind);
 """
 
 
@@ -113,7 +125,9 @@ def reset(kb_dir: Path) -> None:
             "DELETE FROM embedding_index;"
             "DELETE FROM query_embedding_cache;"
             "DELETE FROM embedding_dupes;"
+            "DELETE FROM prov_edges;"
             "DELETE FROM index_meta WHERE key LIKE 'embedding_%';"
+            "DELETE FROM index_meta WHERE key LIKE 'prov_%';"
         )
 
 
@@ -170,6 +184,49 @@ def index_claim(conn: sqlite3.Connection, *, id: str, text: str,
         "INSERT INTO claims_fts (id, text, type, status, tags) VALUES (?, ?, ?, ?, ?)",
         (id, text, type, status, " ".join(tags)),
     )
+
+
+# --- provenance edges (derived cache for `vouch why/trace/impact`) --------
+
+
+def clear_prov_edges(conn: sqlite3.Connection) -> None:
+    conn.execute("DELETE FROM prov_edges")
+
+
+def index_prov_edge(
+    conn: sqlite3.Connection, *, src_id: str, dst_id: str, kind: str,
+    event_ts: str = "", session_id: str | None = None,
+) -> None:
+    conn.execute(
+        "INSERT OR REPLACE INTO prov_edges "
+        "(src_id, dst_id, kind, event_ts, session_id) VALUES (?, ?, ?, ?, ?)",
+        (src_id, dst_id, kind, event_ts, session_id),
+    )
+
+
+def read_prov_edges(kb_dir: Path) -> list[tuple[str, str, str, str, str | None]]:
+    """Return all cached provenance edges, deterministically ordered."""
+    with open_db(kb_dir) as conn:
+        rows = conn.execute(
+            "SELECT src_id, dst_id, kind, event_ts, session_id FROM prov_edges "
+            "ORDER BY src_id, dst_id, kind"
+        ).fetchall()
+    return [(r[0], r[1], r[2], r[3], r[4]) for r in rows]
+
+
+def set_meta(conn: sqlite3.Connection, key: str, value: str) -> None:
+    conn.execute(
+        "INSERT OR REPLACE INTO index_meta (key, value) VALUES (?, ?)",
+        (key, value),
+    )
+
+
+def get_meta(kb_dir: Path, key: str) -> str | None:
+    with open_db(kb_dir) as conn:
+        row = conn.execute(
+            "SELECT value FROM index_meta WHERE key = ?", (key,)
+        ).fetchone()
+    return row[0] if row else None
 
 
 def index_page(conn: sqlite3.Connection, *, id: str, title: str, body: str,

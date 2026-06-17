@@ -16,6 +16,7 @@ from .models import Capabilities
 METHODS = [
     "kb.capabilities",
     "kb.status",
+    "kb.stats",
     "kb.search",
     "kb.context",
     "kb.read_page",
@@ -36,6 +37,8 @@ METHODS = [
     "kb.propose_relation",
     "kb.approve",
     "kb.reject",
+    "kb.reject_extracted",
+    "kb.expire",
     "kb.supersede",
     "kb.contradict",
     "kb.archive",
@@ -57,6 +60,11 @@ METHODS = [
     "kb.dedup_scan",
     "kb.eval_embeddings",
     "kb.embeddings_stats",
+    "kb.why",
+    "kb.trace",
+    "kb.impact",
+    "kb.graph_export",
+    "kb.provenance_rebuild",
 ]
 
 
@@ -74,5 +82,11 @@ def capabilities() -> Capabilities:
         methods=METHODS,
         retrieval=retrieval,
         review_gated=True,
-        transports=["mcp", "jsonl"],
+        transports=["mcp", "jsonl", "http"],
+        scoping={
+            "enabled": True,
+            "viewer_params": ["project", "agent"],
+            "env_vars": ["VOUCH_PROJECT", "VOUCH_AGENT"],
+            "config_path": "retrieval.scope",
+        },
     )

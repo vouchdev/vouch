@@ -1,5 +1,40 @@
 {
   "$defs": {
+    "ArtifactScope": {
+      "description": "Structured scope: visibility tier plus optional project/agent binding.",
+      "properties": {
+        "agent": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Agent"
+        },
+        "project": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Project"
+        },
+        "visibility": {
+          "$ref": "#/$defs/Visibility",
+          "default": "project"
+        }
+      },
+      "title": "ArtifactScope",
+      "type": "object"
+    },
     "ClaimStatus": {
       "enum": [
         "working",
@@ -26,14 +61,15 @@
       "title": "ClaimType",
       "type": "string"
     },
-    "Scope": {
+    "Visibility": {
+      "description": "How widely an artifact is visible within retrieval surfaces.",
       "enum": [
         "private",
         "project",
         "team",
         "public"
       ],
-      "title": "Scope",
+      "title": "Visibility",
       "type": "string"
     }
   },
@@ -106,8 +142,7 @@
       "title": "Last Confirmed At"
     },
     "scope": {
-      "$ref": "#/$defs/Scope",
-      "default": "project"
+      "$ref": "#/$defs/ArtifactScope"
     },
     "status": {
       "$ref": "#/$defs/ClaimStatus",

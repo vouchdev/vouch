@@ -1,0 +1,50 @@
+# vouch
+
+> Git-native, review-gated knowledge base for LLM agents. MCP server + JSONL tool server + CLI. Agents propose writes; humans approve them with `vouch approve`. Approved artifacts land as plain yaml + markdown files under `.vouch/` so the KB lives in your repo, diffs cleanly in PRs, and travels as a tarball bundle.
+
+Repo: https://github.com/vouchdev/vouch · PyPI: `vouch-kb` · CLI: `vouch`
+
+## Core entry points
+
+- [README.md](https://raw.githubusercontent.com/vouchdev/vouch/main/README.md): Pitch, install, quick start, full CLI surface, MCP / JSONL method list, file layout. The user-facing front door.
+- [AGENTS.md](https://raw.githubusercontent.com/vouchdev/vouch/main/AGENTS.md): Entry doc for non-Claude-Code agents (Cursor, Codex, Aider, Continue). Install, trust boundary, common tasks, hard rules.
+- [CLAUDE.md](https://raw.githubusercontent.com/vouchdev/vouch/main/CLAUDE.md): Orientation for Claude Code working on vouch itself. Architecture, build / test / ship flow, conventions, file map, four-site `kb.*` registration rule.
+- [SPEC.md](https://raw.githubusercontent.com/vouchdev/vouch/main/SPEC.md): Canonical protocol description — `.vouch/` layout, object model, `kb.*` method shapes, review-gate state machine, audit log, bundle format. Authoritative when in doubt.
+
+## Concepts and architecture
+
+- [docs/object-model.md](https://raw.githubusercontent.com/vouchdev/vouch/main/docs/object-model.md): The eight pydantic models — Source, Evidence, Claim, Entity, Relation, Page, Session, AuditEvent.
+- [docs/review-gate.md](https://raw.githubusercontent.com/vouchdev/vouch/main/docs/review-gate.md): How `propose → decision → durable artifact` works on disk, with self-approval rules and the `trusted-agent` config flag.
+- [docs/retrieval.md](https://raw.githubusercontent.com/vouchdev/vouch/main/docs/retrieval.md): SQLite FTS5 + substring fallback + optional embedding backends; `kb.context` ranking and quality gating.
+- [docs/embeddings.md](https://raw.githubusercontent.com/vouchdev/vouch/main/docs/embeddings.md): Optional `[embeddings]` and `[embeddings-fast]` extras — sentence-transformers vs fastembed; reindex flow.
+- [docs/bundles.md](https://raw.githubusercontent.com/vouchdev/vouch/main/docs/bundles.md): Export and import format for moving a KB between repos.
+
+## Quick start and onboarding
+
+- [docs/getting-started.md](https://raw.githubusercontent.com/vouchdev/vouch/main/docs/getting-started.md): Agent-side loop — register a source, propose a claim, get it approved.
+- [docs/example-session.md](https://raw.githubusercontent.com/vouchdev/vouch/main/docs/example-session.md): End-to-end captured walkthrough that the demo gif is recorded from.
+- [docs/faq.md](https://raw.githubusercontent.com/vouchdev/vouch/main/docs/faq.md): "Why not Notion / Obsidian / a vector DB" and other recurring asks.
+
+## Transports and adapters
+
+- [docs/transports.md](https://raw.githubusercontent.com/vouchdev/vouch/main/docs/transports.md): MCP stdio vs JSONL pipe, when to pick which, and how the kb.* surface stays identical across both.
+- [docs/multi-agent.md](https://raw.githubusercontent.com/vouchdev/vouch/main/docs/multi-agent.md): Two agents sharing one KB — `VOUCH_AGENT` attribution, audit-log isolation, recommended config.
+- [adapters/](https://github.com/vouchdev/vouch/tree/main/adapters): The eight built-in `vouch install-mcp <host>` manifests — claude-code, claude-desktop, cline, codex, continue, cursor, windsurf, zed. Each is a single file PR by a contributor who knows that host.
+
+## Contributing and release
+
+- [CONTRIBUTING.md](https://raw.githubusercontent.com/vouchdev/vouch/main/CONTRIBUTING.md): Dev setup, the CI gate (pytest + mypy + ruff), commit-message format, branch and PR conventions.
+- [CHANGELOG.md](https://raw.githubusercontent.com/vouchdev/vouch/main/CHANGELOG.md): Keep-a-Changelog format. Update under `[Unreleased]` in the same PR as any user-visible change.
+- [ROADMAP.md](https://raw.githubusercontent.com/vouchdev/vouch/main/ROADMAP.md): What's scoped for 0.2 (HTTP transport, multi-dim scopes) and 0.3 (ranking quality, perf bench).
+- [GOVERNANCE.md](https://raw.githubusercontent.com/vouchdev/vouch/main/GOVERNANCE.md): Decision model, maintainer responsibilities, how to propose a VEP.
+- [CODE_OF_CONDUCT.md](https://raw.githubusercontent.com/vouchdev/vouch/main/CODE_OF_CONDUCT.md): Contributor Covenant 2.1.
+- [SECURITY.md](https://raw.githubusercontent.com/vouchdev/vouch/main/SECURITY.md): Disclosure policy. Do not file public issues for vulnerabilities.
+
+## Install
+
+- [install.sh](https://raw.githubusercontent.com/vouchdev/vouch/main/install.sh): POSIX-sh one-liner — picks a Python 3.11+, installs pipx if missing, runs `pipx install vouch-kb`, points at the Claude Code wiring step if applicable.
+
+## Host integrations
+
+- [openclaw.plugin.json](https://raw.githubusercontent.com/vouchdev/vouch/main/openclaw.plugin.json): OpenClaw plugin manifest. Declares the MCP server, the four bundled slash commands, the trust boundary (review-gated writes, audit-logged lifecycle ops, remote-caller filesystem confinement), and the config schema (`kb_path`, `agent`, `transport` — no secrets).
+- [adapters/](https://github.com/vouchdev/vouch/tree/main/adapters): One directory per supported MCP host (claude-code, claude-desktop, cline, codex, continue, cursor, windsurf, zed). Each is a single-file manifest the `vouch install-mcp <host>` writer reads.

@@ -1,0 +1,10 @@
+# Codeium Windsurf adapter manifest.
+#
+# Windsurf reads `<project>/.codeium/windsurf/mcp_config.json` for
+# workspace-scoped MCP servers (also `~/.codeium/windsurf/mcp_config.json`
+# globally, which we leave alone per #179 scope).
+host: windsurf
+pretty: Codeium Windsurf
+tiers:
+  T1:
+    - { src: mcp_config.json, dst: .codeium/windsurf/mcp_config.json }

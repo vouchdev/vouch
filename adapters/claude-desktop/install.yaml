@@ -1,0 +1,20 @@
+# Claude Desktop adapter manifest.
+#
+# Claude Desktop's MCP config is user-global, NOT project-local:
+#   macOS:    ~/Library/Application Support/Claude/claude_desktop_config.json
+#   Windows:  %APPDATA%\Claude\claude_desktop_config.json
+#   Linux:    ~/.config/Claude/claude_desktop_config.json
+#
+# `vouch install-mcp claude-desktop --path .` therefore drops the template
+# into `<project>/claude-desktop/claude_desktop_config.json` so the user can
+# review the JSON and copy it themselves -- we intentionally don't reach
+# into the user's home directory from a project-scoped command (issue #179
+# explicitly defers uninstall + auto-detection; touching user-global state
+# would conflict with both). The README walks through the copy step.
+host: claude-desktop
+pretty: Claude Desktop
+tiers:
+  T1:
+    - { src: claude_desktop_config.json, dst: claude-desktop/claude_desktop_config.json }
+  T2:
+    - { src: README.snippet.md, dst: claude-desktop/README.md, fenced_append: true }

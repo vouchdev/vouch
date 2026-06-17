@@ -26,7 +26,47 @@ def test_jsonl_search_request(store: KBStore, monkeypatch) -> None:
                            "params": {"query": "findable"}})
     assert resp["ok"]
     assert resp["id"] == "r1"
-    assert any(it["id"] == "c1" for it in resp["result"])
+    assert any(it["id"] == "c1" for it in resp["result"]["hits"])
+
+
+def test_jsonl_context_coerces_string_max_chars(store: KBStore, monkeypatch) -> None:
+    src = store.put_source(b"e")
+    for i in range(20):
+        store.put_claim(Claim(
+            id=f"c{i}",
+            text=f"findable claim {i} with enough padding to exceed the context budget",
+            evidence=[src.id],
+        ))
+    health.rebuild_index(store)
+    monkeypatch.chdir(store.root)
+
+    resp = handle_request({
+        "id": "r-context",
+        "method": "kb.context",
+        "params": {
+            "task": "findable",
+            "max_chars": "100",
+            "fail_on_budget_truncation": True,
+        },
+    })
+
+    assert resp["ok"]
+    assert resp["result"]["quality"]["budget_truncated"] is True
+    assert resp["result"]["quality"]["ok"] is False
+
+
+def test_jsonl_context_rejects_invalid_string_max_chars(store: KBStore, monkeypatch) -> None:
+    monkeypatch.chdir(store.root)
+
+    resp = handle_request({
+        "id": "r-context",
+        "method": "kb.context",
+        "params": {"task": "findable", "max_chars": "many"},
+    })
+
+    assert not resp["ok"]
+    assert resp["error"]["code"] == "invalid_request"
+    assert "invalid literal" in resp["error"]["message"]
 
 
 def test_jsonl_unknown_method_returns_error(store: KBStore, monkeypatch) -> None:
