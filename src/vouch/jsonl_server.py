@@ -44,6 +44,7 @@ from .proposals import (
     propose_page,
     propose_relation,
     reject,
+    reject_auto_extracted,
 )
 from .stats import collect_stats
 from .storage import (
@@ -336,6 +337,14 @@ def _h_reject(p: dict) -> dict:
     return {"proposal_id": p["proposal_id"], "status": "rejected"}
 
 
+def _h_reject_extracted(p: dict) -> dict:
+    kwargs: dict[str, Any] = {"page_id": p.get("page_id")}
+    if p.get("reason"):
+        kwargs["reason"] = p["reason"]
+    rejected = reject_auto_extracted(_store(), rejected_by=_agent(), **kwargs)
+    return {"rejected": [pr.id for pr in rejected]}
+
+
 def _h_expire(p: dict) -> dict:
     result = expire_pending(
         _store(),
@@ -586,6 +595,7 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.propose_relation": _h_propose_relation,
     "kb.approve": _h_approve,
     "kb.reject": _h_reject,
+    "kb.reject_extracted": _h_reject_extracted,
     "kb.expire": _h_expire,
     "kb.supersede": _h_supersede,
     "kb.contradict": _h_contradict,

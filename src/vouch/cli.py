@@ -48,6 +48,7 @@ from .proposals import (
     propose_entity,
     propose_page,
     propose_relation,
+    reject_auto_extracted,
 )
 from .proposals import (
     approve as do_approve,
@@ -841,6 +842,22 @@ def reject(proposal_id: str, reason: str) -> None:
     with _cli_errors():
         do_reject(store, proposal_id, rejected_by=_whoami(), reason=reason)
     click.echo(f"Rejected {proposal_id}")
+
+
+@cli.command("reject-extracted")
+@click.option("--page", "page_id", default=None, help="Limit to edges extracted from one page id.")
+@click.option("--reason", default="auto-extracted edge rejected in bulk")
+def reject_extracted(page_id: str | None, reason: str) -> None:
+    """Mass-reject pending edges the auto-extractor filed (issue #224)."""
+    store = _load_store()
+    with _cli_errors():
+        rejected = reject_auto_extracted(
+            store, rejected_by=_whoami(), page_id=page_id, reason=reason,
+        )
+    if not rejected:
+        click.echo("no pending auto-extracted edges to reject")
+        return
+    click.echo(f"Rejected {len(rejected)} auto-extracted edge proposal(s)")
 
 
 def _expire_row(proposal: Proposal) -> dict[str, Any]:

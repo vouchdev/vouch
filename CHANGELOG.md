@@ -10,6 +10,11 @@ All notable changes to vouch are documented here. Format follows
 - `vouch serve` now fails fast with a clear `vouch init` hint when no `.vouch/` KB is present, instead of starting a server that immediately misbehaves (#95).
 
 ### Added
+- Auto-extracted typed edges: approving a page now files `mentions` (wiki-links),
+  `relates_to` (entity frontmatter), and `derived_from` (source frontmatter)
+  relation proposals automatically, tagged `proposed_by: vouch-extractor`.
+  They land in `proposed/` like any hand-filed relation and need the usual
+  review; `vouch reject-extracted [--page <id>]` mass-rejects them (#224).
 ### Added
 - `vouch sync --vault <dir>` — bidirectional sync between the KB and an
   Obsidian/Logseq-style markdown vault. Forward (vault → KB): edits to

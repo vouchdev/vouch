@@ -35,6 +35,7 @@ from .proposals import (
     propose_page,
     propose_relation,
     reject,
+    reject_auto_extracted,
 )
 from .scoping import filter_hits, scoped_fetch_limit, viewer_from
 from .stats import collect_stats
@@ -453,6 +454,25 @@ def kb_reject(proposal_id: str, reason: str) -> dict[str, Any]:
     except (ArtifactNotFoundError, ValueError, ProposalError) as e:
         raise ValueError(str(e)) from e
     return {"proposal_id": proposal_id, "status": "rejected", "reason": reason}
+
+
+@mcp.tool()
+def kb_reject_extracted(
+    page_id: str | None = None, reason: str | None = None,
+) -> dict[str, Any]:
+    """Mass-reject pending edges the auto-extractor filed (issue #224).
+
+    Scope to one page's edges with `page_id`, or omit it to clear every
+    pending auto-extracted edge across the KB.
+    """
+    try:
+        rejected = reject_auto_extracted(
+            _store(), rejected_by=_agent(), page_id=page_id,
+            **({"reason": reason} if reason else {}),
+        )
+    except (ArtifactNotFoundError, ValueError, ProposalError) as e:
+        raise ValueError(str(e)) from e
+    return {"rejected": [p.id for p in rejected]}
 
 
 @mcp.tool()
