@@ -6,6 +6,14 @@ All notable changes to vouch are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+- Entity-salience retrieval reflex: a per-session, in-memory ring buffer of
+  recent caller queries drives a zero-LLM substring/FTS entity pass that
+  attaches top-K matched claim candidates as `_meta.vouch_salience` on
+  `kb_context` read responses. Config-gated via `retrieval.reflex`
+  (`enabled`/`window`/`top_k`); the buffer is never persisted and resets on
+  `session_end` (#223).
+
 ## [0.1.0] — 2026-05-26
 
 ### Packaging

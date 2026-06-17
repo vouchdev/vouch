@@ -15,10 +15,12 @@ import os
 from pathlib import Path
 from typing import Any
 
+import yaml
 from mcp.server.fastmcp import FastMCP
 
 from . import audit, bundle, health
 from . import lifecycle as life
+from . import salience as salience_mod
 from . import sessions as sess_mod
 from . import verify as verify_mod
 from .capabilities import capabilities as build_caps
@@ -143,6 +145,14 @@ def kb_search(
     raise ValueError(f"unknown backend: {backend}")
 
 
+def _load_cfg(store: KBStore) -> dict[str, Any]:
+    try:
+        loaded = yaml.safe_load((store.kb_dir / "config.yaml").read_text())
+    except Exception:
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
 @mcp.tool()
 def kb_context(
     task: str,
@@ -150,12 +160,23 @@ def kb_context(
     max_chars: int | None = None,
     min_items: int = 0,
     require_citations: bool = False,
+    session_id: str | None = None,
 ) -> dict[str, Any]:
-    """Build a ContextPack ready to inject into an agent prompt."""
-    return build_context_pack(  # type: ignore[return-value]
-        _store(), query=task, limit=limit, max_chars=max_chars,
+    """Build a ContextPack ready to inject into an agent prompt.
+
+    When ``session_id`` is given, the entity-salience reflex records the query
+    and may attach ``_meta.vouch_salience`` (see ``salience`` module).
+    """
+    store = _store()
+    cfg = _load_cfg(store)
+    if session_id:
+        _, window, _ = salience_mod.reflex_cfg(cfg)
+        salience_mod.record_query(session_id, task, window=window)
+    result: dict[str, Any] = build_context_pack(  # type: ignore[assignment]
+        store, query=task, limit=limit, max_chars=max_chars,
         min_items=min_items, require_citations=require_citations,
     )
+    return salience_mod.attach_salience(result, store, session_id, cfg)
 
 
 @mcp.tool()
