@@ -3,6 +3,15 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "Returned by the server in response to `kb.capabilities`.",
   "properties": {
+    "context_engines": {
+      "description": "OpenClaw context engines exposed (see openclaw.plugin.json)",
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Context Engines",
+      "type": "array"
+    },
     "knowledge_capability": {
       "additionalProperties": true,
       "title": "Knowledge Capability",
