@@ -19,6 +19,13 @@ All notable changes to vouch are documented here. Format follows
   their UI. HTTP MCP calls report `remote: true, caller_kind: mcp_http`; CLI
   `--json` reports `remote: false, caller_kind: cli`. Bearer-authenticated
   HTTP calls include a stable token fingerprint as `auth_subject` (#233).
+- `vouch-context` OpenClaw context engine (#228): `src/vouch/openclaw/context_engine.py`
+  wraps `kb.context` retrieval, the entity-salience reflex, and session hot
+  memory into a cited `systemPromptAddition` on every `assemble()`. The plugin
+  manifest declares `contracts.contextEngines: ["vouch-context"]` and registers
+  `adapters/openclaw/vouch-context-engine.mjs`; engine identity is advertised
+  on `kb.capabilities.context_engines`. Compaction stays delegated to the
+  legacy OpenClaw runtime (`ownsCompaction: false`).
 - Entity-salience retrieval reflex: a per-session, in-memory ring buffer of
   recent caller queries drives a zero-LLM substring/FTS entity pass that
   attaches top-K matched claim candidates as `_meta.vouch_salience` on

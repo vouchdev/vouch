@@ -49,6 +49,9 @@
     "compat": {
       "pluginApi": ">=2026.4.0"
     },
+    "extensions": [
+      "./adapters/openclaw/vouch-context-engine.mjs"
+    ],
     "trust_boundary": {
       "remote_callers_filesystem": "confined",
       "write_tools_review_gated": true,
@@ -57,6 +60,7 @@
   },
   "contracts": {
     "reviewGatedKB": ["vouch-kb-0.1.0"],
-    "mcpMethods": ["kb.capabilities", "kb.status", "kb.search", "kb.context"]
+    "mcpMethods": ["kb.capabilities", "kb.status", "kb.search", "kb.context"],
+    "contextEngines": ["vouch-context"]
   }
 }

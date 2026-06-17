@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from . import __version__
 from .models import Capabilities
+from .openclaw.context_engine import describe_engine
 
 # The full method surface this implementation exposes. Keep this list in
 # sync with the MCP server + JSONL server registrations — `test_capabilities`
@@ -92,4 +93,5 @@ def capabilities() -> Capabilities:
             "env_vars": ["VOUCH_PROJECT", "VOUCH_AGENT"],
             "config_path": "retrieval.scope",
         },
+        context_engines=[describe_engine()],
     )

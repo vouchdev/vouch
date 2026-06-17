@@ -434,3 +434,7 @@ class Capabilities(BaseModel):
             "config_path": "retrieval.scope",
         }
     )
+    context_engines: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="OpenClaw context engines exposed (see openclaw.plugin.json)",
+    )

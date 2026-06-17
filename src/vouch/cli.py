@@ -2496,5 +2496,13 @@ def review_ui(
     uvicorn.run(app, host=host, port=port, log_level="info")
 
 
+@cli.command("openclaw-rpc")
+def openclaw_rpc() -> None:
+    """OpenClaw bridge: one JSON envelope on stdin, one on stdout (context engine)."""
+    from .openclaw import rpc as openclaw_rpc_mod
+
+    raise SystemExit(openclaw_rpc_mod.run_stdio())
+
+
 if __name__ == "__main__":
     cli()
