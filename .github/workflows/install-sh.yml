@@ -74,8 +74,13 @@ jobs:
           set -e
           sh ./install.sh --no-claude
           # pipx's bin dir isn't necessarily on PATH for the verification
-          # step — re-export from pipx itself.
-          PIPX_BIN=$(python -m pipx environment --value PIPX_BIN_DIR)
+          # step — re-export from pipx itself. Query via the pipx CLI: the
+          # runner ships pipx as a standalone binary that's on PATH but NOT
+          # importable as `python -m pipx`, so that form fails with
+          # "No module named pipx". Fall back to the conventional
+          # ~/.local/bin (pipx's default PIPX_BIN_DIR) if the query fails.
+          PIPX_BIN=$(pipx environment --value PIPX_BIN_DIR 2>/dev/null || true)
+          [ -n "$PIPX_BIN" ] || PIPX_BIN="$HOME/.local/bin"
           export PATH="$PIPX_BIN:$PATH"
           vouch --version
           vouch capabilities | head -20
