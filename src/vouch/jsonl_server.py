@@ -518,11 +518,17 @@ def _h_import_apply(p: dict) -> dict:
     return r
 
 
-def _h_audit(p: dict) -> list[dict]:
-    return [
-        e.model_dump(mode="json")
-        for e in list(audit.read_events(_store().kb_dir))[-int(p.get("tail", 50)):]
-    ]
+def _h_audit(p: dict) -> dict:
+    from .scoping import viewer_from_params
+
+    s = _store()
+    viewer = viewer_from_params(s, p)
+    tail = int(p.get("tail", 50))
+    events = list(audit.read_events(s.kb_dir, store=s, viewer=viewer))[-tail:]
+    return {
+        "viewer": {"project": viewer.project, "agent": viewer.agent},
+        "events": [e.model_dump(mode="json") for e in events],
+    }
 
 
 def _h_reindex_embeddings(p: dict) -> dict:

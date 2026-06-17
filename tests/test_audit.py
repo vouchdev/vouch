@@ -28,3 +28,18 @@ def test_audit_log_survives_malformed_lines(store: KBStore) -> None:
     (store.kb_dir / "audit.log.jsonl").open("a").write("garbage\n")
     events = list(audit.read_events(store.kb_dir))
     assert len(events) == 1
+
+
+def test_read_events_unfiltered_by_default(store: KBStore) -> None:
+    from vouch.models import ArtifactScope, Claim, Visibility
+
+    src = store.put_source(b"e")
+    store.put_claim(Claim(
+        id="secret",
+        text="x",
+        evidence=[src.id],
+        scope=ArtifactScope(visibility=Visibility.PROJECT, project="billing"),
+    ))
+    audit.log_event(store.kb_dir, event="claim.create", actor="u", object_ids=["secret"])
+    events = list(audit.read_events(store.kb_dir))
+    assert any("secret" in e.object_ids for e in events)

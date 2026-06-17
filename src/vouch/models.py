@@ -429,6 +429,7 @@ class Capabilities(BaseModel):
         default_factory=lambda: {
             "enabled": True,
             "viewer_params": ["project", "agent"],
+            "scoped_methods": ["kb.search", "kb.context_pack", "kb.audit"],
             "env_vars": ["VOUCH_PROJECT", "VOUCH_AGENT"],
             "config_path": "retrieval.scope",
         }

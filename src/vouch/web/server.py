@@ -527,7 +527,10 @@ def build_app(
 
     @app.get("/audit", response_class=HTMLResponse, dependencies=guarded)
     def audit(request: Request, limit: int = 100) -> Any:
-        events = list(audit_mod.read_events(store.kb_dir))
+        from ..scoping import viewer_from
+
+        viewer = viewer_from(config_path=store.config_path)
+        events = list(audit_mod.read_events(store.kb_dir, store=store, viewer=viewer))
         events.reverse()  # newest first
         filtered = [e for e in events if _is_review_event(e.event)][:limit]
         rows = [

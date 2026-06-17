@@ -1644,13 +1644,30 @@ def reindex(embeddings: bool, backfill: bool, force: bool, model: str | None) ->
 @cli.command()
 @click.option("--tail", default=20, show_default=True, type=int)
 @click.option("--json", "as_json", is_flag=True)
-def audit(tail: int, as_json: bool) -> None:
+@click.option("--project", default=None, help="Viewer project for audit scope filtering.")
+@click.option("--agent", default=None, help="Viewer agent for audit scope filtering.")
+def audit(tail: int, as_json: bool, project: str | None, agent: str | None) -> None:
     """Read the audit log."""
+    from .scoping import viewer_from
+
     store = _load_store()
-    events = list(audit_mod.read_events(store.kb_dir))[-tail:]
+    viewer = viewer_from(
+        config_path=store.config_path,
+        project=project,
+        agent=agent,
+    )
+    events = list(audit_mod.read_events(store.kb_dir, store=store, viewer=viewer))[-tail:]
     if as_json:
-        _emit_json([e.model_dump(mode="json") for e in events])
+        _emit_json({
+            "viewer": {"project": viewer.project, "agent": viewer.agent},
+            "events": [e.model_dump(mode="json") for e in events],
+        })
         return
+    if viewer.project or viewer.agent:
+        click.echo(
+            f"viewer: project={viewer.project!r} agent={viewer.agent!r}",
+            err=True,
+        )
     for e in events:
         click.echo(
             f"{e.created_at.isoformat()}  {e.event:30s}  by {e.actor}  objects={e.object_ids}"

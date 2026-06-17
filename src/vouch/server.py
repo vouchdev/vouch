@@ -708,10 +708,24 @@ def kb_import_apply(bundle_path: str, on_conflict: str = "skip") -> dict[str, An
 
 
 @mcp.tool()
-def kb_audit(tail: int = 50) -> list[dict[str, Any]]:
-    """Return the last N audit events."""
-    events = list(audit.read_events(_store().kb_dir))[-tail:]
-    return [e.model_dump(mode="json") for e in events]
+def kb_audit(
+    tail: int = 50,
+    *,
+    project: str | None = None,
+    agent: str | None = None,
+) -> dict[str, Any]:
+    """Return the last N audit events, filtered to the viewer scope."""
+    store = _store()
+    viewer = viewer_from(
+        config_path=store.config_path,
+        project=project,
+        agent=agent,
+    )
+    events = list(audit.read_events(store.kb_dir, store=store, viewer=viewer))[-tail:]
+    return {
+        "viewer": {"project": viewer.project, "agent": viewer.agent},
+        "events": [e.model_dump(mode="json") for e in events],
+    }
 
 
 @mcp.tool()

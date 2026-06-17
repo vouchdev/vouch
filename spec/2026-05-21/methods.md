@@ -227,8 +227,9 @@ flags promotable claims for review.
 
 ### `kb.audit`
 
-**Params:** `{ "tail": int?, "filter": {"event": str?, "actor": str?}? }`.
-**Result:** array of `AuditEvent`.
+**Params:** `{ "tail": int?, "project": str?, "agent": str?, "viewer_scope": {"project": str?, "agent": str?}? }`.
+**Result:** `{ "viewer": {"project": str?, "agent": str?}, "events": [AuditEvent] }`.
+Events whose `object_ids` reference scoped artifacts outside the viewer context are omitted; events with no `object_ids` (e.g. `kb.init`) are always included.
 
 ### `kb.export`
 

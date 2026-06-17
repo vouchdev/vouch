@@ -164,6 +164,34 @@ def test_context_pack_respects_private_scope(store: KBStore) -> None:
     assert "alice-scratch" not in ids_other
 
 
+def test_artifact_scope_for_object_id_resolves_claim_and_proposal(store: KBStore) -> None:
+    from vouch.proposals import propose_claim
+    from vouch.scoping import artifact_scope_for_object_id
+
+    src = store.put_source(b"e")
+    store.put_claim(Claim(
+        id="scoped-claim",
+        text="x",
+        evidence=[src.id],
+        scope=ArtifactScope(visibility=Visibility.PROJECT, project="billing"),
+    ))
+    assert artifact_scope_for_object_id(store, "scoped-claim") == ArtifactScope(
+        visibility=Visibility.PROJECT, project="billing",
+    )
+
+    pr = propose_claim(
+        store, text="pending", evidence=[src.id], proposed_by="a",
+        slug_hint="pending-claim", dry_run=True,
+    )
+    pr.proposal.payload["scope"] = {"visibility": "project", "project": "platform"}
+    store.put_proposal(pr.proposal)
+    assert artifact_scope_for_object_id(store, pr.proposal.id) == ArtifactScope(
+        visibility=Visibility.PROJECT, project="platform",
+    )
+
+    assert artifact_scope_for_object_id(store, "unknown-page-id") is None
+
+
 def test_default_kb_behavior_unchanged(store: KBStore) -> None:
     """Claims with legacy default scope stay visible to the default viewer."""
     src = store.put_source(b"e")

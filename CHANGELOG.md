@@ -42,7 +42,11 @@ All notable changes to vouch are documented here. Format follows
   relation proposals automatically, tagged `proposed_by: vouch-extractor`.
   They land in `proposed/` like any hand-filed relation and need the usual
   review; `vouch reject-extracted [--page <id>]` mass-rejects them (#224).
-### Added
+- Visibility-aware `kb.audit` / `vouch audit`: audit reads accept optional
+  `project` / `agent` viewer context (or nested `viewer_scope` on JSONL).
+  Events whose `object_ids` reference scoped claims, sources, or claim
+  proposals outside the viewer context are filtered out; events with no
+  `object_ids` remain visible to everyone (#232).
 - `vouch sync --vault <dir>` — bidirectional sync between the KB and an
   Obsidian/Logseq-style markdown vault. Forward (vault → KB): edits to
   `<vault>/vouch/pages/<id>.md` become page-edit proposals citing a

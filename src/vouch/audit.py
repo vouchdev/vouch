@@ -12,9 +12,13 @@ import os
 import uuid
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .models import AuditEvent
+
+if TYPE_CHECKING:
+    from .scoping import ViewerContext
+    from .storage import KBStore
 
 AUDIT_FILENAME = "audit.log.jsonl"
 
@@ -59,20 +63,39 @@ def log_event(
     return ev
 
 
-def read_events(kb_dir: Path) -> Iterator[AuditEvent]:
-    """Stream every event in order. Safely skips malformed lines."""
+def read_events(
+    kb_dir: Path,
+    *,
+    store: KBStore | None = None,
+    viewer: ViewerContext | None = None,
+) -> Iterator[AuditEvent]:
+    """Stream events in order. Safely skips malformed lines.
+
+    When *viewer* is set, *store* must also be provided so scoped
+    ``object_ids`` can be resolved. Events referencing artifacts outside
+    the viewer context are omitted. Events with empty ``object_ids`` are
+    always included.
+    """
+    if viewer is not None and store is None:
+        raise ValueError("read_events with viewer requires store for scope resolution")
     path = _audit_path(kb_dir)
     if not path.exists():
         return
+    scoped = viewer is not None and store is not None
+    if scoped:
+        from .scoping import event_visible_to_viewer
     with path.open(encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
                 continue
             try:
-                yield AuditEvent.model_validate(json.loads(line))
+                event = AuditEvent.model_validate(json.loads(line))
             except (json.JSONDecodeError, ValueError):
                 continue
+            if scoped and not event_visible_to_viewer(store, event, viewer):  # type: ignore[arg-type]
+                continue
+            yield event
 
 
 def count_events(kb_dir: Path) -> int:
