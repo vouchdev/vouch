@@ -1,0 +1,39 @@
+name: eval
+
+# Gate retrieval quality: score kb.context against the committed labeled set
+# and fail on a P@5 regression beyond tolerance vs eval/baseline.json. Runs
+# only when retrieval code changes.
+on:
+  pull_request:
+    paths:
+      - "src/vouch/embeddings/**"
+      - "src/vouch/context.py"
+      - "src/vouch/eval/**"
+      - "eval/**"
+
+jobs:
+  recall:
+    name: recall eval
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev]'
+
+      - name: build fixture index
+        working-directory: eval/fixture-kb
+        run: python -m vouch.cli reindex
+
+      - name: recall eval (fail on P@5 regression > 5%)
+        working-directory: eval/fixture-kb
+        run: >-
+          python -m vouch.cli eval recall ../queries.jsonl
+          --k 5 --baseline ../baseline.json --max-regression 0.05

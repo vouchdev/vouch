@@ -48,6 +48,7 @@ from .proposals import (
     propose_entity,
     propose_page,
     propose_relation,
+    reject_auto_extracted,
 )
 from .proposals import (
     approve as do_approve,
@@ -843,6 +844,22 @@ def reject(proposal_id: str, reason: str) -> None:
     click.echo(f"Rejected {proposal_id}")
 
 
+@cli.command("reject-extracted")
+@click.option("--page", "page_id", default=None, help="Limit to edges extracted from one page id.")
+@click.option("--reason", default="auto-extracted edge rejected in bulk")
+def reject_extracted(page_id: str | None, reason: str) -> None:
+    """Mass-reject pending edges the auto-extractor filed (issue #224)."""
+    store = _load_store()
+    with _cli_errors():
+        rejected = reject_auto_extracted(
+            store, rejected_by=_whoami(), page_id=page_id, reason=reason,
+        )
+    if not rejected:
+        click.echo("no pending auto-extracted edges to reject")
+        return
+    click.echo(f"Rejected {len(rejected)} auto-extracted edge proposal(s)")
+
+
 def _expire_row(proposal: Proposal) -> dict[str, Any]:
     return {
         "id": proposal.id,
@@ -1555,6 +1572,28 @@ def eval_embedding(queries: str, metric: str) -> None:
     )
     for m_name, v in out.items():
         click.echo(f"{m_name}\t{v:.4f}")
+
+
+@eval_group.command("recall")
+@click.argument("queries", type=click.Path(exists=True, dir_okay=False))
+@click.option("--k", default=5, show_default=True, type=int)
+@click.option("--baseline", default=None, type=click.Path(exists=True, dir_okay=False),
+              help="Baseline report JSON; fail on a P@k regression beyond tolerance.")
+@click.option("--max-regression", default=0.05, show_default=True, type=float)
+def eval_recall(queries: str, k: int, baseline: str | None,
+                max_regression: float) -> None:
+    """Score kb.context retrieval against a labeled query set (P@k/R@k/MRR/nDCG)."""
+    from .eval.recall import compare_baseline, run_recall
+    store = _load_store()
+    with _cli_errors():
+        report = run_recall(store, queries, k=k)
+    click.echo(json.dumps(report, indent=2))
+    if baseline is not None:
+        base = json.loads(Path(baseline).read_text(encoding="utf-8"))
+        ok, message = compare_baseline(report, base, max_regression=max_regression)
+        click.echo(message, err=True)
+        if not ok:
+            raise click.ClickException(message)
 
 
 @cli.command()

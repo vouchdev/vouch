@@ -121,6 +121,8 @@ class RelationType(StrEnum):
     BLOCKS = "blocks"
     IMPLEMENTS = "implements"
     REFERENCES = "references"
+    MENTIONS = "mentions"
+    RELATES_TO = "relates_to"
 
 
 class PageType(StrEnum):

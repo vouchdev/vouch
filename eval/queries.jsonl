@@ -1,0 +1,10 @@
+{"query": "JWT bearer token authentication", "expected": ["auth-jwt"]}
+{"query": "how long until a session expires", "expected": ["auth-session"]}
+{"query": "PostgreSQL primary datastore", "expected": ["db-postgres"]}
+{"query": "Alembic database migrations on deploy", "expected": ["db-migrations"]}
+{"query": "Redis cache TTL for query results", "expected": ["cache-redis"]}
+{"query": "SQLite FTS5 search fallback", "expected": ["search-fts5"]}
+{"query": "sentence transformer semantic embeddings", "expected": ["search-embeddings"]}
+{"query": "continuous integration ruff mypy pytest", "expected": ["deploy-ci"]}
+{"query": "Docker multi-stage image deployment", "expected": ["deploy-docker"]}
+{"query": "public API rate limit per minute", "expected": ["api-rate-limit"]}

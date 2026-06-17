@@ -37,6 +37,7 @@ METHODS = [
     "kb.propose_relation",
     "kb.approve",
     "kb.reject",
+    "kb.reject_extracted",
     "kb.expire",
     "kb.supersede",
     "kb.contradict",

@@ -389,6 +389,11 @@ def approve(
                 type=page.type.value, tags=page.tags,
             )
         result = page
+        # Lazy import: extractors.edges calls back into propose_relation,
+        # so importing it at module scope would be circular.
+        from .extractors.edges import auto_propose_edges
+
+        auto_propose_edges(store, page, session_id=proposal.session_id)
     elif proposal.kind == ProposalKind.ENTITY:
         entity = Entity(**payload)
         store.put_entity(entity)
@@ -441,6 +446,31 @@ def reject(
         data={"reason": reason},
     )
     return proposal
+
+
+def reject_auto_extracted(
+    store: KBStore,
+    *,
+    rejected_by: str,
+    page_id: str | None = None,
+    reason: str = "auto-extracted edge rejected in bulk",
+) -> list[Proposal]:
+    """Mass-reject pending edges filed by the auto-extractor.
+
+    Scoped to `AUTO_EXTRACTOR_ACTOR` proposals so this never touches a
+    hand-filed relation. `page_id` narrows to edges extracted from one
+    originating page (the relation payload's `source`).
+    """
+    from .extractors.edges import AUTO_EXTRACTOR_ACTOR
+
+    targets = [
+        p
+        for p in store.list_proposals(ProposalStatus.PENDING)
+        if p.kind == ProposalKind.RELATION
+        and p.proposed_by == AUTO_EXTRACTOR_ACTOR
+        and (page_id is None or p.payload.get("source") == page_id)
+    ]
+    return [reject(store, p.id, rejected_by=rejected_by, reason=reason) for p in targets]
 
 
 def expire_pending_after_days(store: KBStore, *, override: int | None = None) -> int:

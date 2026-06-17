@@ -6,6 +6,13 @@ All notable changes to vouch are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+- `vouch eval recall <queries.jsonl>` — score `kb.context` retrieval against a
+  labeled query set with pure-Python P@k / R@k / MRR / nDCG, compare against a
+  committed `eval/baseline.json`, and fail CI on a P@5 regression beyond
+  tolerance (default 5%). Ships a starter labeled set, a reproducible fixture
+  KB under `eval/fixture-kb/`, and an `eval` workflow gating retrieval changes
+  (#226).
 ### Fixed
 - `vouch serve` now fails fast with a clear `vouch init` hint when no `.vouch/` KB is present, instead of starting a server that immediately misbehaves (#95).
 
@@ -17,6 +24,12 @@ All notable changes to vouch are documented here. Format follows
   emits an MCP notification (`kb.volunteer_context`). JSONL and CLI clients
   poll via `kb.volunteer_context` / `vouch session volunteer`. Pushes are
   throttled (default 30s) and respect scope visibility (#236).
+- Auto-extracted typed edges: approving a page now files `mentions` (wiki-links),
+  `relates_to` (entity frontmatter), and `derived_from` (source frontmatter)
+  relation proposals automatically, tagged `proposed_by: vouch-extractor`.
+  They land in `proposed/` like any hand-filed relation and need the usual
+  review; `vouch reject-extracted [--page <id>]` mass-rejects them (#224).
+### Added
 - `vouch sync --vault <dir>` — bidirectional sync between the KB and an
   Obsidian/Logseq-style markdown vault. Forward (vault → KB): edits to
   `<vault>/vouch/pages/<id>.md` become page-edit proposals citing a
