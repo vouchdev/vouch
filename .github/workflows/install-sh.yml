@@ -1,0 +1,86 @@
+name: install-sh
+
+# Validates install.sh on every push that touches it:
+#   * shellcheck (lint)
+#   * POSIX-syntax check via dash
+#   * end-to-end smoke run on a fresh ubuntu-latest — installs the published
+#     vouch-kb wheel via pipx and verifies `vouch --version`
+#
+# The smoke run intentionally exercises the published PyPI artifact, not the
+# in-repo source, so we catch installation breakage that doesn't show up in
+# the regular pytest suite (e.g. a stale [web] extra reference).
+#
+# Supply-chain notes: this workflow pins third-party actions to their full
+# commit SHA (the comment marks the human-readable tag). The rest of the
+# repo's workflows still use tag pins — a sweep of ci.yml / release.yml /
+# schema-check.yml to match this pattern is a worthwhile follow-up but
+# kept out of this PR to avoid churning unrelated CI.
+
+on:
+  push:
+    branches: [main, release/*]
+    paths:
+      - "install.sh"
+      - ".github/workflows/install-sh.yml"
+  pull_request:
+    paths:
+      - "install.sh"
+      - ".github/workflows/install-sh.yml"
+  workflow_dispatch:
+
+# Least-privilege at the workflow level; the smoke job needs nothing
+# beyond reading the checked-out repo. Jobs that need more bump it up
+# explicitly.
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # Don't leave the token sitting in .git/config after checkout —
+          # a leaked credentials file would otherwise allow pushing back.
+          persist-credentials: false
+
+      - name: shellcheck
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y shellcheck dash
+          shellcheck --version
+          shellcheck install.sh
+
+      - name: posix syntax (dash -n)
+        run: dash -n install.sh
+
+  smoke:
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
+        with:
+          python-version: "3.12"
+
+      - name: --help works
+        run: sh ./install.sh --help
+
+      - name: end-to-end install + smoke
+        run: |
+          set -e
+          sh ./install.sh --no-claude
+          # pipx's bin dir isn't necessarily on PATH for the verification
+          # step — re-export from pipx itself. Query via the pipx CLI: the
+          # runner ships pipx as a standalone binary that's on PATH but NOT
+          # importable as `python -m pipx`, so that form fails with
+          # "No module named pipx". Fall back to the conventional
+          # ~/.local/bin (pipx's default PIPX_BIN_DIR) if the query fails.
+          PIPX_BIN=$(pipx environment --value PIPX_BIN_DIR 2>/dev/null || true)
+          [ -n "$PIPX_BIN" ] || PIPX_BIN="$HOME/.local/bin"
+          export PATH="$PIPX_BIN:$PATH"
+          vouch --version
+          vouch capabilities | head -20

@@ -46,9 +46,24 @@ Skip it if:
 ## Install
 
 ```bash
+<<<<<<< feat/install-script
+# one-liner (Linux + macOS) — picks a Python, ensures pipx, installs vouch-kb
+curl -fsSL https://raw.githubusercontent.com/vouchdev/vouch/main/install.sh | sh
+
+# …or directly via pipx (vouch-kb on PyPI; the command stays `vouch`)
+pipx install vouch-kb
+
+# …or from the cloned repo, in a venv
+=======
 # from the cloned repo, in a venv
+>>>>>>> test
 pip install -e '.[dev]'
 ```
+
+The one-liner is POSIX `sh`, never needs `sudo`, and detects an existing
+Claude Code install to point you at the next step (`vouch install-mcp
+claude-code`). Inspect it first if you'd like — it's [`install.sh`](install.sh)
+at the repo root.
 
 ## Quick start
 
