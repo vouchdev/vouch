@@ -12,7 +12,7 @@ import time
 import uuid
 from datetime import UTC, datetime
 
-from . import audit, index_db, volunteer_context
+from . import audit, index_db, salience, volunteer_context
 from .models import Page, PageType, ProposalStatus, Session
 from .proposals import approve
 from .storage import KBStore

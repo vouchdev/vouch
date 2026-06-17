@@ -26,6 +26,8 @@ from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from . import audit, bundle, health, volunteer_context
 from . import lifecycle as life
 from . import salience as salience_mod
@@ -54,6 +56,7 @@ from .storage import (
     KBStore,
     discover_root,
 )
+from .synthesize import synthesize
 
 # Per-request actor override. The HTTP transport sets this from the
 # X-Vouch-Agent header so audit attribution is correct without mutating
@@ -187,6 +190,16 @@ def _h_context(p: dict) -> dict:
         agent=p.get("agent"),
     )
     return salience_mod.attach_salience(result, store, session_id, cfg)
+
+
+def _h_synthesize(p: dict) -> dict:
+    return synthesize(
+        _store(),
+        query=p["query"],
+        depth=int(p.get("depth", 3)),
+        max_chars=int(p.get("max_chars", 4000)),
+        llm=bool(p.get("llm", False)),
+    )
 
 
 def _h_read_page(p: dict) -> dict:
@@ -601,6 +614,7 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.stats": _h_stats,
     "kb.search": _h_search,
     "kb.context": _h_context,
+    "kb.synthesize": _h_synthesize,
     "kb.read_page": _h_read_page,
     "kb.read_claim": _h_read_claim,
     "kb.read_entity": _h_read_entity,

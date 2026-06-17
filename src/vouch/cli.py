@@ -31,6 +31,7 @@ from . import provenance as prov_mod
 from . import sessions as sess_mod
 from . import stats as stats_mod
 from . import sync as sync_mod
+from . import synthesize as synth
 from . import vault_sync as vault_sync_mod
 from . import verify as verify_mod
 from .capabilities import capabilities as build_caps
@@ -1376,6 +1377,20 @@ def context(
         agent=agent,
     )
     _emit_json(pack)
+
+
+@cli.command()
+@click.argument("query")
+@click.option("--depth", default=3, show_default=True, type=int)
+@click.option("--max-chars", default=4000, show_default=True, type=int)
+def synthesize(query: str, depth: int, max_chars: int) -> None:
+    """Answer a query from approved claims only, with inline citations."""
+    store = _load_store()
+    with _cli_errors():
+        result = synth.synthesize(
+            store, query=query, depth=depth, max_chars=max_chars,
+        )
+    _emit_json(result)
 
 
 @cli.command()
