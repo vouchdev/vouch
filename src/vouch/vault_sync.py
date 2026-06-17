@@ -84,6 +84,7 @@ class VaultSyncResult:
     pages_proposed: list[str] = field(default_factory=list)
     pages_skipped_unchanged: list[str] = field(default_factory=list)
     pages_skipped_unknown_id: list[str] = field(default_factory=list)
+    claim_stubs_edited: list[str] = field(default_factory=list)
 
 
 # --- state file -----------------------------------------------------------
@@ -268,18 +269,25 @@ def kb_to_vault(store: KBStore, vault_dir: Path) -> VaultSyncResult:
 # --- forward direction: vault -> KB ---------------------------------------
 
 
-def _has_pending_page_proposal(store: KBStore, page_id: str) -> bool:
+def _has_pending_page_proposal(
+    store: KBStore, page_id: str, *, body: str | None = None
+) -> bool:
     """Return True if a pending proposal already targets ``page_id``.
 
-    Prevents duplicate proposals when vault_to_kb runs multiple times before
-    the reviewer approves the first proposal for a given page edit.
+    When ``body`` is supplied, only returns True if the pending proposal
+    also carries the same body — allowing a second different vault edit
+    to file a new proposal even while the first is still pending.
+    Prevents duplicate proposals when vault_to_kb runs multiple times
+    before the reviewer approves the first proposal for a given page edit.
     """
     from .models import ProposalKind, ProposalStatus
     for proposal in store.list_proposals(ProposalStatus.PENDING):
         if proposal.kind != ProposalKind.PAGE:
             continue
         payload = proposal.payload
-        if isinstance(payload, dict) and payload.get("id") == page_id:
+        if not isinstance(payload, dict) or payload.get("id") != page_id:
+            continue
+        if body is None or payload.get("body") == body:
             return True
     return False
 
@@ -304,20 +312,6 @@ def vault_to_kb(
         current_hash = _sha256_text(text)
         recorded = state.get(rel)
         if recorded is None:
-            # Fix 4 (#219): if the file lives under claims/ rather than
-            # pages/, the user edited a claim stub. Claim stubs are
-            # read-only mirrors — edits there are silently dropped without
-            # this guard, giving the user no feedback. Warn explicitly so
-            # the user knows to edit the underlying page instead.
-            claims_rel = f"claims/{path.name}"
-            if state.get(claims_rel) is not None:
-                log.warning(
-                    "vault sync: edit detected in claim stub %s; claim stubs "
-                    "are read-only mirrors — edit the citing page instead",
-                    claims_rel,
-                )
-                result.pages_skipped_unknown_id.append(claims_rel)
-                continue
             # Never mirrored on this side -- skip silently. We only file
             # proposals for *edits* to KB-managed pages, not arbitrary new
             # files the user dropped into the mirror dir.
@@ -408,6 +402,26 @@ def vault_to_kb(
 
         # Update state so we don't re-propose the same edit on the next tick.
         state[rel] = current_hash
+
+    # Fix 4 (#219): walk claims/ and warn on any user edit. Claim stubs are
+    # read-only mirrors written by kb_to_vault; edits there are silently
+    # dropped without this guard. Warn so the user knows to edit the citing
+    # page instead.
+    claims_mirror = _claims_dir(vault_dir)
+    if claims_mirror.is_dir():
+        for path in sorted(claims_mirror.glob("*.md")):
+            rel = f"claims/{path.name}"
+            recorded = state.get(rel)
+            if recorded is None:
+                continue
+            current_hash = _sha256_text(path.read_text(encoding="utf-8"))
+            if current_hash != recorded:
+                log.warning(
+                    "vault sync: edit detected in claim stub %s; claim stubs "
+                    "are read-only mirrors — edit the citing page instead",
+                    rel,
+                )
+                result.claim_stubs_edited.append(rel)
 
     _save_state(vault_dir, state)
     return result

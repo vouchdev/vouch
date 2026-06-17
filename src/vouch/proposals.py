@@ -369,7 +369,11 @@ def approve(
     # Refuse to overwrite an existing artifact. Without this guard a retry
     # after a crash between put_<kind>() and move_proposal_to_decided() would
     # silently rewrite the artifact with new approved_by / created_at metadata.
-    _ensure_no_existing_artifact(store, proposal.kind, payload["id"])
+    # Exception: PAGE proposals may legitimately target an existing page when
+    # filed by vault_to_kb (vault edit flow) — the approve path handles that
+    # via update_page rather than put_page.
+    if proposal.kind != ProposalKind.PAGE:
+        _ensure_no_existing_artifact(store, proposal.kind, payload["id"])
     result: Claim | Page | Entity | Relation
     if proposal.kind == ProposalKind.CLAIM:
         claim = Claim(approved_by=approved_by, **payload)
@@ -382,7 +386,16 @@ def approve(
         result = claim
     elif proposal.kind == ProposalKind.PAGE:
         page = Page(**payload)
-        store.put_page(page)
+        # Vault-edit proposals use slug_hint=page_id so the payload id matches
+        # an existing page. In that case update rather than create so the
+        # approve path doesn't raise "page already exists" for every normal
+        # vault edit. For new pages (no existing artifact) put_page is used
+        # as before.
+        try:
+            store.get_page(page.id)
+            store.update_page(page)
+        except ArtifactNotFoundError:
+            store.put_page(page)
         with index_db.open_db(store.kb_dir) as conn:
             index_db.index_page(
                 conn, id=page.id, title=page.title, body=page.body,
