@@ -11,13 +11,14 @@ audit event, so multi-agent setups can attribute writes correctly.
 
 from __future__ import annotations
 
+import asyncio
 import os
 from pathlib import Path
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from . import audit, bundle, health
+from . import audit, bundle, health, volunteer_context
 from . import lifecycle as life
 from . import sessions as sess_mod
 from . import verify as verify_mod
@@ -556,9 +557,22 @@ def kb_source_verify() -> list[dict[str, Any]]:
 
 
 @mcp.tool()
-def kb_session_start(task: str | None = None, note: str | None = None) -> dict[str, Any]:
-    sess = sess_mod.session_start(_store(), agent=_agent(), task=task, note=note)
+async def kb_session_start(task: str | None = None, note: str | None = None) -> dict[str, Any]:
+    store = _store()
+    sess = sess_mod.session_start(store, agent=_agent(), task=task, note=note)
+    ctx = mcp.get_context()
+    if ctx.session is not None:
+        volunteer_context.register_mcp_push(
+            sess.id, ctx.session, asyncio.get_running_loop(),
+        )
     return sess.model_dump(mode="json")
+
+
+@mcp.tool()
+def kb_volunteer_context(session_id: str, *, clear: bool = True) -> dict[str, Any]:
+    """Poll confidence-gated context volunteered for an active session."""
+    offers = volunteer_context.drain_pending(session_id, clear=clear)
+    return {"volunteers": [o.to_dict() for o in offers]}
 
 
 @mcp.tool()

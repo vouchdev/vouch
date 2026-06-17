@@ -20,7 +20,7 @@ from typing import Any
 import click
 import yaml
 
-from . import __version__, bundle, health
+from . import __version__, bundle, health, volunteer_context
 from . import audit as audit_mod
 from . import install_adapter as install_mod
 from . import lifecycle as life
@@ -1168,6 +1168,26 @@ def session_start_cmd(agent: str | None, task: str | None, note: str | None) -> 
         note=note,
     )
     click.echo(sess.id)
+
+
+@session.command("volunteer")
+@click.argument("session_id")
+@click.option("--no-clear", is_flag=True, help="Peek without draining the queue.")
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON.")
+def session_volunteer_cmd(session_id: str, no_clear: bool, as_json: bool) -> None:
+    """Poll volunteered context for an active session."""
+    offers = volunteer_context.drain_pending(session_id, clear=not no_clear)
+    payload = {"volunteers": [o.to_dict() for o in offers]}
+    if as_json:
+        _emit_json(payload)
+        return
+    if not offers:
+        click.echo("(no volunteered context)")
+        return
+    for offer in offers:
+        click.echo(
+            f"{offer.claim_id}  relevance={offer.relevance:.2f}  {offer.why}"
+        )
 
 
 @session.command("end")

@@ -12,7 +12,7 @@ import time
 import uuid
 from datetime import UTC, datetime
 
-from . import audit, index_db
+from . import audit, index_db, volunteer_context
 from .models import Page, PageType, ProposalStatus, Session
 from .proposals import approve
 from .storage import KBStore
@@ -33,6 +33,7 @@ def session_start(store: KBStore, *, agent: str, task: str | None = None,
         store.kb_dir, event="session.start", actor=agent,
         object_ids=[sess.id], data={"task": task},
     )
+    volunteer_context.on_session_start(store, sess)
     return sess
 
 
@@ -52,6 +53,7 @@ def session_end(store: KBStore, session_id: str, *, note: str | None = None) -> 
         store.kb_dir, event="session.end", actor=sess.agent,
         object_ids=[sess.id], data={"proposals": len(sess.proposal_ids)},
     )
+    volunteer_context.on_session_end(session_id)
     return sess
 
 

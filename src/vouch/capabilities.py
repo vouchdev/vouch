@@ -47,6 +47,7 @@ METHODS = [
     "kb.source_verify",
     "kb.session_start",
     "kb.session_end",
+    "kb.volunteer_context",
     "kb.crystallize",
     "kb.index_rebuild",
     "kb.lint",
