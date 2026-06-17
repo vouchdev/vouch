@@ -12,7 +12,8 @@ import time
 import uuid
 from datetime import UTC, datetime
 
-from . import audit, index_db, salience, volunteer_context
+from . import audit, index_db, volunteer_context
+from . import salience as salience_mod
 from .models import Page, PageType, ProposalStatus, Session
 from .proposals import approve
 from .storage import KBStore
@@ -39,7 +40,7 @@ def session_start(store: KBStore, *, agent: str, task: str | None = None,
 
 def session_end(store: KBStore, session_id: str, *, note: str | None = None) -> Session:
     sess = store.get_session(session_id)
-    salience.reset_session(session_id)
+    salience_mod.reset_session(session_id)
     if sess.ended_at is not None:
         return sess  # idempotent
     sess.ended_at = datetime.now(UTC)
