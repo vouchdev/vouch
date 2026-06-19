@@ -228,19 +228,7 @@ def approve(
             f"proposal {proposal_id} is {proposal.status.value}, not pending"
         )
     if approved_by == proposal.proposed_by:
-        cfg: dict[str, Any] = {}
-        try:
-            import yaml
-            loaded = yaml.safe_load((store.kb_dir / "config.yaml").read_text())
-            if isinstance(loaded, dict):
-                cfg = loaded
-        except Exception:
-            pass
-        review_cfg = cfg.get("review")
-        approver_role = (
-            review_cfg.get("approver_role") if isinstance(review_cfg, dict) else None
-        )
-        if approver_role != "trusted-agent":
+        if store.config.review.approver_role != "trusted-agent":
             raise ProposalError(
                 f"forbidden_self_approval: {approved_by} cannot approve their own "
                 "proposal (set review.approver_role: trusted-agent in config.yaml to opt out)"
