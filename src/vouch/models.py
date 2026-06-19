@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 def utcnow() -> datetime:
@@ -249,6 +249,36 @@ class Page(BaseModel):
 
 
 # --- audit + sessions -----------------------------------------------------
+
+
+class ReviewConfig(BaseModel):
+    require_human_approval: bool = True
+    approver_role: str | None = None
+
+
+class RetrievalConfig(BaseModel):
+    backends: list[str] = Field(default_factory=lambda: ["fts5", "substring"])
+    default_limit: int = Field(default=10, ge=1)
+
+
+class AgentsConfig(BaseModel):
+    recommended_loop: list[str] = Field(default_factory=lambda: [
+        "kb.search before writing",
+        "kb.propose_* with citations",
+        "human review via vouch pending/show/approve",
+    ])
+
+
+class Config(BaseModel):
+    """Typed representation of `.vouch/config.yaml`."""
+
+    model_config = ConfigDict(extra="allow")
+
+    version: int = 1
+    review: ReviewConfig = Field(default_factory=ReviewConfig)
+    retrieval: RetrievalConfig = Field(default_factory=RetrievalConfig)
+    agents: AgentsConfig = Field(default_factory=AgentsConfig)
+    mcp: dict[str, Any] = Field(default_factory=dict)
 
 
 class AuditEvent(BaseModel):

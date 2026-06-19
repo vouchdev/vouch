@@ -31,10 +31,12 @@ import stat
 from pathlib import Path
 from typing import Any
 
+from pydantic import ValidationError
 import yaml
 
 from .models import (
     Claim,
+    Config,
     Entity,
     Evidence,
     Page,
@@ -61,6 +63,10 @@ class KBNotFoundError(RuntimeError):
 
 
 class ArtifactNotFoundError(KeyError):
+    pass
+
+
+class ConfigError(ValueError):
     pass
 
 
@@ -133,6 +139,7 @@ class KBStore:
     def __init__(self, root: Path):
         self.root = root.resolve()
         self.kb_dir = self.root / KB_DIRNAME
+        self._config_cache: tuple[float | None, Config] | None = None
 
     def read_under_root(self, path: str | Path) -> tuple[Path, bytes]:
         # Guard against arbitrary-file-read primitives exposed by the MCP /
@@ -186,6 +193,30 @@ class KBStore:
     @property
     def config_path(self) -> Path:
         return self.kb_dir / CONFIG_FILENAME
+
+    @property
+    def config(self) -> Config:
+        mtime = self.config_path.stat().st_mtime if self.config_path.exists() else None
+        if self._config_cache is not None and self._config_cache[0] == mtime:
+            return self._config_cache[1]
+        if not self.config_path.exists():
+            cfg = Config()
+            self._config_cache = (mtime, cfg)
+            return cfg
+        try:
+            loaded = _yaml_load(self.config_path.read_text())
+        except yaml.YAMLError as exc:
+            raise ConfigError(f"invalid config.yaml: {exc}") from exc
+        if loaded is None:
+            loaded = {}
+        if not isinstance(loaded, dict):
+            raise ConfigError("invalid config.yaml: expected a mapping at document root")
+        try:
+            cfg = Config.model_validate(loaded)
+        except ValidationError as exc:
+            raise ConfigError(f"invalid config.yaml: {exc}") from exc
+        self._config_cache = (mtime, cfg)
+        return cfg
 
     def _yaml(self, sub: str, obj_id: str) -> Path:
         return self.kb_dir / sub / f"{obj_id}.yaml"

@@ -14,7 +14,7 @@ from pathlib import Path
 from . import index_db
 from .audit import count_events
 from .models import ClaimStatus, ProposalStatus
-from .storage import KBStore, sha256_hex
+from .storage import ConfigError, KBStore, sha256_hex
 from .verify import verify_all
 
 
@@ -133,6 +133,19 @@ def doctor(store: KBStore) -> HealthReport:
         report.findings.append(Finding(
             "error", "missing_config", "config.yaml is missing",
         ))
+    else:
+        try:
+            cfg = store.config
+        except ConfigError as exc:
+            report.findings.append(Finding(
+                "error", "invalid_config", str(exc),
+            ))
+        else:
+            for key in sorted(cfg.model_extra or {}):
+                report.findings.append(Finding(
+                    "warning", "unknown_config_key",
+                    f"config.yaml has unknown top-level key {key!r}",
+                ))
 
     # Index presence (warning only — the index is derivable).
     if not (store.kb_dir / index_db.DB_FILENAME).exists():
