@@ -46,7 +46,6 @@ Skip it if:
 ## Install
 
 ```bash
-<<<<<<< feat/install-script
 # one-liner (Linux + macOS) — picks a Python, ensures pipx, installs vouch-kb
 curl -fsSL https://raw.githubusercontent.com/vouchdev/vouch/main/install.sh | sh
 
@@ -54,9 +53,6 @@ curl -fsSL https://raw.githubusercontent.com/vouchdev/vouch/main/install.sh | sh
 pipx install vouch-kb
 
 # …or from the cloned repo, in a venv
-=======
-# from the cloned repo, in a venv
->>>>>>> test
 pip install -e '.[dev]'
 ```
 
