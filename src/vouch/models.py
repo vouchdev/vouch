@@ -262,6 +262,8 @@ class AuditEvent(BaseModel):
     dry_run: bool = False
     reversible: bool = True
     data: dict[str, Any] = Field(default_factory=dict)
+    prev_hash: str | None = None
+    hash: str | None = None
 
 
 class Session(BaseModel):
