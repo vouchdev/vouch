@@ -115,7 +115,12 @@ def parse_since(spec: str | None, *, now: datetime | None = None) -> datetime | 
     if m:
         qty = int(m.group(1))
         unit = m.group(2).lower()
-        return now - qty * _DURATION_UNITS[unit]
+        try:
+            return now - qty * _DURATION_UNITS[unit]
+        except OverflowError as e:
+            raise MetricsError(
+                f"can't parse --since {spec!r}: duration is too large to represent"
+            ) from e
 
     # Fall back to ISO-8601. ``date`` (no time) is allowed; pad it to midnight.
     iso = text

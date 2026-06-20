@@ -81,6 +81,14 @@ def test_parse_since_rejects_garbage(bad) -> None:
         parse_since(bad, now=NOW)
 
 
+@pytest.mark.parametrize("huge", ["1000000000000d", "99999999999999999999w", "9999999999999999h"])
+def test_parse_since_rejects_overflowing_duration(huge) -> None:
+    # a duration too large for timedelta must surface as a clean MetricsError,
+    # not an uncaught OverflowError traceback.
+    with pytest.raises(MetricsError):
+        parse_since(huge, now=NOW)
+
+
 # --- percentile -----------------------------------------------------------
 
 

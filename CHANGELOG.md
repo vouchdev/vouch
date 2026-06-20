@@ -32,6 +32,7 @@ All notable changes to vouch are documented here. Format follows
   KB under `eval/fixture-kb/`, and an `eval` workflow gating retrieval changes
   (#226).
 ### Fixed
+- `parse_since` (the `--since` parser behind `vouch metrics`/`vouch audit`) now raises a clean `MetricsError` for a duration too large to represent (e.g. `--since 1000000000000d`), instead of letting an uncaught `OverflowError` traceback escape — restoring the documented "clean error, not a traceback" contract.
 - `sync_apply` now loads the sync source exactly once and passes the same `_SyncSource` instance into `sync_check`, closing a TOCTOU window where a bundle replaced on disk between the two `_load_source` calls could cause the validation and write phases to operate on different snapshots. Also eliminates redundant directory walks (KB sources) and triple tarball opens (bundle sources). Fixes #217.
 
 ### Fixed
