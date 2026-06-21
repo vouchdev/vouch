@@ -88,6 +88,8 @@ All notable changes to vouch are documented here. Format follows
 - `vault_to_kb` skips filing a second proposal when a pending proposal already targets the same page id (with differing body), preventing duplicate proposals on repeated sync runs before approval (fixes #219).
 - `vault_to_kb` now warns when a user edits a claim stub instead of silently dropping the edit, directing the user to edit the citing page instead, and reports it via the dedicated `claim_stubs_edited` field on `VaultSyncResult` (fixes #219).
 - `approve()` now supports updating an existing page via `KBStore.update_page` when a PAGE proposal's id matches an existing artifact (the vault-edit flow), instead of raising `cannot approve: page already exists` for every vault edit (fixes #219).
+- `crystallize()` now updates an existing session summary page on retry instead of
+  failing with `page session-... already exists` after a partial approval run (#139).
 
 ### Fixed
 - `vouch serve` now fails fast with a clear `vouch init` hint when no `.vouch/` KB is present, instead of starting a server that immediately misbehaves (#95).
