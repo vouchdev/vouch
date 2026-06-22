@@ -422,6 +422,28 @@ def _check_graph_integrity(
                             f"dangling reference: {path}: claim citation "
                             f"{ref!r} not in bundle or destination"
                         )
+                # The Claim's own graph refs mirror the page checks above:
+                # entities -> entity ids, supersedes/contradicts/superseded_by
+                # -> claim ids. Without this, import_apply writes the claim
+                # YAML straight to disk (no put_claim guard) carrying links to
+                # artifacts that exist in neither the bundle nor the
+                # destination — the dangling_* errors fsck reports after the
+                # fact (see storage._validate_claim_refs).
+                for eid in claim.entities:
+                    if eid not in ids["entity"]:
+                        issues.append(
+                            f"dangling reference: {path}: claim entity "
+                            f"{eid!r} not in bundle or destination"
+                        )
+                claim_refs = [*claim.supersedes, *claim.contradicts]
+                if claim.superseded_by is not None:
+                    claim_refs.append(claim.superseded_by)
+                for cid in claim_refs:
+                    if cid not in ids["claim"]:
+                        issues.append(
+                            f"dangling reference: {path}: claim graph ref "
+                            f"{cid!r} not in bundle or destination"
+                        )
         except Exception:
             # Schema validation already ran on `body` in `_validate_content`
             # and recorded any structural issue. Swallow here so a single

@@ -129,6 +129,27 @@ All notable changes to vouch are documented here. Format follows
 - Performance benchmark suite in `benchmarks/` covering search latency, proposal write throughput, bundle export/import/verify round-trips, and index rebuild time at 1k/10k claim sizes. Run with `pytest benchmarks/ --benchmark-only`.
 
 ### Fixed
+- `put_claim` / `update_claim` now reject a Claim whose `entities`,
+  `supersedes`, `superseded_by`, or `contradicts` reference an artifact that
+  is not in the KB, via a new `KBStore._validate_claim_refs`. `bundle.import_check`
+  gains the matching check so a bundle can no longer land a claim with dangling
+  graph refs through `import_apply`'s direct write. Previously only `claim.evidence`
+  was checked: the graph-integrity fix for Relations/Pages (#124) skipped the
+  Claim model's own four reference fields, even though `fsck` already declared
+  `dangling_supersedes` / `dangling_superseded_by` / `dangling_contradicts` as
+  error-severity findings — the invariant was articulated but enforced by no
+  writer. Same model-layer/storage pattern as #81 / #123. Closes #196.
+- `lifecycle.supersede` / `lifecycle.contradict` pre-validate both touched
+  claims before the first disk write so a legacy dangling ref on either
+  side can't half-apply the operation (one update written without the
+  reciprocal, no relation, no audit event).
+- `proposals.check_approvable` dry-runs the put_*-side ref guards so the
+  default `vouch approve a b` batch flow (#93) catches a dangling
+  `claim.entities` (or relation endpoint / page reference) before any
+  disk write, preserving the all-or-nothing contract.
+- `vouch fsck` reports `claim.entities` pointing at a missing entity as a
+  `dangling_claim_entity` error finding, alongside the existing
+  `dangling_supersedes` / `_superseded_by` / `_contradicts` checks.
 - `discover_root()` now honours `VOUCH_KB_PATH=/abs/path/.vouch` and returns the parent root, instead of always walking up from cwd. The env var was already documented in `adapters/generic-mcp/README.md` but wasn't wired into the code — closing the doc-vs-code drift removes the `"cwd": "..."` ceremony hosts like Claude Desktop need today to point at a specific KB.
 
 ## [0.1.0] — 2026-05-26

@@ -354,6 +354,36 @@ class KBStore:
 
     # --- claims ------------------------------------------------------------
 
+    def _validate_claim_refs(self, claim: Claim) -> None:
+        """Reject dangling graph references on a Claim before it lands.
+
+        The #124 graph-integrity fix closed `Relation.source/target/evidence`
+        and `Page.entities/sources` (see the note above `_node_exists`) but
+        left the Claim's own four reference fields — `entities`,
+        `supersedes`, `superseded_by`, `contradicts` — unchecked on every
+        write path. `fsck._check_lifecycle_chains` already declares three of
+        them as `error`-severity findings (`dangling_supersedes`,
+        `dangling_superseded_by`, `dangling_contradicts`), so the invariant
+        was articulated but enforced by no writer. Enforce it here, the same
+        way `_validate_relation_refs` guards relation endpoints.
+
+        `evidence` is validated separately by `put_claim` (it accepts either
+        a Source id or an Evidence id, a different resolution surface).
+        """
+        for eid in claim.entities:
+            if not self._entity_path(eid).exists():
+                raise ValueError(
+                    f"claim {claim.id} references unknown entity {eid!r}"
+                )
+        claim_refs = [*claim.supersedes, *claim.contradicts]
+        if claim.superseded_by is not None:
+            claim_refs.append(claim.superseded_by)
+        for cid in claim_refs:
+            if not self._claim_path(cid).exists():
+                raise ValueError(
+                    f"claim {claim.id} references unknown claim {cid!r}"
+                )
+
     def put_claim(self, claim: Claim) -> Claim:
         # Evidence entries can be Source IDs or Evidence IDs -- accept either.
         for cid_or_sid in claim.evidence:
@@ -364,6 +394,7 @@ class KBStore:
             raise ValueError(
                 f"claim {claim.id} cites unknown source/evidence {cid_or_sid}"
             )
+        self._validate_claim_refs(claim)
         try:
             with self._claim_path(claim.id).open("x") as f:
                 f.write(_yaml_dump(claim.model_dump(mode="json")))
@@ -398,6 +429,11 @@ class KBStore:
         # The Claim model's field validators only run at construction
         # time; mutation alone bypasses them unless we round-trip.
         Claim.model_validate(claim.model_dump(mode="json"))
+        # Re-check graph references too: an in-place mutation can introduce a
+        # dangling entities/supersedes/superseded_by/contradicts link that the
+        # model validator can't catch (it has no KB access). Mirrors the
+        # put_claim guard so the update path can't reintroduce the gap.
+        self._validate_claim_refs(claim)
         self._claim_path(claim.id).write_text(_yaml_dump(claim.model_dump(mode="json")))
         self._embed_and_store(kind="claim", id=claim.id, text=claim.text)
         # Keep the FTS5 row in sync with the on-disk claim so lifecycle

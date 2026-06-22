@@ -602,6 +602,28 @@ def _page_md(pid: str, entities: list[str], sources: list[str]) -> bytes:
     return f"---\n{_yaml.safe_dump(meta, sort_keys=False)}---\nbody".encode()
 
 
+def _claim_yaml(
+    cid: str,
+    evidence: list[str],
+    *,
+    entities: list[str] | None = None,
+    supersedes: list[str] | None = None,
+    contradicts: list[str] | None = None,
+    superseded_by: str | None = None,
+) -> bytes:
+    import yaml as _yaml
+    return _yaml.safe_dump({
+        "id": cid, "text": "t", "type": "observation", "status": "working",
+        "confidence": 0.7, "evidence": evidence,
+        "entities": entities or [], "supersedes": supersedes or [],
+        "superseded_by": superseded_by, "contradicts": contradicts or [],
+        "scope": "project", "tags": [],
+        "created_at": "2026-05-27T00:00:00+00:00",
+        "updated_at": "2026-05-27T00:00:00+00:00",
+        "last_confirmed_at": None, "approved_by": None,
+    }, sort_keys=False).encode()
+
+
 def test_import_check_rejects_relation_with_dangling_endpoints(
     store: KBStore, tmp_path: Path
 ) -> None:
@@ -657,6 +679,62 @@ def test_import_check_rejects_page_with_dangling_refs(
     with pytest.raises(RuntimeError, match="dangling reference"):
         bundle.import_apply(store.kb_dir, bundle_path)
     assert not (store.kb_dir / "pages" / "evil-page.md").exists()
+
+
+def test_import_check_rejects_claim_with_dangling_graph_refs(
+    store: KBStore, tmp_path: Path
+) -> None:
+    """A bundle claim whose `entities` / `contradicts` (and siblings) point
+    at artifacts absent from both bundle and destination is rejected — the
+    Claim counterpart of the relation / page graph-integrity checks. Without
+    it, import_apply writes the claim YAML straight to disk carrying links
+    that fsck only flags after the fact (#196)."""
+    src = store.put_source(b"e")  # destination source the claim can cite
+    bundle_path = tmp_path / "evil-claim.tar.gz"
+    _write_multi_member_bundle(bundle_path, {
+        "claims/c-ent.yaml": _claim_yaml(
+            "c-ent", [src.id], entities=["ghost-entity"],
+        ),
+        "claims/c-graph.yaml": _claim_yaml(
+            "c-graph", [src.id], contradicts=["ghost-claim"],
+        ),
+    })
+
+    diff = bundle.import_check(store.kb_dir, bundle_path)
+    assert not diff.ok
+    assert any("dangling reference" in i and "claim entity" in i
+               for i in diff.issues), diff.issues
+    assert any("dangling reference" in i and "claim graph ref" in i
+               for i in diff.issues), diff.issues
+
+    with pytest.raises(RuntimeError, match="dangling reference"):
+        bundle.import_apply(store.kb_dir, bundle_path)
+    assert not (store.kb_dir / "claims" / "c-ent.yaml").exists()
+
+
+def test_import_check_accepts_claim_with_resolvable_graph_refs(
+    store: KBStore, tmp_path: Path
+) -> None:
+    """The honest round-trip guard: a claim whose graph refs all resolve
+    (here, to an entity shipped in the same bundle) imports cleanly."""
+    src = store.put_source(b"e")
+    import yaml as _yaml
+    ent_yaml = _yaml.safe_dump({
+        "id": "ent-x", "name": "X", "type": "project",
+        "aliases": [], "description": None, "page": None,
+        "created_at": "2026-05-27T00:00:00+00:00",
+        "updated_at": "2026-05-27T00:00:00+00:00",
+    }, sort_keys=False).encode()
+    bundle_path = tmp_path / "good-claim.tar.gz"
+    _write_multi_member_bundle(bundle_path, {
+        "entities/ent-x.yaml": ent_yaml,
+        "claims/c-ok.yaml": _claim_yaml("c-ok", [src.id], entities=["ent-x"]),
+    })
+
+    diff = bundle.import_check(store.kb_dir, bundle_path)
+    assert diff.ok, diff.issues
+    bundle.import_apply(store.kb_dir, bundle_path)
+    assert (store.kb_dir / "claims" / "c-ok.yaml").exists()
 
 
 def test_import_check_accepts_self_contained_bundle(

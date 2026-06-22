@@ -13,6 +13,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import yaml
+from pydantic import ValidationError
 
 from . import audit, index_db
 from .models import (
@@ -333,20 +334,77 @@ def _approval_block_reason(
     return None
 
 
+def _payload_block_reason(store: KBStore, proposal: Proposal) -> str | None:
+    """Dry-run the put_*-side ref guards, return reason string or None.
+
+    Lets the batch precheck catch dangling refs the write side rejects
+    so `vouch approve a b` stays all-or-nothing.
+    """
+    payload = dict(proposal.payload)
+    if proposal.kind == ProposalKind.CLAIM:
+        try:
+            claim = Claim(**payload)
+        except (ValidationError, TypeError) as e:
+            return f"invalid claim payload: {e}"
+        for ref in claim.evidence:
+            if (
+                (store._source_dir(ref) / "meta.yaml").exists()
+                or store._evidence_path(ref).exists()
+            ):
+                continue
+            return f"claim {claim.id} cites unknown source/evidence {ref!r}"
+        try:
+            store._validate_claim_refs(claim)
+        except ValueError as e:
+            return str(e)
+    elif proposal.kind == ProposalKind.RELATION:
+        try:
+            rel = Relation(**payload)
+        except (ValidationError, TypeError) as e:
+            return f"invalid relation payload: {e}"
+        try:
+            store._validate_relation_refs(rel)
+        except ValueError as e:
+            return str(e)
+    elif proposal.kind == ProposalKind.PAGE:
+        try:
+            page = Page(**payload)
+        except (ValidationError, TypeError) as e:
+            return f"invalid page payload: {e}"
+        for cid in page.claims:
+            if not store._claim_path(cid).exists():
+                return f"page {page.id} references unknown claim {cid}"
+        for eid in page.entities:
+            if not store._entity_path(eid).exists():
+                return f"page {page.id} references unknown entity {eid}"
+        for sid in page.sources:
+            if not (store._source_dir(sid) / "meta.yaml").exists():
+                return f"page {page.id} references unknown source {sid}"
+    elif proposal.kind == ProposalKind.ENTITY:
+        try:
+            Entity(**payload)
+        except (ValidationError, TypeError) as e:
+            return f"invalid entity payload: {e}"
+    return None
+
+
 def check_approvable(
     store: KBStore, proposal_id: str, *, approved_by: str
 ) -> str | None:
     """Return why `proposal_id` can't be approved by `approved_by`, or None.
 
     Read-only. `None` means the deterministic gates pass; the actual write in
-    `approve()` can still fail on a pre-existing artifact or an I/O error.
-    Used by the batch CLI to validate a whole set before mutating anything.
+    `approve()` can still fail on an I/O error. Used by the batch CLI to
+    validate a whole set before mutating anything.
     """
     try:
         proposal = store.get_proposal(proposal_id)
     except ArtifactNotFoundError:
         return f"proposal {proposal_id} not found"
-    return _approval_block_reason(store, proposal, approved_by)
+    block = _approval_block_reason(store, proposal, approved_by)
+    if block:
+        return block
+    return _payload_block_reason(store, proposal)
 
 
 def approve(

@@ -16,6 +16,8 @@ from vouch.models import (
     Evidence,
     Page,
     PageType,
+    Proposal,
+    ProposalKind,
     ProposalStatus,
     Relation,
     RelationType,
@@ -23,6 +25,7 @@ from vouch.models import (
 from vouch.proposals import (
     ProposalError,
     approve,
+    check_approvable,
     propose_claim,
     propose_entity,
     propose_page,
@@ -32,6 +35,7 @@ from vouch.proposals import (
 from vouch.storage import (
     KBNotFoundError,
     KBStore,
+    _yaml_dump,
     discover_root,
     sha256_hex,
 )
@@ -341,6 +345,207 @@ def test_put_page_accepts_resolvable_entity_and_source_refs(
     store.put_page(page)
     assert store.get_page("p-ok").entities == ["ent1"]
     assert store.get_page("p-ok").sources == [src.id]
+
+
+# --- claim graph references (#196) ---------------------------------------
+#
+# put_claim already rejects unresolvable `evidence`; these cover the Claim's
+# *other* four reference fields — entities / supersedes / superseded_by /
+# contradicts — which #124 left unchecked even though fsck declares dangling
+# supersedes/superseded_by/contradicts as error-severity findings.
+
+
+def test_put_claim_rejects_unknown_entity_ref(store: KBStore) -> None:
+    src = store.put_source(b"e")
+    bad = Claim(id="c-ent", text="t", evidence=[src.id], entities=["ghost"])
+    with pytest.raises(ValueError, match="unknown entity"):
+        store.put_claim(bad)
+    assert not (store.kb_dir / "claims" / "c-ent.yaml").exists()
+
+
+def test_put_claim_rejects_unknown_supersedes_ref(store: KBStore) -> None:
+    src = store.put_source(b"e")
+    bad = Claim(id="c-sup", text="t", evidence=[src.id], supersedes=["ghost"])
+    with pytest.raises(ValueError, match="unknown claim"):
+        store.put_claim(bad)
+    assert not (store.kb_dir / "claims" / "c-sup.yaml").exists()
+
+
+def test_put_claim_rejects_unknown_superseded_by_ref(store: KBStore) -> None:
+    src = store.put_source(b"e")
+    bad = Claim(id="c-sb", text="t", evidence=[src.id], superseded_by="ghost")
+    with pytest.raises(ValueError, match="unknown claim"):
+        store.put_claim(bad)
+    assert not (store.kb_dir / "claims" / "c-sb.yaml").exists()
+
+
+def test_put_claim_rejects_unknown_contradicts_ref(store: KBStore) -> None:
+    src = store.put_source(b"e")
+    bad = Claim(id="c-con", text="t", evidence=[src.id], contradicts=["ghost"])
+    with pytest.raises(ValueError, match="unknown claim"):
+        store.put_claim(bad)
+    assert not (store.kb_dir / "claims" / "c-con.yaml").exists()
+
+
+def test_put_claim_accepts_resolvable_graph_refs(store: KBStore) -> None:
+    src = store.put_source(b"e")
+    store.put_entity(Entity(id="ent1", name="E", type=EntityType.CONCEPT))
+    store.put_claim(Claim(id="base", text="b", evidence=[src.id]))
+    ok = Claim(
+        id="c-ok", text="t", evidence=[src.id],
+        entities=["ent1"], contradicts=["base"],
+    )
+    store.put_claim(ok)
+    assert store.get_claim("c-ok").entities == ["ent1"]
+    assert store.get_claim("c-ok").contradicts == ["base"]
+
+
+def test_update_claim_rejects_in_place_mutation_to_dangling_ref(
+    store: KBStore,
+) -> None:
+    src = store.put_source(b"e")
+    store.put_claim(Claim(id="c1", text="t", evidence=[src.id]))
+    c = store.get_claim("c1")
+    c.contradicts = ["ghost"]  # mutate after load — bypasses model validators
+    with pytest.raises(ValueError, match="unknown claim"):
+        store.update_claim(c)
+    # On-disk claim is untouched.
+    assert store.get_claim("c1").contradicts == []
+
+
+def test_lifecycle_contradict_round_trips_after_guard(store: KBStore) -> None:
+    """Honest lifecycle writes stay green: supersede/contradict load both
+    ends via get_claim, so their links always resolve."""
+    src = store.put_source(b"e")
+    store.put_claim(Claim(id="a", text="a", evidence=[src.id]))
+    store.put_claim(Claim(id="b", text="b", evidence=[src.id]))
+    lifecycle.contradict(store, claim_a="a", claim_b="b", actor="tester")
+    assert store.get_claim("a").contradicts == ["b"]
+    assert store.get_claim("b").contradicts == ["a"]
+
+
+# --- lifecycle atomicity + batch-approve precheck (Codex review) --------
+
+
+def _write_poisoned_claim(store: KBStore, claim: Claim) -> None:
+    """Plant a claim YAML directly, bypassing put_claim's ref guard."""
+    (store.kb_dir / "claims" / f"{claim.id}.yaml").write_text(
+        _yaml_dump(claim.model_dump(mode="json"))
+    )
+
+
+def test_supersede_atomic_when_new_has_legacy_dangling_ref(
+    store: KBStore,
+) -> None:
+    """supersede must not leave old.superseded_by written when update_claim(new) raises."""
+    src = store.put_source(b"e")
+    store.put_claim(Claim(id="old", text="o", evidence=[src.id]))
+    # Plant `new` with a legacy dangling entity ref straight to disk.
+    _write_poisoned_claim(store, Claim(
+        id="new", text="n", evidence=[src.id], entities=["ghost-entity"],
+    ))
+
+    audit_path = store.kb_dir / "audit.log.jsonl"
+    audit_before = audit_path.read_text() if audit_path.exists() else ""
+
+    with pytest.raises(ValueError, match="unknown entity"):
+        lifecycle.supersede(
+            store, old_claim_id="old", new_claim_id="new", actor="tester",
+        )
+
+    # Atomicity: `old` was not touched.
+    old_after = store.get_claim("old")
+    assert old_after.status == ClaimStatus.WORKING
+    assert old_after.superseded_by is None
+    # No relation written.
+    assert not (
+        store.kb_dir / "relations" / "new--supersedes--old.yaml"
+    ).exists()
+    # No `claim.supersede` audit event recorded.
+    audit_after = audit_path.read_text() if audit_path.exists() else ""
+    assert "claim.supersede" not in audit_after[len(audit_before):]
+
+
+def test_contradict_atomic_when_b_has_legacy_dangling_ref(
+    store: KBStore,
+) -> None:
+    """contradict must not leave a.contradicts written when update_claim(b) raises."""
+    src = store.put_source(b"e")
+    store.put_claim(Claim(id="a", text="a", evidence=[src.id]))
+    _write_poisoned_claim(store, Claim(
+        id="b", text="b", evidence=[src.id], entities=["ghost-entity"],
+    ))
+
+    audit_path = store.kb_dir / "audit.log.jsonl"
+    audit_before = audit_path.read_text() if audit_path.exists() else ""
+
+    with pytest.raises(ValueError, match="unknown entity"):
+        lifecycle.contradict(
+            store, claim_a="a", claim_b="b", actor="tester",
+        )
+
+    a_after = store.get_claim("a")
+    assert a_after.status == ClaimStatus.WORKING
+    assert a_after.contradicts == []
+    assert not (
+        store.kb_dir / "relations" / "a--contradicts--b.yaml"
+    ).exists()
+    audit_after = audit_path.read_text() if audit_path.exists() else ""
+    assert "claim.contradict" not in audit_after[len(audit_before):]
+
+
+def test_check_approvable_catches_claim_with_dangling_entity_ref(
+    store: KBStore,
+) -> None:
+    """Batch precheck blocks a claim proposal whose entities won't resolve."""
+    src = store.put_source(b"e")
+    pr = propose_claim(
+        store, text="t", evidence=[src.id],
+        entities=["ghost-entity"],  # would-be dangling at approve time
+        proposed_by="agent",
+    )
+    reason = check_approvable(store, pr.id, approved_by="reviewer")
+    assert reason is not None
+    assert "unknown entity" in reason
+
+
+def test_check_approvable_catches_relation_proposal_filed_directly(
+    store: KBStore,
+) -> None:
+    """Defense-in-depth for legacy proposals that bypassed propose_relation's gate."""
+    src = store.put_source(b"e")
+    store.put_claim(Claim(id="real", text="r", evidence=[src.id]))
+    from vouch.proposals import new_proposal_id
+    pr = Proposal(
+        id=new_proposal_id(),
+        kind=ProposalKind.RELATION,
+        proposed_by="agent",
+        payload={
+            "id": "real--uses--ghost",
+            "source": "real",
+            "relation": "uses",
+            "target": "ghost",
+            "confidence": 0.7,
+            "evidence": [],
+        },
+    )
+    store.put_proposal(pr)
+    reason = check_approvable(store, pr.id, approved_by="reviewer")
+    assert reason is not None
+    assert "ghost" in reason or "unknown" in reason
+
+
+def test_check_approvable_clean_for_well_formed_proposal(
+    store: KBStore,
+) -> None:
+    """Positive guard: an honest proposal still passes the precheck."""
+    src = store.put_source(b"e")
+    store.put_entity(Entity(id="ent-ok", name="E", type=EntityType.CONCEPT))
+    pr = propose_claim(
+        store, text="ok", evidence=[src.id], entities=["ent-ok"],
+        proposed_by="agent",
+    )
+    assert check_approvable(store, pr.id, approved_by="reviewer") is None
 
 
 # --- evidence -------------------------------------------------------------

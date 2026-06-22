@@ -93,15 +93,15 @@ def test_fsck_clean_kb_prints_clean_and_exits_zero(store: KBStore) -> None:
 def test_fsck_reports_dangling_chain_and_exits_nonzero(store: KBStore) -> None:
     """`vouch fsck` exits 1 on error findings and prints affected object ids."""
     from vouch.models import Claim
+    from vouch.storage import _yaml_dump
 
     src = store.put_source(b"e")
-    store.put_claim(
-        Claim(
-            id="c1",
-            text="t",
-            evidence=[src.id],
-            supersedes=["ghost"],
-        )
+    # Write straight to disk: put_claim now rejects dangling graph refs
+    # (_validate_claim_refs), so this reproduces the legacy/poisoned claim
+    # YAML that fsck must still surface after the write path is tightened.
+    bad = Claim(id="c1", text="t", evidence=[src.id], supersedes=["ghost"])
+    (store.kb_dir / "claims" / "c1.yaml").write_text(
+        _yaml_dump(bad.model_dump(mode="json"))
     )
     result = CliRunner().invoke(cli, ["fsck"])
     assert result.exit_code == 1, result.output

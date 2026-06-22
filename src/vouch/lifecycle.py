@@ -52,6 +52,11 @@ def supersede(
     old.updated_at = datetime.now(UTC)
     new.supersedes = sorted({*new.supersedes, old.id})
     new.updated_at = datetime.now(UTC)
+    # Atomicity: validate both sides before any write so a legacy dangling
+    # ref on `new` can't leave `old.superseded_by` written without the
+    # reciprocal `new.supersedes` / relation / audit event.
+    store._validate_claim_refs(old)
+    store._validate_claim_refs(new)
     store.update_claim(old)
     store.update_claim(new)
     # Mirror the supersedes link into the graph for graph-traversal queries.
@@ -78,6 +83,9 @@ def contradict(
     a.status = ClaimStatus.CONTESTED
     b.status = ClaimStatus.CONTESTED
     a.updated_at = b.updated_at = datetime.now(UTC)
+    # Atomicity: mirror of supersede — validate both sides before any write.
+    store._validate_claim_refs(a)
+    store._validate_claim_refs(b)
     store.update_claim(a)
     store.update_claim(b)
     rel = Relation(

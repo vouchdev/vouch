@@ -8,7 +8,7 @@ import pytest
 
 from vouch import health, index_db
 from vouch.models import Claim, ClaimStatus, Proposal, ProposalKind, ProposalStatus
-from vouch.storage import KBStore
+from vouch.storage import KBStore, _yaml_dump
 
 
 @pytest.fixture
@@ -122,6 +122,16 @@ def _index_claim(store: KBStore, claim: Claim) -> None:
         )
 
 
+def _write_claim_direct(store: KBStore, claim: Claim) -> None:
+    """Persist a claim straight to disk, bypassing put_claim's reference
+    guard (`_validate_claim_refs`). Simulates a poisoned / legacy claim YAML
+    that landed before the guard existed — exactly the on-disk state fsck's
+    dangling_* checks must still surface after the write path is tightened."""
+    (store.kb_dir / "claims" / f"{claim.id}.yaml").write_text(
+        _yaml_dump(claim.model_dump(mode="json"))
+    )
+
+
 def test_fsck_clean_kb_passes(store: KBStore) -> None:
     """A KB with one consistently-indexed claim is fsck-clean."""
     src = store.put_source(b"e")
@@ -134,10 +144,14 @@ def test_fsck_clean_kb_passes(store: KBStore) -> None:
 
 
 def test_fsck_flags_dangling_supersedes(store: KBStore) -> None:
-    """`claim.supersedes` pointing at a missing claim is an error."""
+    """`claim.supersedes` pointing at a missing claim is an error.
+
+    Written directly to disk: put_claim now rejects dangling graph refs
+    (`_validate_claim_refs`), so this reproduces the legacy/poisoned on-disk
+    YAML that fsck must still catch after the write path is tightened."""
     src = store.put_source(b"e")
-    store.put_claim(Claim(id="c1", text="t", evidence=[src.id],
-                          supersedes=["ghost"]))
+    _write_claim_direct(store, Claim(id="c1", text="t", evidence=[src.id],
+                                     supersedes=["ghost"]))
     report = health.fsck(store)
     codes = {f.code for f in report.findings}
     assert "dangling_supersedes" in codes
@@ -147,8 +161,8 @@ def test_fsck_flags_dangling_supersedes(store: KBStore) -> None:
 def test_fsck_flags_dangling_superseded_by(store: KBStore) -> None:
     """`claim.superseded_by` pointing at a missing claim is an error."""
     src = store.put_source(b"e")
-    store.put_claim(Claim(id="c1", text="t", evidence=[src.id],
-                          superseded_by="ghost"))
+    _write_claim_direct(store, Claim(id="c1", text="t", evidence=[src.id],
+                                     superseded_by="ghost"))
     report = health.fsck(store)
     codes = {f.code for f in report.findings}
     assert "dangling_superseded_by" in codes
@@ -158,8 +172,8 @@ def test_fsck_flags_dangling_superseded_by(store: KBStore) -> None:
 def test_fsck_flags_dangling_contradicts(store: KBStore) -> None:
     """`claim.contradicts` pointing at a missing claim is an error."""
     src = store.put_source(b"e")
-    store.put_claim(Claim(id="c1", text="t", evidence=[src.id],
-                          contradicts=["ghost"]))
+    _write_claim_direct(store, Claim(id="c1", text="t", evidence=[src.id],
+                                     contradicts=["ghost"]))
     report = health.fsck(store)
     codes = {f.code for f in report.findings}
     assert "dangling_contradicts" in codes
@@ -169,12 +183,26 @@ def test_fsck_flags_dangling_contradicts(store: KBStore) -> None:
 def test_fsck_flags_asymmetric_contradicts(store: KBStore) -> None:
     """A → B contradiction not mirrored by B → A is a warning, not silent."""
     src = store.put_source(b"e")
+    # c2 must exist before c1 cites it — put_claim now enforces resolvable
+    # graph refs, and an asymmetric (not dangling) link needs both ends real.
+    store.put_claim(Claim(id="c2", text="b", evidence=[src.id]))
     store.put_claim(Claim(id="c1", text="a", evidence=[src.id],
                           contradicts=["c2"]))
-    store.put_claim(Claim(id="c2", text="b", evidence=[src.id]))
     report = health.fsck(store)
     codes = {f.code for f in report.findings}
     assert "asymmetric_contradicts" in codes
+
+
+def test_fsck_flags_dangling_claim_entity(store: KBStore) -> None:
+    """`claim.entities` pointing at a missing entity is an error finding."""
+    src = store.put_source(b"e")
+    _write_claim_direct(store, Claim(
+        id="c1", text="t", evidence=[src.id], entities=["ghost-entity"],
+    ))
+    report = health.fsck(store)
+    codes = {f.code for f in report.findings}
+    assert "dangling_claim_entity" in codes
+    assert report.ok is False
 
 
 def test_fsck_decided_missing_artifact(store: KBStore) -> None:

@@ -272,6 +272,7 @@ def fsck(store: KBStore) -> HealthReport:
     entities: dict[str, Entity] = {e.id: e for e in store.list_entities()}
 
     _check_lifecycle_chains(claims, findings)
+    _check_claim_graph_refs(claims, entities, findings)
     _check_decided_proposals(store, claims, pages, entities, findings)
 
     db_present = (store.kb_dir / index_db.DB_FILENAME).exists()
@@ -340,6 +341,30 @@ def _check_lifecycle_chains(
                         f"claim {cid} contradicts {other} but {other} does not "
                         f"contradict {cid} back",
                         [cid, other],
+                    )
+                )
+
+
+def _check_claim_graph_refs(
+    claims: dict[str, Claim],
+    entities: dict[str, Entity],
+    findings: list[Finding],
+) -> None:
+    """Detect `claim.entities` pointing at a missing entity.
+
+    Sibling of `_check_lifecycle_chains` for the entity-ref field, so
+    legacy KBs surface the blocker before `update_claim` rejects it.
+    """
+    entity_ids = entities.keys()
+    for cid, c in claims.items():
+        for eid in c.entities:
+            if eid not in entity_ids:
+                findings.append(
+                    Finding(
+                        "error",
+                        "dangling_claim_entity",
+                        f"claim {cid} references missing entity {eid}",
+                        [cid, eid],
                     )
                 )
 
