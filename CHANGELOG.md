@@ -160,6 +160,12 @@ All notable changes to vouch are documented here. Format follows
   `dangling_claim_entity` error finding, alongside the existing
   `dangling_supersedes` / `_superseded_by` / `_contradicts` checks.
 - `discover_root()` now honours `VOUCH_KB_PATH=/abs/path/.vouch` and returns the parent root, instead of always walking up from cwd. The env var was already documented in `adapters/generic-mcp/README.md` but wasn't wired into the code — closing the doc-vs-code drift removes the `"cwd": "..."` ceremony hosts like Claude Desktop need today to point at a specific KB.
+- `rebuild_index()` (`vouch index` / `kb.rebuild_index`) no longer wipes
+  `state.db` before reading artifacts. It builds the new index into a temp file
+  and renames it into place only on success, so one unreadable artifact (bad
+  YAML, a truncated write, a half-validated bundle import) is skipped with a
+  warning instead of leaving the whole search index blank. `vouch doctor` gains
+  an `index_blown` check for a KB damaged before this fix (#159).
 
 ## [0.1.0] — 2026-05-26
 

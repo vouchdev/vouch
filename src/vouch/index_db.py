@@ -107,6 +107,25 @@ def open_db(kb_dir: Path):
         conn.close()
 
 
+@contextmanager
+def open_db_at(path: Path):
+    """Like open_db but on an explicit path, for atomic temp-file rebuilds.
+
+    rebuild_index() builds a throwaway DB next to state.db and renames it into
+    place only after the whole rebuild commits, so a parse error half-way
+    through never clobbers the live index. Shares SCHEMA with open_db so the
+    temp DB can't drift from the real one.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(path))
+    try:
+        conn.executescript(SCHEMA)
+        yield conn
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def reset(kb_dir: Path) -> None:
     """Drop everything; the rebuild caller re-populates.
 

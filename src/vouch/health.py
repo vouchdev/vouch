@@ -7,6 +7,10 @@ contradictions, stale claims. Status is a one-line summary used by tooling.
 
 from __future__ import annotations
 
+import os
+import sqlite3
+import tempfile
+import warnings
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -18,7 +22,7 @@ from pydantic import ValidationError
 from . import index_db
 from .audit import count_events, verify_chain
 from .models import Claim, ClaimStatus, Entity, Page, ProposalKind, ProposalStatus
-from .storage import KBStore, _yaml_load, sha256_hex
+from .storage import KBStore, _deserialize_page, _yaml_load, sha256_hex
 from .verify import verify_all
 
 
@@ -251,6 +255,26 @@ def doctor(store: KBStore) -> HealthReport:
                 "state.db not present — run `vouch index` to build it",
             )
         )
+    else:
+        # Blown index: the DB exists but holds nothing while artifacts are on
+        # disk — the aftermath of a rebuild that died before this fix. Surface
+        # it so the user knows a `vouch index` will bring search back.
+        idx = index_db.stats(store.kb_dir)
+        indexed = idx["claims"] + idx["pages"] + idx["entities"]
+        on_disk = (
+            len(list((store.kb_dir / "claims").glob("*.yaml")))
+            + len(list((store.kb_dir / "pages").glob("*.md")))
+            + len(list((store.kb_dir / "entities").glob("*.yaml")))
+        )
+        if on_disk > 0 and indexed == 0:
+            report.findings.append(
+                Finding(
+                    "warning",
+                    "index_blown",
+                    "state.db is empty but artifact files exist on disk — "
+                    "run `vouch index` to rebuild the search index",
+                )
+            )
 
     report.ok = not any(f.severity == "error" for f in report.findings)
     return report
@@ -527,7 +551,15 @@ def _check_orphan_embeddings(
 
 
 def rebuild_index(store: KBStore, *, on_progress: Callable[[str], None] | None = None) -> dict:
-    """Drop and rebuild state.db from the durable files. Idempotent.
+    """Rebuild state.db from the durable files, atomically.
+
+    The files on disk are the source of truth; state.db is a derived cache.
+    The rebuild reads each artifact into a fresh temp DB next to state.db and
+    only renames it into place once everything has been written. A single
+    unreadable artifact (bad YAML, truncated write, a half-validated bundle
+    import) is skipped with a warning instead of taking the whole search index
+    down with it, and any harder failure leaves the existing index untouched.
+    Idempotent.
 
     `on_progress`, if given, is called with a short phase label ("claims",
     "pages", "entities", "embeddings") as each stage starts — for CLI
@@ -538,7 +570,8 @@ def rebuild_index(store: KBStore, *, on_progress: Callable[[str], None] | None =
         if on_progress is not None:
             on_progress(phase)
 
-    # Detect a stale embedding-model identity before reset() wipes the meta.
+    # Detect a stale embedding-model identity before the rebuild replaces the
+    # old meta with the temp DB's.
     try:
         from . import audit
         from .embeddings.migration import detect_mismatch
@@ -554,62 +587,121 @@ def rebuild_index(store: KBStore, *, on_progress: Callable[[str], None] | None =
             )
     except ImportError:
         pass
-    index_db.reset(store.kb_dir)
-    with index_db.open_db(store.kb_dir) as conn:
-        for c in store.list_claims():
-            index_db.index_claim(
-                conn,
-                id=c.id,
-                text=c.text,
-                type=c.type.value,
-                status=c.status.value,
-                tags=c.tags,
-            )
-        for p in store.list_pages():
-            index_db.index_page(
-                conn,
-                id=p.id,
-                title=p.title,
-                body=p.body,
-                type=p.type,
-                tags=p.tags,
-            )
-        for e in store.list_entities():
-            index_db.index_entity(
-                conn,
-                id=e.id,
-                name=e.name,
-                description=e.description,
-                type=e.type.value,
-                aliases=e.aliases,
-            )
-    _rebuild_embeddings(store)
+
+    db_path = store.kb_dir / index_db.DB_FILENAME
+    store.kb_dir.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        dir=store.kb_dir, suffix=".db.tmp", delete=False
+    ) as tmp:
+        tmp_path = Path(tmp.name)
+
+    skipped: list[tuple[str, str]] = []
+    claims: list[Claim] = []
+    pages: list[Page] = []
+    entities: list[Entity] = []
+    try:
+        with index_db.open_db_at(tmp_path) as conn:
+            _tick("claims")
+            for claim_path in sorted((store.kb_dir / "claims").glob("*.yaml")):
+                try:
+                    c = Claim.model_validate(_yaml_load(claim_path.read_text()))
+                except Exception as exc:
+                    skipped.append((claim_path.name, str(exc)))
+                    continue
+                claims.append(c)
+                index_db.index_claim(
+                    conn,
+                    id=c.id,
+                    text=c.text,
+                    type=c.type.value,
+                    status=c.status.value,
+                    tags=c.tags,
+                )
+            _tick("pages")
+            for page_path in sorted((store.kb_dir / "pages").glob("*.md")):
+                try:
+                    pg = _deserialize_page(page_path.read_text())
+                except Exception as exc:
+                    skipped.append((page_path.name, str(exc)))
+                    continue
+                pages.append(pg)
+                index_db.index_page(
+                    conn,
+                    id=pg.id,
+                    title=pg.title,
+                    body=pg.body,
+                    type=pg.type,
+                    tags=pg.tags,
+                )
+            _tick("entities")
+            for entity_path in sorted((store.kb_dir / "entities").glob("*.yaml")):
+                try:
+                    ent = Entity.model_validate(_yaml_load(entity_path.read_text()))
+                except Exception as exc:
+                    skipped.append((entity_path.name, str(exc)))
+                    continue
+                entities.append(ent)
+                index_db.index_entity(
+                    conn,
+                    id=ent.id,
+                    name=ent.name,
+                    description=ent.description,
+                    type=ent.type.value,
+                    aliases=ent.aliases,
+                )
+            # Build embeddings into the same temp connection so they're part of
+            # the atomic swap. Reuses the artifacts already parsed above.
+            _tick("embeddings")
+            _write_embeddings(conn, claims=claims, pages=pages, entities=entities)
+        os.replace(tmp_path, db_path)
+    except Exception:
+        Path(tmp_path).unlink(missing_ok=True)
+        raise
+
+    if skipped:
+        warnings.warn(
+            f"rebuild_index skipped {len(skipped)} unreadable artifact(s): {skipped}",
+            stacklevel=2,
+        )
     return index_db.stats(store.kb_dir)
 
 
-def _rebuild_embeddings(store: KBStore) -> None:
+def _write_embeddings(
+    conn: sqlite3.Connection,
+    *,
+    claims: list[Claim],
+    pages: list[Page],
+    entities: list[Entity],
+) -> None:
+    """Write embedding vectors into *conn* (caller owns the connection/commit).
+
+    No-op when the embeddings extra isn't installed or no embedder is
+    registered. Takes the already-parsed artifacts so the rebuild doesn't read
+    every file from disk a second time.
+    """
     try:
         from .embeddings import get_embedder
-
-        embedder = get_embedder()
-    except Exception:
+    except ImportError:
         return
-    with index_db.open_db(store.kb_dir) as conn:
-        texts: list[tuple[str, str, str]] = []
-        for c in store.list_claims():
-            texts.append(("claim", c.id, c.text))
-        for p in store.list_pages():
-            texts.append(("page", p.id, f"{p.title} {p.body}"))
-        for e in store.list_entities():
-            texts.append(("entity", e.id, f"{e.name} {e.description or ''}"))
-        if not texts:
-            return
-        batch_size = 64
-        for i in range(0, len(texts), batch_size):
-            batch = texts[i : i + batch_size]
-            vecs = embedder.encode_batch([t[2] for t in batch])
-            for (kind, eid, _), row in zip(batch, vecs, strict=True):
-                index_db.index_embedding(conn, kind=kind, id=eid, vec=row.tolist())
+    try:
+        embedder = get_embedder()
+    except (KeyError, ImportError):
+        return
+    texts: list[tuple[str, str, str]] = []
+    for c in claims:
+        texts.append(("claim", c.id, c.text))
+    for pg in pages:
+        texts.append(("page", pg.id, f"{pg.title} {pg.body}"))
+    for ent in entities:
+        texts.append(("entity", ent.id, f"{ent.name} {ent.description or ''}"))
+    if not texts:
+        return
+    batch_size = 64
+    for i in range(0, len(texts), batch_size):
+        batch = texts[i : i + batch_size]
+        vecs = embedder.encode_batch([t[2] for t in batch])
+        for (kind, eid, _), row in zip(batch, vecs, strict=True):
+            index_db.index_embedding(conn, kind=kind, id=eid, vec=row.tolist())
 
 
 # --- helpers used by `vouch discover` (CLI) -------------------------------
