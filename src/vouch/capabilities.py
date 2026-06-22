@@ -10,6 +10,7 @@ from __future__ import annotations
 from . import __version__
 from .models import Capabilities
 from .openclaw.context_engine import describe_engine
+from .storage import KBStore
 
 # The full method surface this implementation exposes. Keep this list in
 # sync with the MCP server + JSONL server registrations — `test_capabilities`
@@ -69,10 +70,12 @@ METHODS = [
     "kb.impact",
     "kb.graph_export",
     "kb.provenance_rebuild",
+    "kb.list_skills",
+    "kb.get_skill",
 ]
 
 
-def capabilities() -> Capabilities:
+def capabilities(store: KBStore | None = None) -> Capabilities:
     retrieval = ["fts5", "substring"]
     try:
         from .embeddings import get_embedder
@@ -81,6 +84,11 @@ def capabilities() -> Capabilities:
         retrieval.append("hybrid")
     except Exception:
         pass
+    mcp_section: dict[str, object] = {"publish_skills": True}
+    if store is not None:
+        from .mcp_config import load_config
+
+        mcp_section = load_config(store).to_capabilities_dict()
     return Capabilities(
         version=__version__,
         methods=METHODS,
@@ -94,4 +102,5 @@ def capabilities() -> Capabilities:
             "config_path": "retrieval.scope",
         },
         context_engines=[describe_engine()],
+        mcp=mcp_section,
     )

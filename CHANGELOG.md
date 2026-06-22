@@ -50,6 +50,15 @@ All notable changes to vouch are documented here. Format follows
   as reviewer; a PR opens only when the repo's own test gate is green and the
   reviewer signs off. A sibling tool — it never writes to the KB or the review
   gate. Paired with the `auto-pr` skill.
+- `mcp.publish_skills` config flag (#235): when false, `kb.list_skills`
+  returns an empty catalogue and `kb.get_skill` returns `permission_denied`.
+  Default is `true` so existing KBs keep current behaviour. The flag is
+  surfaced on `kb.capabilities.mcp` so clients can detect the gate without
+  probing. Flipping the flag in `config.yaml` takes effect on the next call
+  — no server restart required.
+- `kb.list_skills` / `kb.get_skill` — discover Claude Code skills and slash
+  commands from project-local and user-global `.claude/` trees. CLI mirrors:
+  `vouch list-skills`, `vouch get-skill <name>`.
 - typed page kinds (#234): a KB can declare extra page kinds in
   `.vouch/config.yaml` under `page_kinds`, each with `required_fields`, a
   JSON-Schema-subset `frontmatter_schema`, `required_citations`, and one level

@@ -23,6 +23,7 @@ from . import audit, bundle, health, volunteer_context
 from . import lifecycle as life
 from . import salience as salience_mod
 from . import sessions as sess_mod
+from . import skills as skills_mod
 from . import trust as trust_mod
 from . import verify as verify_mod
 from .capabilities import capabilities as build_caps
@@ -42,6 +43,7 @@ from .proposals import (
     reject_auto_extracted,
 )
 from .scoping import filter_hits, scoped_fetch_limit, viewer_from
+from .skills.errors import SkillsAccessDenied
 from .stats import collect_stats
 from .storage import (
     ArtifactNotFoundError,
@@ -73,7 +75,7 @@ def _agent() -> str:
 @mcp.tool()
 def kb_capabilities() -> dict[str, Any]:
     """Return the protocol capabilities of this server."""
-    return build_caps().model_dump(mode="json")
+    return build_caps(_store()).model_dump(mode="json")
 
 
 @mcp.tool()
@@ -855,6 +857,37 @@ def kb_provenance_rebuild() -> dict[str, Any]:
     """Rebuild the prov_edges cache from durable files; returns edge count."""
     from . import provenance as prov
     return {"edges": prov.rebuild_prov_edges(_store())}
+
+
+# === skills (catalogue gated by mcp.publish_skills) =======================
+
+
+@mcp.tool()
+def kb_list_skills() -> list[dict[str, Any]]:
+    """Enumerate every Claude Code skill / slash command visible to vouch.
+
+    Scans, in priority order:
+      1. ``<kb_root>/.claude/skills/<name>/SKILL.md`` — project-local skills
+      2. ``<kb_root>/.claude/commands/<name>.md``     — project-local commands
+      3. ``~/.claude/skills/<name>/SKILL.md``         — user-global skills
+      4. ``~/.claude/commands/<name>.md``             — user-global commands
+
+    Project entries override user ones with the same name. Returns
+    ``[{name, description, scope, kind, path}]``. When ``mcp.publish_skills``
+    is false in config.yaml the catalogue is empty.
+    """
+    return skills_mod.list_skills(_store())
+
+
+@mcp.tool()
+def kb_get_skill(name: str) -> dict[str, Any]:
+    """Return the full markdown body of a named skill / slash command."""
+    try:
+        return skills_mod.get_skill(_store(), name)
+    except SkillsAccessDenied as e:
+        raise PermissionError(str(e)) from e
+    except KeyError as e:
+        raise ValueError(str(e)) from e
 
 
 def _current_model_name() -> str:

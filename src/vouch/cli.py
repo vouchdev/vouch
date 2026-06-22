@@ -59,6 +59,7 @@ from .proposals import (
 from .proposals import (
     reject as do_reject,
 )
+from .skills.errors import SkillsAccessDenied
 from .storage import (
     ArtifactNotFoundError,
     KBNotFoundError,
@@ -83,6 +84,7 @@ def _cli_errors() -> Iterator[None]:
         ProposalError,
         LifecycleError,
         migrations_mod.MigrationError,
+        SkillsAccessDenied,
     ) as e:
         raise click.ClickException(str(e)) from e
 
@@ -179,7 +181,7 @@ def discover(path: str) -> None:
 @cli.command()
 def capabilities() -> None:
     """Emit the JSON capabilities descriptor (mirrors kb.capabilities)."""
-    _emit_json(build_caps().model_dump(mode="json"))
+    _emit_json(build_caps(_load_store()).model_dump(mode="json"))
 
 
 # --- status / health ------------------------------------------------------
@@ -1475,6 +1477,27 @@ def neighbors(node_id: str, depth: int, rel_types: tuple[str, ...],
             rel_types=list(rel_types) or None,
             max_nodes=max_nodes,
         )
+    _emit_json(result)
+
+
+@cli.command("list-skills")
+def list_skills_cmd() -> None:
+    """Enumerate Claude Code skills / slash commands (mirrors kb.list_skills)."""
+    from . import skills as skills_mod
+
+    store = _load_store()
+    _emit_json(skills_mod.list_skills(store))
+
+
+@cli.command("get-skill")
+@click.argument("name")
+def get_skill_cmd(name: str) -> None:
+    """Return the full markdown body of a named skill (mirrors kb.get_skill)."""
+    from . import skills as skills_mod
+
+    store = _load_store()
+    with _cli_errors():
+        result = skills_mod.get_skill(store, name)
     _emit_json(result)
 
 

@@ -23,6 +23,12 @@
       "title": "Level",
       "type": "integer"
     },
+    "mcp": {
+      "additionalProperties": true,
+      "description": "MCP transport knobs surfaced to clients (issue #235)",
+      "title": "Mcp",
+      "type": "object"
+    },
     "methods": {
       "items": {
         "type": "string"

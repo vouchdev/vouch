@@ -29,6 +29,12 @@ review:
 #   poll_interval_seconds: 2     # background watch interval
 #   max_per_session: 50
 
+# MCP transport knobs (#235). When publish_skills is false, kb.list_skills
+# returns [] and kb.get_skill returns permission_denied — useful for a
+# company-brain KB where the catalogue itself is sensitive.
+# mcp:
+#   publish_skills: true         # default; flip to false for company-brain mode
+
 # Optional per-agent identity overrides. Keyed by VOUCH_AGENT value.
 agents:
   claude-code:
