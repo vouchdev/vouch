@@ -249,6 +249,7 @@ All notable changes to vouch are documented here. Format follows
   kinds and audit existing pages against them; `propose-page` gains `--kind`
   and repeatable `--meta key=value`.
 - `kb.capabilities` now reports a `host_compat` block mirroring the `openclaw.compat` constraints declared in `openclaw.plugin.json` (e.g. `pluginApi`), so non-OpenClaw clients can detect compat without parsing the manifest. A new test asserts the two stay in sync and fails CI on drift (#237).
+- Cursor pagination for all six `kb.list_*` methods (`kb.list_claims`, `kb.list_pages`, `kb.list_entities`, `kb.list_relations`, `kb.list_sources`, `kb.list_pending`). All methods now accept `limit` and `cursor` params and return a `{items, _meta}` envelope with `next_cursor` and `total`. Storage layer gained `list_*_page` variants using a shared `_paginate_paths` helper. Both MCP and JSONL transports updated. Flat-list response shape deprecated with a `_meta.deprecation` notice. Fuzz test asserts 1 000 artifacts are returned exactly once with no gaps across pages. Fixes #245.
 - `kb.synthesize` — answer-mode retrieval over the review-gated KB. Answers a
   query in prose from approved claims only, with an inline `[claim_id]`
   citation behind every sentence, an explicit `gaps` block listing query

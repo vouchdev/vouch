@@ -186,6 +186,51 @@ def _load_cfg(store: KBStore) -> dict:
     return loaded if isinstance(loaded, dict) else {}
 
 
+_DEFAULT_LIST_LIMIT = 10
+
+
+def _resolve_list_limit(store: KBStore, p: dict) -> int:
+    """Resolve the page size for a kb.list_* call (#245).
+
+    Explicit `limit` in params wins; otherwise falls back to
+    `retrieval.default_limit` in config.yaml, then a hardcoded default.
+    Coerces to int and clamps to >= 1 so a malformed or zero limit can't
+    produce an infinite-cursor loop on the client side.
+    """
+    raw = p.get("limit")
+    if raw is None:
+        cfg = _load_cfg(store)
+        raw = cfg.get("retrieval", {}).get("default_limit", _DEFAULT_LIST_LIMIT)
+    try:
+        limit = int(raw)
+    except (TypeError, ValueError):
+        limit = _DEFAULT_LIST_LIMIT
+    return max(1, limit)
+
+
+def _paged_envelope(items: list, next_cursor: str | None, total: int) -> dict:
+    """Build the {"items": [...], "_meta": {...}} envelope for kb.list_* (#245).
+
+    `_meta.next_cursor` is null on the last page. `_meta.deprecation` warns
+    clients still expecting a bare list that the flat-array response shape
+    will be removed in a future release -- mirrors how other envelope
+    changes in this codebase are staged with a one-release notice rather
+    than a breaking change with no warning.
+    """
+    return {
+        "items": items,
+        "_meta": {
+            "next_cursor": next_cursor,
+            "total": total,
+            "deprecation": (
+                "kb.list_* responses will only return the {items, _meta} "
+                "envelope in a future release; flat-array responses are "
+                "deprecated as of #245."
+            ),
+        },
+    }
+
+
 def _h_neighbors(p: dict) -> dict:
     from .graph import find_neighbors
 
@@ -259,49 +304,93 @@ def _h_diff(p: dict) -> dict:
     return asdict(diff_artifacts(_store(), p["old_id"], p.get("new_id")))
 
 
-def _h_list_pages(p: dict) -> list[dict]:
-    pages = filter_pages(
-        _store().list_pages(),
+def _h_list_pages(p: dict) -> dict:
+    store = _store()
+    limit = _resolve_list_limit(store, p)
+    items, next_cursor, total = store.list_pages_page(
+        limit=limit, cursor=p.get("cursor")
+    )
+    # Apply optional frontmatter filters after pagination fetch (#245 + typed-kinds).
+    items = list(filter_pages(
+        items,
         kind=p.get("type"),
         equals=p.get("meta"),
         before=p.get("meta_before"),
         after=p.get("meta_after"),
+    ))
+    return _paged_envelope(
+        [pg.model_dump(mode="json") for pg in items], next_cursor, total
     )
-    return [pg.model_dump(mode="json") for pg in pages]
 
 
-def _h_list_claims(p: dict) -> list[dict]:
-    cs = _store().list_claims()
-    if p.get("status"):
-        cs = [c for c in cs if c.status.value == p["status"]]
-    return [c.model_dump(mode="json") for c in cs]
+def _h_list_claims(p: dict) -> dict:
+    store = _store()
+    limit = _resolve_list_limit(store, p)
+    items, next_cursor, total = store.list_claims_page(
+        limit=limit, cursor=p.get("cursor")
+    )
+    status = p.get("status")
+    if status:
+        # Status filtering happens client-visibly after the page is loaded,
+        # same semantics as the pre-#245 flat-list filter. A status filter
+        # combined with pagination is a known limitation (see #245 "out of
+        # scope": filtering/sorting beyond id-order paging is a separate
+        # query-language ask) -- documented here rather than silently
+        # producing pages with fewer than `limit` matching items.
+        items = [c for c in items if c.status.value == status]
+    return _paged_envelope(
+        [c.model_dump(mode="json") for c in items], next_cursor, total
+    )
 
 
-def _h_list_entities(p: dict) -> list[dict]:
-    es = _store().list_entities()
-    if p.get("entity_type"):
-        es = [e for e in es if e.type.value == p["entity_type"]]
-    return [e.model_dump(mode="json") for e in es]
+def _h_list_entities(p: dict) -> dict:
+    store = _store()
+    limit = _resolve_list_limit(store, p)
+    items, next_cursor, total = store.list_entities_page(
+        limit=limit, cursor=p.get("cursor")
+    )
+    entity_type = p.get("entity_type")
+    if entity_type:
+        items = [e for e in items if e.type.value == entity_type]
+    return _paged_envelope(
+        [e.model_dump(mode="json") for e in items], next_cursor, total
+    )
 
 
-def _h_list_relations(p: dict) -> list[dict]:
-    s = _store()
-    rels = s.list_relations()
+def _h_list_relations(p: dict) -> dict:
+    store = _store()
+    limit = _resolve_list_limit(store, p)
+    items, next_cursor, total = store.list_relations_page(
+        limit=limit, cursor=p.get("cursor")
+    )
     node = p.get("node_id")
     if node:
-        rels = [r for r in rels if r.source == node or r.target == node]
-    return [r.model_dump(mode="json") for r in rels]
+        items = [r for r in items if r.source == node or r.target == node]
+    return _paged_envelope(
+        [r.model_dump(mode="json") for r in items], next_cursor, total
+    )
 
 
-def _h_list_sources(_: dict) -> list[dict]:
-    return [s.model_dump(mode="json") for s in _store().list_sources()]
+def _h_list_sources(p: dict) -> dict:
+    store = _store()
+    limit = _resolve_list_limit(store, p)
+    items, next_cursor, total = store.list_sources_page(
+        limit=limit, cursor=p.get("cursor")
+    )
+    return _paged_envelope(
+        [s.model_dump(mode="json") for s in items], next_cursor, total
+    )
 
 
-def _h_list_pending(_: dict) -> list[dict]:
-    return [
-        p.model_dump(mode="json")
-        for p in _store().list_proposals(ProposalStatus.PENDING)
-    ]
+def _h_list_pending(p: dict) -> dict:
+    store = _store()
+    limit = _resolve_list_limit(store, p)
+    items, next_cursor, total = store.list_proposals_page(
+        ProposalStatus.PENDING, limit=limit, cursor=p.get("cursor")
+    )
+    return _paged_envelope(
+        [pr.model_dump(mode="json") for pr in items], next_cursor, total
+    )
 
 
 def _h_triage_pending(p: dict) -> list[dict]:

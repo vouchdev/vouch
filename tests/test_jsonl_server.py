@@ -88,7 +88,7 @@ def test_jsonl_dry_run_propose_then_real_propose(store: KBStore, monkeypatch) ->
     assert real["ok"]
     pending = handle_request({"id": "3", "method": "kb.list_pending",
                               "params": {}})
-    assert len(pending["result"]) == 1
+    assert len(pending["result"]["items"]) == 1
 
 
 def test_jsonl_full_flow(store: KBStore, monkeypatch) -> None:

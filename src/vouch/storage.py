@@ -237,6 +237,42 @@ class KBStore:
         with os.fdopen(fd, "rb") as f:
             return resolved, f.read()
 
+    # --- cursor pagination (#245) ------------------------------------------
+    #
+    # Generic id-ordered pagination shared by every paged list_* method.
+    # The cursor is an opaque, stable token: the last id returned on the
+    # current page. Because every artifact directory is already iterated
+    # in sorted(glob(...)) order (id order, since filenames are
+    # "<id>.yaml"/"<id>.md"), resuming from a cursor means skipping every
+    # id <= cursor and taking the next `limit` files -- deterministic and
+    # resumable without loading the full collection into memory first.
+
+    def _paginate_paths(
+        self, paths: list[Path], *, limit: int, cursor: str | None,
+    ) -> tuple[list[Path], str | None, int]:
+        """Slice a sorted id-ordered path list into one page.
+
+        Returns (page_paths, next_cursor, total). `total` is the full
+        collection size (not just this page) so callers can report it in
+        `_meta` without a second pass.
+        """
+        total = len(paths)
+        start = 0
+        if cursor is not None:
+            # Find the first path whose stem is strictly greater than the
+            # cursor. Paths are pre-sorted by stem (id), so this is a single
+            # linear scan -- fine at the sizes a YAML-file-per-artifact KB
+            # can reach before someone needs a real database.
+            for i, p in enumerate(paths):
+                if p.stem > cursor:
+                    start = i
+                    break
+            else:
+                start = total
+        page = paths[start : start + limit]
+        next_cursor = page[-1].stem if (start + limit) < total and page else None
+        return page, next_cursor, total
+
     # --- bootstrap ---------------------------------------------------------
 
     @classmethod
@@ -355,6 +391,39 @@ class KBStore:
                     out.append(src)
         return out
 
+    def list_sources_page(
+        self, *, limit: int, cursor: str | None = None,
+    ) -> tuple[list[Source], str | None, int]:
+        """Cursor-paginated sources, ordered by source id (#245).
+
+        Unlike the other list_*_page methods this can\'t stop reading early
+        at the filesystem level (sources live in per-id subdirectories
+        rather than flat *.yaml/*.md files), but it still avoids
+        deserialising artifacts outside the requested page.
+        """
+        sources_dir = self.kb_dir / "sources"
+        if not sources_dir.is_dir():
+            return [], None, 0
+        sdirs = sorted(
+            d for d in sources_dir.iterdir() if (d / "meta.yaml").exists()
+        )
+        total = len(sdirs)
+        start = 0
+        if cursor is not None:
+            for i, d in enumerate(sdirs):
+                if d.name > cursor:
+                    start = i
+                    break
+            else:
+                start = total
+        page_dirs = sdirs[start : start + limit]
+        items = [
+            Source.model_validate(_yaml_load((d / "meta.yaml").read_text()))
+            for d in page_dirs
+        ]
+        next_cursor = page_dirs[-1].name if (start + limit) < total and page_dirs else None
+        return items, next_cursor, total
+
     # --- graph-integrity helpers ------------------------------------------
 
     # Closes the structural counterpart of the #81 fix: every graph artifact
@@ -458,6 +527,22 @@ class KBStore:
             if (c := _load_or_skip(p, Claim, "claim")) is not None
         ]
 
+    def list_claims_page(
+        self, *, limit: int, cursor: str | None = None,
+    ) -> tuple[list[Claim], str | None, int]:
+        """Cursor-paginated claims, ordered by claim id (#245)."""
+        cdir = self.kb_dir / "claims"
+        if not cdir.is_dir():
+            return [], None, 0
+        paths = sorted(cdir.glob("*.yaml"))
+        page_paths, next_cursor, total = self._paginate_paths(
+            paths, limit=limit, cursor=cursor
+        )
+        items = [
+            Claim.model_validate(_yaml_load(p.read_text())) for p in page_paths
+        ]
+        return items, next_cursor, total
+
     def update_claim(self, claim: Claim) -> Claim:
         if not self._claim_path(claim.id).exists():
             raise ArtifactNotFoundError(f"claim {claim.id}")
@@ -554,6 +639,22 @@ class KBStore:
             for p in sorted(pdir.glob("*.md"))
         ]
 
+    def list_pages_page(
+        self, *, limit: int, cursor: str | None = None,
+    ) -> tuple[list[Page], str | None, int]:
+        """Cursor-paginated pages, ordered by page id (#245)."""
+        pdir = self.kb_dir / "pages"
+        if not pdir.is_dir():
+            return [], None, 0
+        paths = sorted(pdir.glob("*.md"))
+        page_paths, next_cursor, total = self._paginate_paths(
+            paths, limit=limit, cursor=cursor
+        )
+        items = [
+            _deserialize_page(p.read_text(encoding="utf-8")) for p in page_paths
+        ]
+        return items, next_cursor, total
+
     # --- entities ----------------------------------------------------------
 
     def put_entity(self, entity: Entity) -> Entity:
@@ -582,6 +683,22 @@ class KBStore:
             return []
         return [e for p in sorted(d.glob("*.yaml"))
                 if (e := _load_or_skip(p, Entity, "entity")) is not None]
+
+    def list_entities_page(
+        self, *, limit: int, cursor: str | None = None,
+    ) -> tuple[list[Entity], str | None, int]:
+        """Cursor-paginated entities, ordered by entity id (#245)."""
+        d = self.kb_dir / "entities"
+        if not d.is_dir():
+            return [], None, 0
+        paths = sorted(d.glob("*.yaml"))
+        page_paths, next_cursor, total = self._paginate_paths(
+            paths, limit=limit, cursor=cursor
+        )
+        items = [
+            Entity.model_validate(_yaml_load(p.read_text())) for p in page_paths
+        ]
+        return items, next_cursor, total
 
     # --- relations ---------------------------------------------------------
 
@@ -666,6 +783,22 @@ class KBStore:
             return []
         return [r for p in sorted(d.glob("*.yaml"))
                 if (r := _load_or_skip(p, Relation, "relation")) is not None]
+
+    def list_relations_page(
+        self, *, limit: int, cursor: str | None = None,
+    ) -> tuple[list[Relation], str | None, int]:
+        """Cursor-paginated relations, ordered by relation id (#245)."""
+        d = self.kb_dir / "relations"
+        if not d.is_dir():
+            return [], None, 0
+        paths = sorted(d.glob("*.yaml"))
+        page_paths, next_cursor, total = self._paginate_paths(
+            paths, limit=limit, cursor=cursor
+        )
+        items = [
+            Relation.model_validate(_yaml_load(p.read_text())) for p in page_paths
+        ]
+        return items, next_cursor, total
 
     def relations_from(self, node_id: str) -> list[Relation]:
         return [r for r in self.list_relations() if r.source == node_id]
@@ -845,6 +978,60 @@ class KBStore:
                 if status is None or pr.status == status:
                     out.append(pr)
         return out
+
+    def list_proposals_page(
+        self,
+        status: ProposalStatus | None = None,
+        *,
+        limit: int,
+        cursor: str | None = None,
+    ) -> tuple[list[Proposal], str | None, int]:
+        """Cursor-paginated proposals, ordered by proposal id (#245).
+
+        Proposal ids are sortable timestamps (see new_proposal_id), so id
+        order is chronological. Unlike the single-directory list_*_page
+        methods, proposals live across proposed/ and decided/ -- both are
+        merged and re-sorted by id before paging so cursor semantics stay
+        consistent regardless of which directory a proposal currently
+        lives in (e.g. an approved proposal moves from proposed/ to
+        decided/ but keeps its id, so a client paging by id is unaffected
+        by that move happening mid-iteration).
+        """
+        paths: list[Path] = []
+        for sub in ("proposed", "decided"):
+            paths.extend((self.kb_dir / sub).glob("*.yaml"))
+        paths.sort(key=lambda p: p.stem)
+        if status is not None:
+            # Filtering by status requires loading each candidate to check
+            # its status field (status isn't encoded in the filename), so
+            # this path can't skip files purely by cursor position the way
+            # the unfiltered branch does below. It still avoids holding
+            # the full collection in a Python list when filtering produces
+            # fewer than `limit` matches well before the cursor's position.
+            matched: list[Proposal] = []
+            next_cursor: str | None = None
+            for p in paths:
+                if cursor is not None and p.stem <= cursor:
+                    continue
+                pr = Proposal.model_validate(_yaml_load(p.read_text()))
+                if pr.status != status:
+                    continue
+                if len(matched) == limit:
+                    next_cursor = matched[-1].id
+                    break
+                matched.append(pr)
+            total = sum(
+                1 for p in paths
+                if Proposal.model_validate(_yaml_load(p.read_text())).status == status
+            )
+            return matched, next_cursor, total
+        page_paths, next_cursor, total = self._paginate_paths(
+            paths, limit=limit, cursor=cursor
+        )
+        items = [
+            Proposal.model_validate(_yaml_load(p.read_text())) for p in page_paths
+        ]
+        return items, next_cursor, total
 
     def move_proposal_to_decided(self, proposal: Proposal) -> None:
         src = self._proposal_path(proposal.id)

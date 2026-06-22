@@ -209,6 +209,46 @@ def _load_cfg(store: KBStore) -> dict[str, Any]:
     return loaded if isinstance(loaded, dict) else {}
 
 
+_DEFAULT_LIST_LIMIT = 10
+
+
+def _resolve_list_limit(store: KBStore, limit: int | None) -> int:
+    """Resolve the page size for a kb_list_* tool call (#245).
+
+    Mirrors jsonl_server._resolve_list_limit: explicit `limit` wins,
+    otherwise falls back to `retrieval.default_limit` in config.yaml, then
+    a hardcoded default. Clamped to >= 1.
+    """
+    if limit is None:
+        cfg = _load_cfg(store)
+        limit = cfg.get("retrieval", {}).get("default_limit", _DEFAULT_LIST_LIMIT)
+    try:
+        resolved = int(limit)
+    except (TypeError, ValueError):
+        resolved = _DEFAULT_LIST_LIMIT
+    return max(1, resolved)
+
+
+def _paged_envelope(items: list, next_cursor: str | None, total: int) -> dict[str, Any]:
+    """Build the {"items": [...], "_meta": {...}} envelope for kb_list_* (#245).
+
+    Mirrors jsonl_server._paged_envelope so both transports return the
+    same shape for the same method.
+    """
+    return {
+        "items": items,
+        "_meta": {
+            "next_cursor": next_cursor,
+            "total": total,
+            "deprecation": (
+                "kb_list_* responses will only return the {items, _meta} "
+                "envelope in a future release; flat-array responses are "
+                "deprecated as of #245."
+            ),
+        },
+    }
+
+
 @mcp.tool()
 def kb_neighbors(
     node_id: str,
@@ -323,75 +363,126 @@ def kb_diff(old_id: str, new_id: str | None = None) -> dict[str, Any]:
 
 @mcp.tool()
 def kb_list_pages(
-    *,
+    limit: int | None = None,
+    cursor: str | None = None,
     type: str | None = None,
     meta: dict[str, str] | None = None,
     meta_before: dict[str, str] | None = None,
     meta_after: dict[str, str] | None = None,
-) -> list[dict[str, Any]]:
-    """List pages, optionally filtered by kind and frontmatter.
+) -> dict[str, Any]:
+    """List pages with cursor pagination and optional frontmatter filters (#245).
 
+    limit / cursor: page size and resume token (see _meta.next_cursor).
     type: page kind (built-in or config-declared, e.g. "followup").
     meta: frontmatter equality, e.g. {"followup_status": "open"}.
-    meta_before / meta_after: inclusive bounds — numbers or ISO dates,
-    e.g. meta_before={"due_at": "2026-07-10"} for followups due by then.
+    meta_before / meta_after: inclusive bounds on frontmatter values.
     """
-    pages = filter_pages(
-        _store().list_pages(),
+    store = _store()
+    items, next_cursor, total = store.list_pages_page(
+        limit=_resolve_list_limit(store, limit), cursor=cursor
+    )
+    items = list(filter_pages(
+        items,
         kind=type,
         equals=meta,
         before=meta_before,
         after=meta_after,
+    ))
+    return _paged_envelope(
+        [{"id": p.id, "title": p.title, "type": p.type, "tags": p.tags,
+          "metadata": getattr(p, "metadata", {})}
+         for p in items],
+        next_cursor, total,
     )
-    return [
-        {"id": p.id, "title": p.title, "type": p.type, "tags": p.tags, "metadata": p.metadata}
-        for p in pages
-    ]
 
 
 @mcp.tool()
-def kb_list_claims(status: str | None = None) -> list[dict[str, Any]]:
-    """List all claims, optionally filtered by status."""
-    claims = _store().list_claims()
-    if status:
-        claims = [c for c in claims if c.status.value == status]
-    return [c.model_dump(mode="json") for c in claims]
-
-
-@mcp.tool()
-def kb_list_entities(entity_type: str | None = None) -> list[dict[str, Any]]:
-    entities = _store().list_entities()
-    if entity_type:
-        entities = [e for e in entities if e.type.value == entity_type]
-    return [e.model_dump(mode="json") for e in entities]
-
-
-@mcp.tool()
-def kb_list_relations(node_id: str | None = None) -> list[dict[str, Any]]:
-    """List all relations; if node_id is given, only edges touching it."""
+def kb_list_claims(
+    status: str | None = None,
+    limit: int | None = None,
+    cursor: str | None = None,
+) -> dict[str, Any]:
+    """List claims with cursor pagination, optionally filtered by status (#245)."""
     store = _store()
-    rels = store.list_relations()
+    items, next_cursor, total = store.list_claims_page(
+        limit=_resolve_list_limit(store, limit), cursor=cursor
+    )
+    if status:
+        items = [c for c in items if c.status.value == status]
+    return _paged_envelope(
+        [c.model_dump(mode="json") for c in items], next_cursor, total
+    )
+
+
+@mcp.tool()
+def kb_list_entities(
+    entity_type: str | None = None,
+    limit: int | None = None,
+    cursor: str | None = None,
+) -> dict[str, Any]:
+    """List entities with cursor pagination, optionally filtered by type (#245)."""
+    store = _store()
+    items, next_cursor, total = store.list_entities_page(
+        limit=_resolve_list_limit(store, limit), cursor=cursor
+    )
+    if entity_type:
+        items = [e for e in items if e.type.value == entity_type]
+    return _paged_envelope(
+        [e.model_dump(mode="json") for e in items], next_cursor, total
+    )
+
+
+@mcp.tool()
+def kb_list_relations(
+    node_id: str | None = None,
+    limit: int | None = None,
+    cursor: str | None = None,
+) -> dict[str, Any]:
+    """List relations with cursor pagination; if node_id given, only edges touching it (#245)."""
+    store = _store()
+    items, next_cursor, total = store.list_relations_page(
+        limit=_resolve_list_limit(store, limit), cursor=cursor
+    )
     if node_id:
-        rels = [r for r in rels if r.source == node_id or r.target == node_id]
-    return [r.model_dump(mode="json") for r in rels]
+        items = [r for r in items if r.source == node_id or r.target == node_id]
+    return _paged_envelope(
+        [r.model_dump(mode="json") for r in items], next_cursor, total
+    )
 
 
 @mcp.tool()
-def kb_list_sources() -> list[dict[str, Any]]:
-    return [
-        {"id": s.id, "title": s.title, "type": s.type.value,
-         "locator": s.locator, "byte_size": s.byte_size}
-        for s in _store().list_sources()
-    ]
+def kb_list_sources(
+    limit: int | None = None,
+    cursor: str | None = None,
+) -> dict[str, Any]:
+    """List sources with cursor pagination (#245)."""
+    store = _store()
+    items, next_cursor, total = store.list_sources_page(
+        limit=_resolve_list_limit(store, limit), cursor=cursor
+    )
+    return _paged_envelope(
+        [{"id": s.id, "title": s.title, "type": s.type.value,
+          "locator": s.locator, "byte_size": s.byte_size}
+         for s in items],
+        next_cursor, total,
+    )
 
 
 @mcp.tool()
-def kb_list_pending() -> list[dict[str, Any]]:
-    """List proposals awaiting human review."""
-    return [
-        p.model_dump(mode="json")
-        for p in _store().list_proposals(ProposalStatus.PENDING)
-    ]
+def kb_list_pending(
+    limit: int | None = None,
+    cursor: str | None = None,
+) -> dict[str, Any]:
+    """List proposals awaiting human review, with cursor pagination (#245)."""
+    store = _store()
+    items, next_cursor, total = store.list_proposals_page(
+        ProposalStatus.PENDING,
+        limit=_resolve_list_limit(store, limit),
+        cursor=cursor,
+    )
+    return _paged_envelope(
+        [p.model_dump(mode="json") for p in items], next_cursor, total
+    )
 
 
 @mcp.tool()
