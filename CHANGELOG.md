@@ -134,6 +134,16 @@ All notable changes to vouch are documented here. Format follows
   now bounded to 64 MiB up front, mirroring the byte caps on other untrusted
   reads.
 
+### Changed
+- ``kb.list_*`` JSONL/MCP responses now use a dict envelope
+  ``{"items": [...], "_meta": {...}}`` instead of a bare list. A one-release
+  deprecation note lives at ``_meta.deprecation``; read ``result.items`` instead
+  of treating ``result`` as the list. When the KB has recent approved claims,
+  ``_meta.vouch_hot_memory`` carries the same recency sidebar as other read
+  tools (#225).
+- ``kb.capabilities`` advertises the hot-memory contract under ``hot_memory``
+  (sidebar key, list-envelope flag, covered method list).
+
 ## [1.2.1] — 2026-07-06
 
 ### Fixed
@@ -340,6 +350,12 @@ All notable changes to vouch are documented here. Format follows
   as reviewer; a PR opens only when the repo's own test gate is green and the
   reviewer signs off. A sibling tool — it never writes to the KB or the review
   gate. Paired with the `auto-pr` skill.
+- ``_meta.vouch_hot_memory`` on every primary read-side ``kb.*`` response
+  (``kb.search``, ``kb.context``, ``kb.read_*``, ``kb.list_*``): a TTL-cached
+  sidebar of recently approved claims, query-biased where the tool has a
+  natural anchor (entity name/aliases, page title/tags, claim text, search
+  query). ``kb.list_pending`` uses recency only. Meta-tools, write paths, and
+  lifecycle ops are excluded by design (#225).
 - typed page kinds (#234): a KB can declare extra page kinds in
   `.vouch/config.yaml` under `page_kinds`, each with `required_fields`, a
   JSON-Schema-subset `frontmatter_schema`, `required_citations`, and one level

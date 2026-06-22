@@ -512,3 +512,7 @@ class Capabilities(BaseModel):
             '{"openclaw": {"pluginApi": ">=2026.4.0"}}.'
         ),
     )
+    hot_memory: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Hot-memory sidebar contract on read-side kb.* responses",
+    )

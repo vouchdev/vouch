@@ -31,6 +31,7 @@ import yaml
 from . import audit, bundle, health, volunteer_context
 from . import compile as compile_mod
 from . import digest as digest_mod
+from . import hot_memory as hot_mod
 from . import lifecycle as life
 from . import metrics as metrics_mod
 from . import salience as salience_mod
@@ -188,14 +189,18 @@ def _h_search(p: dict) -> dict:
         used = "hybrid"
 
     scoped = filter_hits(s, hits, viewer, limit=limit)
-    return {
+    hits_list = [
+        {"kind": k, "id": i, "snippet": sn, "score": sc, "backend": used}
+        for k, i, sn, sc in scoped
+    ]
+    result: dict[str, Any] = {
         "backend": used,
         "viewer": {"project": viewer.project, "agent": viewer.agent},
-        "hits": [
-            {"kind": k, "id": i, "snippet": sn, "score": sc, "backend": used}
-            for k, i, sn, sc in scoped
-        ],
+        "hits": hits_list,
     }
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        result, s, query=q, exclude_ids=[str(hit["id"]) for hit in hits_list],
+    )
 
 
 def _load_cfg(store: KBStore) -> dict:
@@ -256,7 +261,12 @@ def _h_context(p: dict) -> dict:
         graph_limit=int(p.get("graph_limit", 20)),
         graph_rel_types=p.get("graph_rel_types"),
     )
-    return salience_mod.attach_salience(result, store, session_id, cfg)
+    result = salience_mod.attach_salience(result, store, session_id, cfg)
+    pack_items = result.get("items") if isinstance(result, dict) else None
+    exclude = [it.get("id") for it in pack_items] if isinstance(pack_items, list) else []
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        result, store, query=query, exclude_ids=[i for i in exclude if i],
+    )
 
 
 def _h_synthesize(p: dict) -> dict:
@@ -270,19 +280,39 @@ def _h_synthesize(p: dict) -> dict:
 
 
 def _h_read_page(p: dict) -> dict:
-    return _store().get_page(p["page_id"]).model_dump(mode="json")
+    store = _store()
+    page = store.get_page(p["page_id"])
+    result = page.model_dump(mode="json")
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        result, store, query=hot_mod.query_bias_for_page(page),
+    )
 
 
 def _h_read_claim(p: dict) -> dict:
-    return _store().get_claim(p["claim_id"]).model_dump(mode="json")
+    store = _store()
+    claim = store.get_claim(p["claim_id"])
+    result = claim.model_dump(mode="json")
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        result, store, query=claim.text, exclude_ids=[claim.id],
+    )
 
 
 def _h_read_entity(p: dict) -> dict:
-    return _store().get_entity(p["entity_id"]).model_dump(mode="json")
+    store = _store()
+    entity = store.get_entity(p["entity_id"])
+    result = entity.model_dump(mode="json")
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        result, store, query=hot_mod.query_bias_for_entity(entity),
+    )
 
 
 def _h_read_relation(p: dict) -> dict:
-    return _store().get_relation(p["relation_id"]).model_dump(mode="json")
+    store = _store()
+    relation = store.get_relation(p["relation_id"])
+    result = relation.model_dump(mode="json")
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        result, store, query=None,
+    )
 
 
 def _h_diff(p: dict) -> dict:
@@ -293,49 +323,72 @@ def _h_diff(p: dict) -> dict:
     return asdict(diff_artifacts(_store(), p["old_id"], p.get("new_id")))
 
 
-def _h_list_pages(p: dict) -> list[dict]:
+def _h_list_pages(p: dict) -> dict:
+    store = _store()
     pages = filter_pages(
-        _store().list_pages(),
+        store.list_pages(),
         kind=p.get("type"),
         equals=p.get("meta"),
         before=p.get("meta_before"),
         after=p.get("meta_after"),
     )
-    return [pg.model_dump(mode="json") for pg in pages]
+    items = [pg.model_dump(mode="json") for pg in pages]
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        items, store, query=None, list_envelope=True,
+    )
 
 
-def _h_list_claims(p: dict) -> list[dict]:
-    cs = _store().list_claims()
+def _h_list_claims(p: dict) -> dict:
+    store = _store()
+    cs = store.list_claims()
     if p.get("status"):
         cs = [c for c in cs if c.status.value == p["status"]]
-    return [c.model_dump(mode="json") for c in cs]
+    items = [c.model_dump(mode="json") for c in cs]
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        items, store, query=None, list_envelope=True,
+    )
 
 
-def _h_list_entities(p: dict) -> list[dict]:
-    es = _store().list_entities()
+def _h_list_entities(p: dict) -> dict:
+    store = _store()
+    es = store.list_entities()
     if p.get("entity_type"):
         es = [e for e in es if e.type.value == p["entity_type"]]
-    return [e.model_dump(mode="json") for e in es]
+    items = [e.model_dump(mode="json") for e in es]
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        items, store, query=None, list_envelope=True,
+    )
 
 
-def _h_list_relations(p: dict) -> list[dict]:
-    s = _store()
-    rels = s.list_relations()
+def _h_list_relations(p: dict) -> dict:
+    store = _store()
+    rels = store.list_relations()
     node = p.get("node_id")
     if node:
         rels = [r for r in rels if r.source == node or r.target == node]
-    return [r.model_dump(mode="json") for r in rels]
+    items = [r.model_dump(mode="json") for r in rels]
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        items, store, query=None, list_envelope=True,
+    )
 
 
-def _h_list_sources(_: dict) -> list[dict]:
-    return [s.model_dump(mode="json") for s in _store().list_sources()]
+def _h_list_sources(_: dict) -> dict:
+    store = _store()
+    items = [s.model_dump(mode="json") for s in store.list_sources()]
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        items, store, query=None, list_envelope=True,
+    )
 
 
-def _h_list_pending(_: dict) -> list[dict]:
-    return [
+def _h_list_pending(_: dict) -> dict:
+    store = _store()
+    items = [
         p.model_dump(mode="json")
-        for p in _store().list_proposals(ProposalStatus.PENDING)
+        for p in store.list_proposals(ProposalStatus.PENDING)
     ]
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        items, store, query=None, list_envelope=True,
+    )
 
 
 def _h_triage_pending(p: dict) -> list[dict]:
