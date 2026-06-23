@@ -1,0 +1,39 @@
+name: desktop
+
+on:
+  push:
+    paths:
+      - "desktop/app/**"
+      - "src/vouch/desktop/**"
+      - "tests/test_desktop*.py"
+  pull_request:
+    paths:
+      - "desktop/app/**"
+      - "src/vouch/desktop/**"
+      - "tests/test_desktop*.py"
+
+jobs:
+  python-desktop:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e '.[dev,web]'
+      - run: python -m ruff check src/vouch/desktop tests/test_desktop.py tests/test_desktop_ports.py tests/test_desktop_sidecar.py
+      - run: python -m mypy src/vouch/desktop
+      - run: python -m pytest tests/test_desktop.py tests/test_desktop_ports.py tests/test_desktop_sidecar.py -q
+
+  desktop-typescript:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: desktop/app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: npm ci
+      - run: npm run typecheck

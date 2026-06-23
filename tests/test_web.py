@@ -72,6 +72,7 @@ def test_queue_renders_html_with_pending(client: TestClient, store: KBStore) -> 
     assert pid in r.text
     assert "the queue should render this claim" in r.text
     assert "agent-A" in r.text
+    assert store.root.name in r.text
 
 
 def test_queue_empty_state(client: TestClient) -> None:
@@ -237,6 +238,8 @@ def test_healthz(client: TestClient, store: KBStore) -> None:
     body = r.json()
     assert body["ok"] is True
     assert body["pending"] == 1
+    assert body["kb"] == str(store.root)
+    assert body["kb_label"] == store.root.name
 
 
 # --- bring-up errors ------------------------------------------------------

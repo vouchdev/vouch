@@ -145,7 +145,8 @@ def cli() -> None:
 
 @cli.command()
 @click.option("--path", default=".", type=click.Path(file_okay=False), show_default=True)
-def init(path: str) -> None:
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON instead of human text.")
+def init(path: str, as_json: bool) -> None:
     """Initialise a .vouch/ knowledge base at PATH."""
     root = Path(path).resolve()
     root.mkdir(parents=True, exist_ok=True)
@@ -153,6 +154,17 @@ def init(path: str) -> None:
     seed = seed_starter_kb(store, approved_by=_whoami())
     health.rebuild_index(store)
     audit_mod.log_event(store.kb_dir, event="kb.init", actor=_whoami())
+    if as_json:
+        status = health.status(store)
+        _emit_json({
+            "ok": True,
+            "project_root": str(store.root),
+            "kb_dir": str(store.kb_dir),
+            "claim_id": seed.claim_id if seed.created_anything else "",
+            "starter_present": bool(status.get("claims", 0) >= 1),
+            "label": store.root.name or str(store.root),
+        })
+        return
     click.echo(f"Initialised KB at {store.kb_dir}")
     if seed.created_anything:
         click.echo(f"Seeded starter claim: {seed.claim_id}")
@@ -174,6 +186,80 @@ def discover(path: str) -> None:
     except KBNotFoundError as e:
         click.echo(f"error: {e}", err=True)
         sys.exit(2)
+
+
+# --- desktop shell (issue #207) ------------------------------------------
+
+
+@cli.group()
+def desktop() -> None:
+    """Helpers for the vouch desktop review shell (multi-KB picker)."""
+
+
+@desktop.command("state-show")
+@click.option(
+    "--state-file",
+    type=click.Path(dir_okay=False),
+    default=None,
+    help="Override the default ~/.config/vouch-desktop/state.json path.",
+)
+def desktop_state_show(state_file: str | None) -> None:
+    """Emit the persisted desktop state as JSON."""
+    from .desktop import load_state
+    from .desktop.paths import state_file_path
+
+    path = Path(state_file) if state_file else state_file_path()
+    _emit_json(load_state(path).to_dict())
+
+
+@desktop.command("state-touch")
+@click.argument("project_root", type=click.Path(exists=True, file_okay=False))
+@click.option("--label", default=None, help="Display label for the recent list.")
+@click.option(
+    "--state-file",
+    type=click.Path(dir_okay=False),
+    default=None,
+    help="Override the default state.json path.",
+)
+def desktop_state_touch(
+    project_root: str,
+    label: str | None,
+    state_file: str | None,
+) -> None:
+    """Record a KB open in the desktop recent list."""
+    from .desktop import touch_recent_kb
+    from .desktop.paths import state_file_path
+
+    path = Path(state_file) if state_file else state_file_path()
+    state = touch_recent_kb(project_root, label=label, path=path)
+    _emit_json(state.to_dict())
+
+
+@desktop.command("kb-check")
+@click.argument("selected", type=click.Path(exists=True, file_okay=False))
+def desktop_kb_check(selected: str) -> None:
+    """Validate that SELECTED contains a .vouch/ directory (JSON)."""
+    from .desktop.kb import check_kb_folder
+
+    _emit_json(check_kb_folder(selected).to_dict())
+
+
+@desktop.command("kb-init")
+@click.argument("selected", type=click.Path(file_okay=False))
+@click.option("--actor", default="desktop", show_default=True)
+def desktop_kb_init(selected: str, actor: str) -> None:
+    """Initialise a KB at SELECTED (JSON; for the desktop New KB flow)."""
+    from .desktop.kb import init_kb_at
+
+    _emit_json(init_kb_at(selected, actor=actor))
+
+
+@desktop.command("config-dir")
+def desktop_config_dir() -> None:
+    """Print the XDG config directory for the desktop shell."""
+    from .desktop.paths import config_dir
+
+    click.echo(config_dir())
 
 
 @cli.command()

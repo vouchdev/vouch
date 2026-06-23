@@ -295,6 +295,7 @@ def build_app(
     app.state.store = store
     app.state.hub = hub
     app.state.auth = auth
+    kb_display = store.root.name or str(store.root)
 
     def reviewer() -> str:
         """Reviewer identity. With Bearer auth the token's label wins; without
@@ -357,6 +358,8 @@ def build_app(
         # browser authenticates via the HttpOnly cookie, not via JS).
         ctx.setdefault("auth_enabled", auth.enabled)
         ctx.setdefault("dual_solve_enabled", allow_dual_solve)
+        ctx.setdefault("kb_label", kb_display)
+        ctx.setdefault("kb_root", str(store.root))
         return templates.TemplateResponse(request, name, ctx)
 
     async def _notify(kind: str, **extra: Any) -> None:
@@ -369,6 +372,7 @@ def build_app(
         return {
             "ok": True,
             "kb": str(store.root),
+            "kb_label": kb_display,
             "pending": len(store.list_proposals(ProposalStatus.PENDING)),
             "auth": auth.enabled,
             "clients": hub.client_count,

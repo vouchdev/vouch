@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>vouch desktop</title>
+    <link rel="stylesheet" href="/src/styles/shell.css" />
+    <link rel="stylesheet" href="/src/styles/error-panel.css" />
+    <link rel="stylesheet" href="/src/styles/loading.css" />
+  </head>
+  <body>
+    <div id="app" class="shell" data-view="loading">
+      <section id="loading" class="loading-panel" aria-live="polite">
+        <div class="loading-spinner" aria-hidden="true"></div>
+        <p id="loading-message">starting review console…</p>
+      </section>
+      <section id="error" class="error-panel hidden" role="alert">
+        <h1>could not open knowledge base</h1>
+        <p id="error-message"></p>
+        <p id="error-path" class="error-path"></p>
+        <div class="error-actions">
+          <button id="btn-create-kb" type="button">create KB here</button>
+          <button id="btn-pick-folder" type="button" class="secondary">choose another folder…</button>
+        </div>
+      </section>
+      <section id="welcome" class="welcome-panel hidden">
+        <h1>vouch review</h1>
+        <p>open a project knowledge base to review pending proposals.</p>
+        <div class="welcome-actions">
+          <button id="btn-open-kb" type="button">open KB…</button>
+          <button id="btn-new-kb" type="button" class="secondary">new KB…</button>
+        </div>
+        <ul id="recent-list" class="recent-list"></ul>
+      </section>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

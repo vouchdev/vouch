@@ -50,6 +50,13 @@ All notable changes to vouch are documented here. Format follows
   as reviewer; a PR opens only when the repo's own test gate is green and the
   reviewer signs off. A sibling tool — it never writes to the KB or the review
   gate. Paired with the `auto-pr` skill.
+- **desktop multi-KB picker** ([#207](https://github.com/vouchdev/vouch/issues/207)):
+  Tauri shell under `desktop/app/` with **File → Open KB…**, **Recent KBs**
+  (last five, persisted in `~/.config/vouch-desktop/state.json`), and **New KB…**
+  (`vouch init` then open). Switching KBs restarts the `review-ui` sidecar;
+  window title and masthead show the active project label. Shared Python helpers
+  in `src/vouch/desktop/` plus `vouch desktop *` CLI commands; `vouch init --json`
+  for structured init output; `/healthz` and templates expose `kb_label`.
 - typed page kinds (#234): a KB can declare extra page kinds in
   `.vouch/config.yaml` under `page_kinds`, each with `required_fields`, a
   JSON-Schema-subset `frontmatter_schema`, `required_citations`, and one level

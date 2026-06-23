@@ -1,0 +1,8 @@
+.error-panel h1 {
+  color: var(--vermillion);
+}
+
+#error-message {
+  margin-top: 1rem;
+  line-height: 1.5;
+}

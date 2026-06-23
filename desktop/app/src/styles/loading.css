@@ -1,0 +1,20 @@
+.loading-spinner {
+  width: 2.5rem;
+  height: 2.5rem;
+  margin: 0 auto 1rem;
+  border: 3px solid var(--rule);
+  border-top-color: var(--vermillion);
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+#loading-message {
+  font-family: var(--sans);
+  color: var(--muted);
+}

@@ -1,0 +1,106 @@
+:root {
+  --paper: #f4eedb;
+  --ink: #1a1208;
+  --rule: #1a120833;
+  --muted: #6b5d4a;
+  --vermillion: #a82c1c;
+  --sans: "Inter", system-ui, sans-serif;
+  --serif: "EB Garamond", "Georgia", serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--serif);
+}
+
+.shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 2rem;
+}
+
+.hidden {
+  display: none !important;
+}
+
+button {
+  font-family: var(--sans);
+  font-size: 0.95rem;
+  padding: 0.65rem 1.1rem;
+  border: 1px solid var(--ink);
+  background: var(--ink);
+  color: var(--paper);
+  cursor: pointer;
+}
+
+button.secondary {
+  background: transparent;
+  color: var(--ink);
+}
+
+button:hover {
+  filter: brightness(1.05);
+}
+
+.welcome-panel,
+.error-panel,
+.loading-panel {
+  max-width: 32rem;
+  width: 100%;
+  text-align: center;
+}
+
+.welcome-panel h1,
+.error-panel h1 {
+  font-weight: 400;
+  font-variant: small-caps;
+  letter-spacing: 0.08em;
+}
+
+.welcome-actions,
+.error-actions {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: center;
+  margin-top: 1.5rem;
+  flex-wrap: wrap;
+}
+
+.recent-list {
+  list-style: none;
+  padding: 0;
+  margin: 2rem 0 0;
+  text-align: left;
+}
+
+.recent-item {
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  color: var(--ink);
+  border: none;
+  border-bottom: 1px solid var(--rule);
+  padding: 0.75rem 0;
+}
+
+.recent-empty {
+  color: var(--muted);
+  font-family: var(--sans);
+  font-size: 0.9rem;
+}
+
+.error-path {
+  font-family: var(--sans);
+  font-size: 0.85rem;
+  color: var(--muted);
+  word-break: break-all;
+}

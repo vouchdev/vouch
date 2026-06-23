@@ -139,6 +139,33 @@ v0.1.0 covers the entire `kb.*` surface plus dual-solve. The CLI-only
 orchestration commands (`auto-pr`, `migrate`, `schema`, `sync-*`) are not yet
 surfaced — see the [CHANGELOG](./CHANGELOG.md).
 
+## Tauri review-ui shell (`app/`)
+
+A lighter [Tauri](https://tauri.app/) window around `vouch review-ui` with the
+multi-KB picker from [#207](https://github.com/vouchdev/vouch/issues/207). Use
+this when you only need the review console (queue / approve / reject) with
+**File → Open KB…**, **Recent KBs**, and **New KB…** — not the full Electron
+`kb.*` surface above.
+
+| Path | Purpose |
+|------|---------|
+| [`app/`](./app/) | Tauri + TypeScript shell (menus, sidecar lifecycle, welcome/error UI) |
+| [`app/README.md`](./app/README.md) | Build and dev instructions |
+| [`../src/vouch/desktop/`](../src/vouch/desktop/) | Shared Python helpers (state, KB validation, sidecar spawn) |
+| [`flatpak/`](./flatpak/) | Linux Flatpak packaging (review-ui only; WIP) |
+
+```bash
+pip install -e '.[web]'
+cd desktop/app
+npm install
+python scripts/generate-icons.py
+npm run tauri:dev
+```
+
+Recent KBs persist in `~/.config/vouch-desktop/state.json` (XDG;
+`%APPDATA%\vouch-desktop` on Windows). From the monorepo root:
+`make desktop-typecheck`.
+
 ## License
 
 MIT.

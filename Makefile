@@ -1,4 +1,4 @@
-.PHONY: help install dev test test-cov lint format type check build clean examples-screenshots
+.PHONY: help install dev test test-cov lint format type check build clean examples-screenshots desktop-typecheck
 
 PY ?= python
 PIP ?= $(PY) -m pip
@@ -16,6 +16,7 @@ help:
 	@echo "  make build         build sdist + wheel"
 	@echo "  make clean         remove caches, build artifacts, *.egg-info"
 	@echo "  make examples-screenshots  re-render docs/img/examples/*.svg"
+	@echo "  make desktop-typecheck  npm typecheck in desktop/app (Tauri shell)"
 
 install:
 	$(PIP) install -e '.[dev]'
@@ -51,3 +52,6 @@ clean:
 	       .pytest_cache .ruff_cache .mypy_cache \
 	       coverage.xml .coverage htmlcov
 	find . -type d -name __pycache__ -prune -exec rm -rf {} +
+
+desktop-typecheck:
+	cd desktop/app && npm ci && npm run typecheck
