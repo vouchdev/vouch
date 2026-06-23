@@ -18,6 +18,12 @@
       "title": "Host Compat",
       "type": "object"
     },
+    "hot_memory": {
+      "additionalProperties": true,
+      "description": "Hot-memory sidebar contract on read-side kb.* responses",
+      "title": "Hot Memory",
+      "type": "object"
+    },
     "knowledge_capability": {
       "additionalProperties": true,
       "title": "Knowledge Capability",
