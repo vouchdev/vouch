@@ -49,6 +49,8 @@ def test_manifest_runtime_and_permissions(manifest_text: str) -> None:
 def test_manifest_installs_web_extra(manifest_text: str) -> None:
     assert ".[web]" in manifest_text
     assert "name: vouch-desktop" in manifest_text
+    assert "--share=network" in manifest_text
+    assert "build-args:" in manifest_text
 
 
 def test_desktop_entry_points_at_launcher() -> None:

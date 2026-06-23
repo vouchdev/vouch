@@ -177,6 +177,20 @@ def validate_manifest_content(report: ValidationReport, root: Path = FLATPAK_DIR
     if ".[web]" not in text:
         report.add("error", "pip install must include [web] extra for review-ui", str(path))
 
+    if "name: vouch" in text and "build-args:" in text and "--share=network" not in text:
+        report.add(
+            "error",
+            "vouch module build needs --share=network for pip/PyPI during flatpak build",
+            str(path),
+        )
+
+    if "--no-build-isolation" in text and "hatchling" not in text:
+        report.add(
+            "warning",
+            "--no-build-isolation requires hatchling pre-installed in the build sandbox",
+            str(path),
+        )
+
 
 def validate_desktop_entry(report: ValidationReport, root: Path = FLATPAK_DIR) -> None:
     path = root / f"{APP_ID}.desktop"

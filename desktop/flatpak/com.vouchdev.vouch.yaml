@@ -30,9 +30,12 @@ modules:
       env:
         PIP_DISABLE_PIP_VERSION_CHECK: '1'
         PYTHONNOUSERSITE: '1'
+      # pip resolves hatchling + runtime deps from PyPI during the build.
+      build-args:
+        - --share=network
     build-commands:
-      # install from the copied repo root; [web] pulls fastapi/uvicorn/jinja2.
-      - pip3 install --prefix=${FLATPAK_DEST} --no-build-isolation '.[web]'
+      # default build isolation pulls hatchling (pyproject build-system) automatically.
+      - pip3 install --prefix=${FLATPAK_DEST} '.[web]'
     sources:
       - type: dir
         path: ../..

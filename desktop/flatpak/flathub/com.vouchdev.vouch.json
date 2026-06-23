@@ -19,10 +19,13 @@
         "env": {
           "PIP_DISABLE_PIP_VERSION_CHECK": "1",
           "PYTHONNOUSERSITE": "1"
-        }
+        },
+        "build-args": [
+          "--share=network"
+        ]
       },
       "build-commands": [
-        "pip3 install --prefix=${FLATPAK_DEST} --no-build-isolation '.[web]'"
+        "pip3 install --prefix=${FLATPAK_DEST} '.[web]'"
       ],
       "sources": [
         {
