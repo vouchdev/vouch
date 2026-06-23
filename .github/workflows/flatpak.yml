@@ -49,11 +49,11 @@ jobs:
           sudo apt-get install -y flatpak flatpak-builder
 
       - name: add flathub
-        run: flatpak remote-add --if-not-exists --user flathub https://flathub.org/repo/flathub.flatpakrepo
+        run: sudo flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 
       - name: install runtime 23.08
         run: |
-          flatpak install -y --user flathub \
+          sudo flatpak install -y flathub \
             org.freedesktop.Platform//23.08 \
             org.freedesktop.Sdk//23.08
 
@@ -63,8 +63,7 @@ jobs:
       - name: build
         run: |
           cd desktop/flatpak
-          flatpak-builder --repo=repo --force-clean --install-deps-from=flathub \
-            build-dir com.vouchdev.vouch.yaml
+          flatpak-builder --repo=repo --force-clean build-dir com.vouchdev.vouch.yaml
 
       - name: upload bundle artifact
         uses: actions/upload-artifact@v7

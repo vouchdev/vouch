@@ -118,9 +118,9 @@ def test_validate_module_reports_clean() -> None:
     assert report.ok(), [f"{i.level}: {i.message}" for i in report.errors]
 
 
-def test_manifest_excludes_build_artifacts(manifest_text: str) -> None:
-    assert "desktop/flatpak/build-dir" in manifest_text
-    assert ".venv" in manifest_text
+def test_manifest_sources_repo_root(manifest_text: str) -> None:
+    assert "type: dir" in manifest_text
+    assert "path: ../.." in manifest_text
 
 
 def test_issue_211_acceptance_documented() -> None:

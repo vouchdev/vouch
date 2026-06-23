@@ -36,20 +36,6 @@ modules:
     sources:
       - type: dir
         path: ../..
-        exclude:
-          - .git
-          - .github
-          - .venv
-          - .mypy_cache
-          - .pytest_cache
-          - .ruff_cache
-          - build
-          - dist
-          - htmlcov
-          - desktop/flatpak/build-dir
-          - desktop/flatpak/.flatpak-builder
-          - '**/__pycache__'
-          - '**/*.pyc'
 
   # --- launcher, desktop entry, metainfo, icons -------------------------------
   - name: vouch-desktop

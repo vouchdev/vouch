@@ -160,6 +160,14 @@ def validate_manifest_content(report: ValidationReport, root: Path = FLATPAK_DIR
             str(path),
         )
 
+    if "exclude:" in text and "type: dir" in text:
+        report.add(
+            "warning",
+            "dir sources do not support exclude on older flatpak-builder; "
+            "use a git source or staging module instead",
+            str(path),
+        )
+
     if "name: vouch" not in text:
         report.add("error", "modules must include vouch python module", str(path))
 
