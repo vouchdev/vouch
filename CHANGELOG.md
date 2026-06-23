@@ -50,6 +50,11 @@ All notable changes to vouch are documented here. Format follows
   as reviewer; a PR opens only when the repo's own test gate is green and the
   reviewer signs off. A sibling tool — it never writes to the KB or the review
   gate. Paired with the `auto-pr` skill.
+- flatpak desktop package (#211): `desktop/flatpak/com.vouchdev.vouch.yaml`
+  manifest on `org.freedesktop.Platform//23.08` with `--filesystem=home` and
+  `--share=network`, shipping `vouch review-ui` via a `vouch-review-ui` launcher.
+  Includes AppStream metainfo, hicolor icons, Flathub submission template,
+  validators (`tests/test_flatpak.py`), and a `flatpak` CI workflow.
 - typed page kinds (#234): a KB can declare extra page kinds in
   `.vouch/config.yaml` under `page_kinds`, each with `required_fields`, a
   JSON-Schema-subset `frontmatter_schema`, `required_citations`, and one level

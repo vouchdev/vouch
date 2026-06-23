@@ -1,0 +1,13 @@
+# Pinned runtime dependencies for the Flatpak [web] install path (#211).
+# Mirrors pyproject.toml core + web extras; regenerate with:
+#   desktop/flatpak/scripts/generate-requirements.py
+
+pydantic>=2.13.4,<3
+click>=8.4.0,<9
+pyyaml>=6,<7
+mcp>=1.0,<2
+fastapi>=0.115,<1
+jinja2>=3,<4
+python-multipart>=0.0.9
+uvicorn>=0.30,<1
+websockets>=12,<16

@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.vouchdev.vouch</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>Vouch</name>
+  <summary>Review-gated knowledge base for LLM agents</summary>
+  <description>
+    <p>
+      Vouch is a git-native knowledge base where every write goes through a human
+      review gate. Agents propose claims and pages; you approve them with the
+      review console or the CLI. Approved artifacts are plain YAML and markdown
+      on disk — diffable in PRs, auditable, and portable.
+    </p>
+    <p>
+      This Flatpak ships the browser-based review console
+      (<code>vouch review-ui</code>): a local FastAPI server that lists pending
+      proposals, shows diffs, and records approve/reject decisions in the audit
+      log. Pair it with the <code>vouch</code> CLI or an MCP host adapter for
+      the full propose → review → commit loop.
+    </p>
+    <p>
+      Filesystem access is limited to your home directory so vouch can read and
+      write <code>.vouch/</code> trees under your projects and
+      <code>~/.vouch/</code>.
+    </p>
+  </description>
+  <launchable type="desktop-id">com.vouchdev.vouch.desktop</launchable>
+  <developer id="com.vouchdev">
+    <name>vouchdev</name>
+  </developer>
+  <url type="homepage">https://github.com/vouchdev/vouch</url>
+  <url type="bugtracker">https://github.com/vouchdev/vouch/issues</url>
+  <url type="vcs-browser">https://github.com/vouchdev/vouch</url>
+  <url type="help">https://github.com/vouchdev/vouch/blob/main/docs/getting-started.md</url>
+  <content_rating type="oars-1.1"/>
+  <categories>
+    <category>Development</category>
+    <category>Office</category>
+  </categories>
+  <keywords>
+    <keyword>vouch</keyword>
+    <keyword>knowledge base</keyword>
+    <keyword>review</keyword>
+    <keyword>llm</keyword>
+    <keyword>mcp</keyword>
+    <keyword>agents</keyword>
+  </keywords>
+  <branding>
+    <color type="primary" scheme_preference="light">#4f5d9e</color>
+    <color type="primary" scheme_preference="dark">#1e2a44</color>
+  </branding>
+  <screenshots>
+    <screenshot type="default">
+      <caption>Review queue — pending proposals awaiting human approval</caption>
+      <image>https://raw.githubusercontent.com/vouchdev/vouch/main/desktop/flatpak/screenshots/queue.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Proposal detail — diff and metadata before approve/reject</caption>
+      <image>https://raw.githubusercontent.com/vouchdev/vouch/main/desktop/flatpak/screenshots/detail.png</image>
+    </screenshot>
+  </screenshots>
+  <releases>
+    <release version="0.0.1" date="2026-06-22">
+      <description>
+        <p>Initial Flatpak packaging for the vouch review console (#211).</p>
+      </description>
+    </release>
+  </releases>
+</component>

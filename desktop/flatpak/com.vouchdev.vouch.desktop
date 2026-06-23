@@ -1,0 +1,22 @@
+[Desktop Entry]
+Type=Application
+Name=Vouch
+GenericName=Review Console
+Comment=Review-gated knowledge base for LLM agents
+Exec=vouch-review-ui
+Icon=com.vouchdev.vouch
+Terminal=false
+Categories=Development;Office;TextEditor;
+Keywords=vouch;knowledge;review;agent;mcp;kb;
+StartupNotify=true
+StartupWMClass=vouch-review-ui
+MimeType=
+X-Flatpak-RenamedFrom=vouch.desktop;
+
+[Desktop Action OpenQueue]
+Name=Open review queue
+Exec=vouch-review-ui
+
+[Desktop Action OpenHeadless]
+Name=Start without opening browser
+Exec=vouch-review-ui --no-open-browser

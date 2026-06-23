@@ -1,0 +1,5 @@
+# Flathub submission helpers (#211).
+#
+# Flathub hosts manifests in a separate git repository per app. After this
+# upstream manifest lands, open a PR against https://github.com/flathub/flathub
+# with the generated com.vouchdev.vouch.json pointing at a release tag.

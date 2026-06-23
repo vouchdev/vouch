@@ -1,0 +1,76 @@
+# flatpak-builder manifest for vouch review-ui (#211).
+# Build from this directory:
+#   flatpak-builder --user --install --force-clean build-dir com.vouchdev.vouch.yaml
+#
+# Runtime: org.freedesktop.Platform//23.08 (Fedora 40+, Arch, any Flathub desktop).
+# v1 simplification: --filesystem=home covers ~/.vouch/ and project KB trees under $HOME.
+
+id: com.vouchdev.vouch
+runtime: org.freedesktop.Platform
+runtime-version: '23.08'
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.python3
+
+add-extensions:
+  org.freedesktop.Platform.python3:
+    version: '23.08'
+    directory: lib/python3.11
+
+command: vouch-review-ui
+
+finish-args:
+  # uvicorn binds localhost; browser loads the review console.
+  - --share=network
+  # read/write KB dirs under the user's home (incl. ~/.vouch/).
+  - --filesystem=home
+  # xdg-open / default browser via the desktop portal.
+  - --talk-name=org.freedesktop.portal.Desktop
+  - --socket=wayland
+  - --socket=fallback-x11
+
+modules:
+  # --- python application (vouch-kb + [web] extra) ----------------------------
+  - name: vouch
+    buildsystem: simple
+    build-options:
+      append-path: /usr/lib/sdk/python3/bin
+      env:
+        PIP_DISABLE_PIP_VERSION_CHECK: '1'
+        PYTHONNOUSERSITE: '1'
+    build-commands:
+      # install from the copied repo root; [web] pulls fastapi/uvicorn/jinja2.
+      - pip3 install --prefix=${FLATPAK_DEST} --no-build-isolation '.[web]'
+    sources:
+      - type: dir
+        path: ../..
+        exclude:
+          - .git
+          - .github
+          - .venv
+          - .mypy_cache
+          - .pytest_cache
+          - .ruff_cache
+          - build
+          - dist
+          - htmlcov
+          - desktop/flatpak/build-dir
+          - desktop/flatpak/.flatpak-builder
+          - '**/__pycache__'
+          - '**/*.pyc'
+
+  # --- launcher, desktop entry, metainfo, icons -------------------------------
+  - name: vouch-desktop
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 vouch-review-ui.sh ${FLATPAK_DEST}/bin/vouch-review-ui
+      - install -Dm644 com.vouchdev.vouch.desktop ${FLATPAK_DEST}/share/applications/com.vouchdev.vouch.desktop
+      - install -Dm644 com.vouchdev.vouch.metainfo.xml ${FLATPAK_DEST}/share/metainfo/com.vouchdev.vouch.metainfo.xml
+      - |
+        for size in 16 32 48 64 128 256 512; do
+          install -Dm644 share/icons/hicolor/${size}x${size}/apps/com.vouchdev.vouch.png \
+            ${FLATPAK_DEST}/share/icons/hicolor/${size}x${size}/apps/com.vouchdev.vouch.png
+        done
+    sources:
+      - type: dir
+        path: .

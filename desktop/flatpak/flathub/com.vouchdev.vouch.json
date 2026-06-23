@@ -1,0 +1,65 @@
+{
+  "id": "com.vouchdev.vouch",
+  "runtime": "org.freedesktop.Platform",
+  "runtime-version": "23.08",
+  "sdk": "org.freedesktop.Sdk",
+  "sdk-extensions": [
+    "org.freedesktop.Sdk.Extension.python3"
+  ],
+  "add-extensions": {
+    "org.freedesktop.Platform.python3": {
+      "version": "23.08",
+      "directory": "lib/python3.11"
+    }
+  },
+  "command": "vouch-review-ui",
+  "finish-args": [
+    "--share=network",
+    "--filesystem=home",
+    "--talk-name=org.freedesktop.portal.Desktop",
+    "--socket=wayland",
+    "--socket=fallback-x11"
+  ],
+  "modules": [
+    {
+      "name": "vouch",
+      "buildsystem": "simple",
+      "build-options": {
+        "append-path": "/usr/lib/sdk/python3/bin",
+        "env": {
+          "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+          "PYTHONNOUSERSITE": "1"
+        }
+      },
+      "build-commands": [
+        "pip3 install --prefix=${FLATPAK_DEST} --no-build-isolation '.[web]'"
+      ],
+      "sources": [
+        {
+          "type": "git",
+          "url": "https://github.com/vouchdev/vouch.git",
+          "tag": "v0.0.1",
+          "commit": "REPLACE_WITH_TAG_COMMIT"
+        }
+      ]
+    },
+    {
+      "name": "vouch-desktop",
+      "buildsystem": "simple",
+      "build-commands": [
+        "install -Dm755 desktop/flatpak/vouch-review-ui.sh ${FLATPAK_DEST}/bin/vouch-review-ui",
+        "install -Dm644 desktop/flatpak/com.vouchdev.vouch.desktop ${FLATPAK_DEST}/share/applications/com.vouchdev.vouch.desktop",
+        "install -Dm644 desktop/flatpak/com.vouchdev.vouch.metainfo.xml ${FLATPAK_DEST}/share/metainfo/com.vouchdev.vouch.metainfo.xml",
+        "for size in 16 32 48 64 128 256 512; do install -Dm644 desktop/flatpak/share/icons/hicolor/${size}x${size}/apps/com.vouchdev.vouch.png ${FLATPAK_DEST}/share/icons/hicolor/${size}x${size}/apps/com.vouchdev.vouch.png; done"
+      ],
+      "sources": [
+        {
+          "type": "git",
+          "url": "https://github.com/vouchdev/vouch.git",
+          "tag": "v0.0.1",
+          "commit": "REPLACE_WITH_TAG_COMMIT"
+        }
+      ]
+    }
+  ]
+}

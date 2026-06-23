@@ -133,6 +133,18 @@ To ship a zero-Python install, freeze vouch with PyInstaller into
 See [`docs/architecture.md`](./docs/architecture.md) for the full design,
 including the method-by-method coverage table.
 
+## Linux packaging
+
+Sandboxed Linux installs for the **review console** live under [`flatpak/`](flatpak/):
+
+| Path | Format | Status |
+|---|---|---|
+| [`flatpak/`](flatpak/) | Flatpak (`com.vouchdev.vouch`) | #211 — `org.freedesktop.Platform//23.08` |
+
+Snap packaging is tracked separately. Each format keeps its own manifest language
+and runtime base. See [`docs/desktop-flatpak.md`](../docs/desktop-flatpak.md) and
+[`flatpak/README.md`](flatpak/README.md) for build and Flathub submission notes.
+
 ## Status
 
 v0.1.0 covers the entire `kb.*` surface plus dual-solve. The CLI-only

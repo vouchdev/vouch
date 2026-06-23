@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Vouch">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f1f3f7"/>
+      <stop offset="100%" stop-color="#e2e6f3"/>
+    </linearGradient>
+    <linearGradient id="bar" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#4f5d9e"/>
+      <stop offset="100%" stop-color="#1e2a44"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="96" fill="url(#bg)"/>
+  <rect x="108" y="96" width="56" height="320" rx="8" fill="url(#bar)"/>
+  <text x="200" y="290" font-family="system-ui, -apple-system, Segoe UI, sans-serif"
+        font-size="148" font-weight="800" fill="#1e2a44" letter-spacing="-4">v</text>
+  <circle cx="392" cy="360" r="28" fill="none" stroke="#4f5d9e" stroke-width="12"/>
+  <path d="M392 332 v20 M392 368 v20 M374 360 h20 M390 360 h20"
+        stroke="#4f5d9e" stroke-width="10" stroke-linecap="round"/>
+</svg>

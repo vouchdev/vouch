@@ -14,6 +14,7 @@ help:
 	@echo "  make type          mypy"
 	@echo "  make check         lint + type + test"
 	@echo "  make build         build sdist + wheel"
+	@echo "  make flatpak       validate flatpak packaging (icons + manifest)"
 	@echo "  make clean         remove caches, build artifacts, *.egg-info"
 	@echo "  make examples-screenshots  re-render docs/img/examples/*.svg"
 
@@ -45,6 +46,11 @@ examples-screenshots:
 build:
 	$(PY) -m pip install --upgrade build
 	$(PY) -m build
+
+flatpak:
+	$(PY) desktop/flatpak/scripts/generate-icons.py
+	$(PY) desktop/flatpak/scripts/validate-manifest.py --strict
+	$(PY) -m pytest tests/test_flatpak.py -q
 
 clean:
 	rm -rf build dist *.egg-info src/*.egg-info \
