@@ -1457,6 +1457,49 @@ def search(
             click.echo(f"{k}/{i}\t{snip}  ({used})")
 
 
+@cli.command(name="search-diagnose")
+@click.argument("query")
+@click.option("--target-kind", required=True,
+              type=click.Choice(["claim", "page", "entity", "source", "relation", "evidence"]))
+@click.option("--target-id", required=True)
+@click.option("--limit", "-n", default=10, show_default=True, type=int)
+@click.option(
+    "--backend",
+    type=click.Choice(["auto", "embedding", "fts5", "substring", "hybrid"]),
+    default="auto",
+    show_default=True,
+)
+@click.option("--min-score", default=0.0, show_default=True, type=float)
+@click.option("--project", default=None, help="Viewer project for scope filtering.")
+@click.option("--agent", default=None, help="Viewer agent for scope filtering.")
+def search_diagnose(
+    query: str,
+    target_kind: str,
+    target_id: str,
+    limit: int,
+    backend: str,
+    min_score: float,
+    project: str | None,
+    agent: str | None,
+) -> None:
+    """Explain whether a target artifact appears in search results."""
+    from .search_diagnostics import diagnose_search
+
+    store = _load_store()
+    with _cli_errors():
+        _emit_json(diagnose_search(
+            store,
+            query=query,
+            target_kind=target_kind,
+            target_id=target_id,
+            limit=limit,
+            backend=backend,
+            min_score=min_score,
+            project=project,
+            agent=agent,
+        ))
+
+
 @cli.command()
 @click.argument("node_id")
 @click.option("--depth", default=1, show_default=True, type=int)

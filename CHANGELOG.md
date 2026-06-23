@@ -7,6 +7,10 @@ All notable changes to vouch are documented here. Format follows
 ## [Unreleased]
 
 ### Added
+- `vouch search-diagnose` / `kb.search_diagnose` — explain whether a target
+  claim, page, entity, source, relation, or evidence record appears in
+  retrieval results, including artifact existence, derived-index presence,
+  raw/scoped rank, viewer scope, backend used, warnings, and returned hits.
 - typed page kinds (#234): a KB can declare extra page kinds in
   `.vouch/config.yaml` under `page_kinds`, each with `required_fields`, a
   JSON-Schema-subset `frontmatter_schema`, `required_citations`, and one level

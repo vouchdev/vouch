@@ -50,6 +50,7 @@ from .proposals import (
     reject,
     reject_auto_extracted,
 )
+from .search_diagnostics import diagnose_search
 from .stats import collect_stats
 from .storage import (
     ArtifactNotFoundError,
@@ -160,6 +161,20 @@ def _h_search(p: dict) -> dict:
             for k, i, sn, sc in scoped
         ],
     }
+
+
+def _h_search_diagnose(p: dict) -> dict:
+    return diagnose_search(
+        _store(),
+        query=p["query"],
+        target_kind=p["target_kind"],
+        target_id=p["target_id"],
+        limit=int(p.get("limit", 10)),
+        backend=p.get("backend", "auto"),
+        min_score=float(p.get("min_score", 0.0)),
+        project=p.get("project"),
+        agent=p.get("agent"),
+    )
 
 
 def _load_cfg(store: KBStore) -> dict:
@@ -637,6 +652,7 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.status": _h_status,
     "kb.stats": _h_stats,
     "kb.search": _h_search,
+    "kb.search_diagnose": _h_search_diagnose,
     "kb.neighbors": _h_neighbors,
     "kb.context": _h_context,
     "kb.synthesize": _h_synthesize,

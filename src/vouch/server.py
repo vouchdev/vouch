@@ -42,6 +42,7 @@ from .proposals import (
     reject_auto_extracted,
 )
 from .scoping import filter_hits, scoped_fetch_limit, viewer_from
+from .search_diagnostics import diagnose_search
 from .stats import collect_stats
 from .storage import (
     ArtifactNotFoundError,
@@ -181,6 +182,32 @@ def _load_cfg(store: KBStore) -> dict[str, Any]:
     except Exception:
         return {}
     return loaded if isinstance(loaded, dict) else {}
+
+
+@mcp.tool()
+def kb_search_diagnose(
+    query: str,
+    target_kind: str,
+    target_id: str,
+    *,
+    limit: int = 10,
+    backend: str = "auto",
+    min_score: float = 0.0,
+    project: str | None = None,
+    agent: str | None = None,
+) -> dict[str, Any]:
+    """Explain whether a target artifact appears in search results."""
+    return diagnose_search(
+        _store(),
+        query=query,
+        target_kind=target_kind,
+        target_id=target_id,
+        limit=limit,
+        backend=backend,
+        min_score=min_score,
+        project=project,
+        agent=agent,
+    )
 
 
 @mcp.tool()
