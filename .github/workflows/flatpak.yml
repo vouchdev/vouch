@@ -55,9 +55,7 @@ jobs:
         run: |
           flatpak install -y --user flathub \
             org.freedesktop.Platform//23.08 \
-            org.freedesktop.Sdk//23.08 \
-            org.freedesktop.Sdk.Extension.python3//23.08 \
-            org.freedesktop.Platform.Extension.python3//23.08
+            org.freedesktop.Sdk//23.08
 
       - name: generate icons
         run: python desktop/flatpak/scripts/generate-icons.py
@@ -65,7 +63,8 @@ jobs:
       - name: build
         run: |
           cd desktop/flatpak
-          flatpak-builder --repo=repo --force-clean build-dir com.vouchdev.vouch.yaml
+          flatpak-builder --repo=repo --force-clean --install-deps-from=flathub \
+            build-dir com.vouchdev.vouch.yaml
 
       - name: upload bundle artifact
         uses: actions/upload-artifact@v7

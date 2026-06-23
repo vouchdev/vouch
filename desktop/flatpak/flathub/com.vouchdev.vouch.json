@@ -3,15 +3,6 @@
   "runtime": "org.freedesktop.Platform",
   "runtime-version": "23.08",
   "sdk": "org.freedesktop.Sdk",
-  "sdk-extensions": [
-    "org.freedesktop.Sdk.Extension.python3"
-  ],
-  "add-extensions": {
-    "org.freedesktop.Platform.python3": {
-      "version": "23.08",
-      "directory": "lib/python3.11"
-    }
-  },
   "command": "vouch-review-ui",
   "finish-args": [
     "--share=network",
@@ -25,7 +16,6 @@
       "name": "vouch",
       "buildsystem": "simple",
       "build-options": {
-        "append-path": "/usr/lib/sdk/python3/bin",
         "env": {
           "PIP_DISABLE_PIP_VERSION_CHECK": "1",
           "PYTHONNOUSERSITE": "1"

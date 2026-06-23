@@ -6,7 +6,7 @@ Targets Fedora 40+, Arch, and any desktop with Flathub.
 ## Quick start
 
 ```bash
-# one-time runtime (org.freedesktop.Platform//23.08)
+# one-time runtime (org.freedesktop.Platform//23.08 + Sdk; python3 is in the Sdk)
 ./scripts/install-runtime.sh
 
 # build + install for the current user
@@ -68,5 +68,5 @@ Acceptance:
 ## Runtime
 
 - **Base:** `org.freedesktop.Platform//23.08`
-- **Python:** SDK/runtime `Extension.python3` (3.11)
+- **Python:** bundled in `org.freedesktop.Sdk` (no separate Extension.python3 on Flathub)
 - **Package:** `pip install '.[web]'` — no bundled CPython upgrade automation

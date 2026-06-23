@@ -146,8 +146,19 @@ def validate_manifest_content(report: ValidationReport, root: Path = FLATPAK_DIR
     for arg in sorted(missing_recommended):
         report.add("warning", f"finish-args missing recommended {arg}", str(path))
 
-    if "org.freedesktop.Sdk.Extension.python3" not in text:
-        report.add("error", "sdk-extensions must include python3 extension", str(path))
+    if "org.freedesktop.Sdk.Extension.python3" in text:
+        report.add(
+            "error",
+            "do not use Sdk.Extension.python3 — python3 ships in org.freedesktop.Sdk",
+            str(path),
+        )
+
+    if "/usr/lib/sdk/python3" in text:
+        report.add(
+            "error",
+            "do not append-path /usr/lib/sdk/python3 — use the SDK's built-in pip3",
+            str(path),
+        )
 
     if "name: vouch" not in text:
         report.add("error", "modules must include vouch python module", str(path))

@@ -6,8 +6,6 @@ RUNTIME_VERSION="${FLATPAK_RUNTIME_VERSION:-23.08}"
 
 flatpak install -y --user flathub \
   "org.freedesktop.Platform//${RUNTIME_VERSION}" \
-  "org.freedesktop.Sdk//${RUNTIME_VERSION}" \
-  "org.freedesktop.Sdk.Extension.python3//${RUNTIME_VERSION}" \
-  "org.freedesktop.Platform.Extension.python3//${RUNTIME_VERSION}"
+  "org.freedesktop.Sdk//${RUNTIME_VERSION}"
 
-echo "runtime ${RUNTIME_VERSION} ready"
+echo "runtime ${RUNTIME_VERSION} ready (python3 ships in the SDK)"
