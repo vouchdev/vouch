@@ -1,6 +1,6 @@
 """Tests for desktop port selection."""
 
-from vouch.desktop.ports import pick_free_port, _port_available
+from vouch.desktop.ports import _port_available, pick_free_port
 
 
 def test_pick_free_port_returns_bindable_port() -> None:
