@@ -8,12 +8,15 @@ is preserved: nothing is auto-approved.
 """
 from __future__ import annotations
 
+import json
 import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-__all__ = ["Candidate", "Issue", "parse_issue_ref"]
+from .auto_pr import Runner
+
+__all__ = ["Candidate", "Issue", "fetch_issue", "parse_issue_ref"]
 
 
 def _require_engines() -> None:
@@ -59,3 +62,31 @@ def parse_issue_ref(ref: str) -> tuple[str | None, str]:
     if re.search(r"github\.com/[^/\s]+/[^/\s]+/issues/\d+", r):
         return None, r
     raise ValueError(f"cannot parse github issue from {ref!r}")
+
+
+def fetch_issue(ref: str, runner: Runner) -> Issue:
+    """Fetch issue title and body via ``gh issue view``.
+
+    Shells out to ``gh issue view`` through an injectable ``Runner`` so it is
+    testable against ``FakeRunner`` (no network). The runner must return a
+    ``RunResult`` with a json stdout on success (code 0).
+    """
+    repo, locator = parse_issue_ref(ref)
+    argv = ["gh", "issue", "view", locator, "--json", "number,title,body,url"]
+    if repo:
+        argv += ["--repo", repo]
+    res = runner.run(argv)
+    if res.code != 0:
+        raise RuntimeError(
+            f"could not fetch issue {ref!r}: {res.stderr.strip()[:300]}"
+        )
+    try:
+        data = json.loads(res.stdout or "{}")
+    except json.JSONDecodeError as e:
+        raise RuntimeError(f"gh returned non-json for {ref!r}") from e
+    return Issue(
+        title=str(data.get("title", "")).strip(),
+        body=str(data.get("body", "") or ""),
+        number=data.get("number"),
+        url=data.get("url"),
+    )

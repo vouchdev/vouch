@@ -45,3 +45,26 @@ def test_require_engines_raises_when_missing(monkeypatch):
     monkeypatch.setattr(ds.shutil, "which", lambda b: None)
     with pytest.raises(RuntimeError, match="not on PATH"):
         ds._require_engines()
+
+
+def test_fetch_issue_url_no_repo_flag():
+    payload = '{"number": 7, "title": "Bug in parser", "body": "boom", "url": "u"}'
+    fr = FakeRunner([(["gh", "issue", "view"], ap.RunResult(0, payload, ""))])
+    issue = ds.fetch_issue("https://github.com/o/n/issues/7", fr)
+    assert issue.number == 7 and issue.title == "Bug in parser"
+    view = next(c for c in fr.calls if c[:3] == ["gh", "issue", "view"])
+    assert "--repo" not in view
+
+
+def test_fetch_issue_shorthand_adds_repo_flag():
+    payload = '{"number": 9, "title": "t", "body": "", "url": "u"}'
+    fr = FakeRunner([(["gh", "issue", "view"], ap.RunResult(0, payload, ""))])
+    ds.fetch_issue("o/n#9", fr)
+    view = next(c for c in fr.calls if c[:3] == ["gh", "issue", "view"])
+    assert "--repo" in view and "o/n" in view and "9" in view
+
+
+def test_fetch_issue_raises_on_gh_error():
+    fr = FakeRunner([(["gh", "issue", "view"], ap.RunResult(1, "", "not found"))])
+    with pytest.raises(RuntimeError, match="could not fetch issue"):
+        ds.fetch_issue("https://github.com/o/n/issues/1", fr)
