@@ -545,12 +545,12 @@ def test_record_to_kb_proposes_cited_claims(tmp_path):
     ids = ds.record_to_kb(store, issue, chosen, eng, "cleaner diff",
                           proposed_by="dual-solve")
     assert len(ids) == 3  # decision + root cause + fix pattern
-    pending = store.list_pending()
+    pending = store.list_proposals(ProposalStatus.PENDING)
     assert len(pending) == 3
     # every proposed claim cites the one registered source (validation passes).
-    src_ids = {p.payload.evidence[0] for p in pending}
+    src_ids = {p.payload["evidence"][0] for p in pending}
     assert len(src_ids) == 1
-    assert any("chose codex" in p.payload.text for p in pending)
+    assert any("chose codex" in p.payload["text"] for p in pending)
 
 
 def test_record_to_kb_decision_only_when_summary_blank(tmp_path):
@@ -614,7 +614,10 @@ def record_to_kb(store: KBStore, issue: Issue, chosen: Candidate, engine: Engine
     )
 
     decision = f"for issue #{n} ({issue.title}), chose {chosen.engine}'s solution"
-    decision += f" — {reason}" if reason.strip() else "."
+    # claim text is written to a yaml file via storage.py, which encodes with
+    # the locale default (latin-1 here) -- keep it ascii (no em dash) or the
+    # write raises UnicodeEncodeError (same pre-existing bug as test_volunteer_context).
+    decision += f" -- {reason}" if reason.strip() else "."
     drafts: list[tuple[str, str, float]] = [(decision, "decision", 0.8)]
     if root_cause:
         drafts.append(
