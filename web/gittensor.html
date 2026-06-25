@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vouch × Gittensor (SN74)</title>
+<meta name="description" content="Vouch for Gittensor (SN74): one command seeds a cited, approved decision-memory of the subnet's scoring rules. Watch it seed live and browse all seven claims.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' fill='%2315120d'/><text x='16' y='24' font-size='22' text-anchor='middle' font-family='Georgia,serif' fill='%23d75c41'>V</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400;1,500&family=JetBrains+Mono:ital,wght@0,400;0,500;1,400&display=swap">
+<link rel="stylesheet" href="base.css">
+<link rel="stylesheet" href="app.css">
+</head>
+
+<body>
+
+<header class="site-nav">
+  <a class="brand" href="index.html">V<span class="verm">·</span>ouch</a>
+  <nav aria-label="Primary"><a href="index.html">Home</a><a href="how-it-works.html">How it works</a><a href="gittensor.html" class="active">Gittensor</a><a href="reference.html">Reference</a></nav>
+</header>
+
+<main>
+<header class="page-hero">
+  <div class="kicker">A case in the field</div>
+  <h1>The Gittensor fascicle</h1>
+  <p class="sub">Bittensor subnet 74 rewards open-source contribution by rule. Its scoring debates settle into nobody's notes — vouch keeps the durable, cited why. Seed it, watch it, and browse the pack below.</p>
+</header>
+
+<section class="plate" id="plate-vii">
+    <div class="col" style="display:block;">
+      <div class="plate-label"><span>Plate VII</span><span>A case in the field — Gittensor (SN74)</span></div>
+
+      <p class="lede dropcap" style="max-width:48em;">
+        The condition is not hypothetical. Consider <em>Gittensor</em> — Bittensor subnet 74 — which rewards open-source contribution by rule. Its scoring weights, repository allow-list, anti-sybil thresholds, and emission split are debated across pull requests, Discord, and validator changes, then settle into nobody's notes. When a weight moves or a repo is de-listed, the question <em>why did we decide this, and what did it replace?</em> has no durable, cited answer. The rationale lives in heads and scattered threads — precisely the tissue vouch is meant to preserve.
+      </p>
+
+      <p style="max-width:48em;">
+        vouch ships a starter pack for it. From the root of a Gittensor repository, one command seeds a cited, already-approved knowledge base — <strong>one source, one entity, seven claims</strong> — covering merged-PR rewards, PAT verification, the scoring factors, sybil-resistance, the repo allow-list, the issue-solving multiplier, and the emission split. A fresh KB carries retrievable context on day one; each seeded claim can be <code>vouch supersede</code>d with the real spec or PR once the live rule is confirmed.
+      </p>
+
+      <!-- template prescription -->
+      <div class="rx" role="img" aria-label="Gittensor template prescription">
+        <div class="rx-symbol" aria-hidden="true">R</div>
+        <div class="rx-body">
+          <div class="small-caps" style="color:var(--sepia); letter-spacing:.18em; font-size:12.5px; margin-bottom:6px;">Indication · Decision memory for SN74</div>
+          <div class="rx-line"><span class="prompt">$</span> vouch init --template gittensor</div>
+          <div class="rx-line"><span class="prompt">$</span> vouch status <span style="color:var(--sepia)">&nbsp; # durable: 7 claims · 1 source · 1 entity</span></div>
+          <div class="rx-note">Seeds a cited SN74 scoring pack. Commit <code>.vouch/</code> so the whole subnet shares one memory.</div>
+        </div>
+      </div>
+
+      <!-- interactive: watch the template seed itself -->
+      <div class="demo">
+        <div class="demo-head">Watch it seed · live</div>
+        <div class="terminal">
+          <div class="terminal-bar">
+            <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+            <span class="ttl">gittensor-repo — vouch</span>
+          </div>
+          <div class="terminal-body" id="term-body"><span class="dim">— scroll into view to run, or press replay —</span></div>
+        </div>
+        <div class="btn-row">
+          <button class="btn" type="button" id="term-replay">↻ replay</button>
+        </div>
+      </div>
+
+      <p style="max-width:48em; margin-top:40px;">
+        It does not compete with the live layer — it sits beside it. <em>Gittensory</em> carries the live signals; vouch keeps the durable <em>why</em>. The two are complementary organs, not rivals.
+      </p>
+
+      <div class="sympto">
+
+        <div class="panel">
+          <h4>· Live signals · Gittensory ·</h4>
+          <ol>
+            <li>scores, queues, collision and reviewability</li>
+            <li>reads on-chain weights and emissions</li>
+            <li>shifts by the minute as the subnet runs</li>
+          </ol>
+        </div>
+
+        <div class="panel">
+          <h4>· Durable decisions · vouch ·</h4>
+          <ol>
+            <li>why a rule exists and what it superseded</li>
+            <li>stores no live signals — never reads the chain</li>
+            <li>cited, reviewed, committed alongside the code</li>
+          </ol>
+        </div>
+
+      </div>
+
+      <!-- interactive: browse the seven seeded claims -->
+      <div class="demo" style="max-width:none;">
+        <div class="demo-head">The seeded pack · seven cited claims</div>
+        <div class="catalogue-x" id="catalogue">
+          <div class="cat-controls">
+            <label class="cat-search">
+              <span class="mag" aria-hidden="true">⌕</span>
+              <input type="search" placeholder="filter claims — try “sybil”, “emission”, “PR”…" aria-label="Filter claims">
+            </label>
+            <div class="cat-tags" aria-label="Filter by tag"></div>
+            <span class="cat-count"></span>
+          </div>
+          <div class="cat-list"></div>
+          <p class="rx-note" style="margin-top:14px;">Click a claim to see its citation and confidence. These are the real records <code>vouch init --template gittensor</code> writes — each cited, approved, and supersede-able.</p>
+        </div>
+      </div>
+
+      <div class="marginalia" style="margin-top:28px;">
+        <span class="ref">fig. 7·i · adoption</span>
+        The full course of treatment — install, seed, wire the MCP server, capture each scoring decision as a cited claim — is written up in <a href="https://github.com/vouchdev/vouch/blob/main/docs/gittensor.md">docs/gittensor.md</a>.
+      </div>
+
+    </div>
+  </section>
+</main>
+
+<footer class="colophon">
+    <div class="col">
+
+      <div>
+        <h4>Begin a course of treatment</h4>
+        <p style="font-size:16px; line-height:1.55;">
+          One command installs the package; <code>vouch init</code> opens the file under your project. The MCP server attaches to <span class="mono">claude-code</span>, <span class="mono">cursor</span>, <span class="mono">windsurf</span>, <span class="mono">zed</span>, and any host that speaks the protocol.
+        </p>
+        <p class="signoff">— Issued under the MIT licence,<br>&nbsp;&nbsp;&nbsp;by the vouchdev maintainers, MMXXVI.</p>
+      </div>
+
+      <div>
+        <h4>Repositories</h4>
+        <ul>
+          <li><a href="https://github.com/vouchdev/vouch">github.com / vouchdev / vouch</a></li>
+          <li><a href="https://pypi.org/project/vouch-kb/">pypi.org / project / vouch-kb</a></li>
+          <li><a href="https://modelcontextprotocol.io/">modelcontextprotocol.io</a></li>
+        </ul>
+      </div>
+
+      <div>
+        <h4>Further reading</h4>
+        <ul>
+          <li><a href="https://github.com/vouchdev/vouch/blob/main/SPEC.md">SPEC.md — the protocol</a></li>
+          <li><a href="https://github.com/vouchdev/vouch/blob/main/ROADMAP.md">ROADMAP.md — what is next</a></li>
+          <li><a href="https://github.com/vouchdev/vouch/blob/main/docs/PROJECT-INDEX.md">PROJECT-INDEX.md — the codebase map</a></li>
+          <li><a href="https://github.com/vouchdev/vouch/blob/main/docs/gittensor.md">docs/gittensor.md — the Gittensor case</a></li>
+          <li><a href="https://github.com/vouchdev/vouch/tree/main/adapters">adapters/ — wiring for each host</a></li>
+        </ul>
+      </div>
+
+    </div>
+
+    <div class="foot-rule"></div>
+    <div class="foot-meta">
+      <span>Vouch · An anatomical reference to agent memory</span>
+      <span>Vol. I · No. 1 · MMXXVI</span>
+    </div>
+  </footer>
+
+<script type="application/json" id="gittensor-claims">
+[
+  { "id": "gittensor-rewards-merged-prs",
+    "text": "Gittensor (SN74) rewards miners with TAO for pull requests merged into whitelisted open-source repositories.",
+    "tags": ["rewards", "prs"], "conf": 0.9, "status": "stable",
+    "cite": "Gittensor SN74 · vouch:template/gittensor" },
+  { "id": "gittensor-validators-verify-pat",
+    "text": "Gittensor validators verify GitHub account ownership via a fine-grained personal access token before scoring contributions.",
+    "tags": ["verification", "anti-sybil"], "conf": 0.9, "status": "stable",
+    "cite": "Gittensor SN74 · vouch:template/gittensor" },
+  { "id": "gittensor-scoring-factors",
+    "text": "Gittensor scores merged contributions by code quality, repository allocation, and programming-language factors.",
+    "tags": ["scoring"], "conf": 0.9, "status": "stable",
+    "cite": "Gittensor SN74 · vouch:template/gittensor" },
+  { "id": "gittensor-sybil-resistance",
+    "text": "Gittensor is sybil-resistant: GitHub account verification and a merged-PR requirement prevent gaming.",
+    "tags": ["anti-sybil"], "conf": 0.9, "status": "stable",
+    "cite": "Gittensor SN74 · vouch:template/gittensor" },
+  { "id": "gittensor-repo-allowlist",
+    "text": "Only repositories on the Gittensor allow-list count toward emissions; adding or de-listing a repo is a maintainer policy decision.",
+    "tags": ["policy", "allow-list"], "conf": 0.9, "status": "stable",
+    "cite": "Gittensor SN74 · vouch:template/gittensor" },
+  { "id": "gittensor-issue-multiplier",
+    "text": "Solved issues earn a scoring multiplier on top of merged-PR rewards, with a higher multiplier when the solver is a maintainer of the repository.",
+    "tags": ["scoring", "issues"], "conf": 0.9, "status": "stable",
+    "cite": "Gittensor SN74 · vouch:template/gittensor" },
+  { "id": "gittensor-emission-split",
+    "text": "Gittensor emissions are split between OSS-contribution rewards and an issue-treasury share; the split is a validator policy decision.",
+    "tags": ["emissions", "policy"], "conf": 0.9, "status": "stable",
+    "cite": "Gittensor SN74 · vouch:template/gittensor" }
+]
+</script>
+
+<script src="app.js" defer></script>
+
+</body>
+</html>

@@ -1,0 +1,4 @@
+# static multi-page site under web/ — no build step
+[build]
+  publish = "web"
+  command = ""

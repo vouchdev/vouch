@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reference — Vouch kb methods</title>
+<meta name="description" content="Catalogue of the vouch kb.* methods an agent gains: recall, proposal, lifecycle, and session motions.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' fill='%2315120d'/><text x='16' y='24' font-size='22' text-anchor='middle' font-family='Georgia,serif' fill='%23d75c41'>V</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400;1,500&family=JetBrains+Mono:ital,wght@0,400;0,500;1,400&display=swap">
+<link rel="stylesheet" href="base.css">
+<link rel="stylesheet" href="app.css">
+</head>
+
+<body>
+
+<header class="site-nav">
+  <a class="brand" href="index.html">V<span class="verm">·</span>ouch</a>
+  <nav aria-label="Primary"><a href="index.html">Home</a><a href="how-it-works.html">How it works</a><a href="gittensor.html">Gittensor</a><a href="reference.html" class="active">Reference</a></nav>
+</header>
+
+<main>
+<header class="page-hero">
+  <div class="kicker">The repertoire</div>
+  <h1>Reference</h1>
+  <p class="sub">Once installed, the agent gains a small repertoire of motions — methods it may call by name. The complete list lives in capabilities.py.</p>
+</header>
+
+<section class="plate" id="plate-v">
+    <div class="col" style="display:block;">
+      <div class="plate-label"><span>Plate V</span><span>Catalogue of provided pathways</span></div>
+
+      <p class="lede dropcap" style="max-width:46em;">
+        Once installed, the agent gains a small repertoire of motions — methods it may call by name. They divide naturally into <em>recall</em>, <em>proposal</em>, <em>lifecycle</em>, and <em>session</em>. The catalogue is partial; the complete list lives in <code>capabilities.py</code>.
+      </p>
+
+      <div class="catalogue">
+
+        <div class="cat-group">
+          <h4>i · recall (unrestricted)</h4>
+          <dl>
+            <dt>kb_search</dt>           <dd>full-text, embedding, and substring across all artefacts.</dd>
+            <dt>kb_context</dt>          <dd>a budgeted, cited bundle suitable for prompt injection.</dd>
+            <dt>kb_read_claim</dt>       <dd>retrieve a claim by id.</dd>
+            <dt>kb_list_pending</dt>     <dd>show what awaits human review.</dd>
+          </dl>
+        </div>
+
+        <div class="cat-group">
+          <h4>ii · proposal (gated)</h4>
+          <dl>
+            <dt>kb_register_source</dt>  <dd>declare evidence; content-addressed by sha-256.</dd>
+            <dt>kb_propose_claim</dt>    <dd>file a citation-bearing assertion for review.</dd>
+            <dt>kb_propose_page</dt>     <dd>file a longer markdown write-up for review.</dd>
+            <dt>kb_propose_entity</dt>   <dd>name a thing once; relate it everywhere.</dd>
+          </dl>
+        </div>
+
+        <div class="cat-group">
+          <h4>iii · lifecycle (audited)</h4>
+          <dl>
+            <dt>kb_supersede</dt>        <dd>declare an old claim replaced by a new one.</dd>
+            <dt>kb_contradict</dt>       <dd>mark two claims as incompatible; humans pick.</dd>
+            <dt>kb_archive</dt>          <dd>retire a claim without deleting its history.</dd>
+            <dt>kb_confirm</dt>          <dd>re-cite a claim today; resets the staleness clock.</dd>
+          </dl>
+        </div>
+
+        <div class="cat-group">
+          <h4>iv · session (bracketing)</h4>
+          <dl>
+            <dt>kb_session_start</dt>    <dd>open a work block; bundles every later proposal.</dd>
+            <dt>kb_session_end</dt>      <dd>seal the block; backfill the proposal list.</dd>
+            <dt>kb_crystallize</dt>      <dd>approve all the session's pending proposals; write a summary page.</dd>
+            <dt>kb_audit</dt>            <dd>read the append-only ledger; every motion is in it.</dd>
+          </dl>
+        </div>
+
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="colophon">
+    <div class="col">
+
+      <div>
+        <h4>Begin a course of treatment</h4>
+        <p style="font-size:16px; line-height:1.55;">
+          One command installs the package; <code>vouch init</code> opens the file under your project. The MCP server attaches to <span class="mono">claude-code</span>, <span class="mono">cursor</span>, <span class="mono">windsurf</span>, <span class="mono">zed</span>, and any host that speaks the protocol.
+        </p>
+        <p class="signoff">— Issued under the MIT licence,<br>&nbsp;&nbsp;&nbsp;by the vouchdev maintainers, MMXXVI.</p>
+      </div>
+
+      <div>
+        <h4>Repositories</h4>
+        <ul>
+          <li><a href="https://github.com/vouchdev/vouch">github.com / vouchdev / vouch</a></li>
+          <li><a href="https://pypi.org/project/vouch-kb/">pypi.org / project / vouch-kb</a></li>
+          <li><a href="https://modelcontextprotocol.io/">modelcontextprotocol.io</a></li>
+        </ul>
+      </div>
+
+      <div>
+        <h4>Further reading</h4>
+        <ul>
+          <li><a href="https://github.com/vouchdev/vouch/blob/main/SPEC.md">SPEC.md — the protocol</a></li>
+          <li><a href="https://github.com/vouchdev/vouch/blob/main/ROADMAP.md">ROADMAP.md — what is next</a></li>
+          <li><a href="https://github.com/vouchdev/vouch/blob/main/docs/PROJECT-INDEX.md">PROJECT-INDEX.md — the codebase map</a></li>
+          <li><a href="https://github.com/vouchdev/vouch/blob/main/docs/gittensor.md">docs/gittensor.md — the Gittensor case</a></li>
+          <li><a href="https://github.com/vouchdev/vouch/tree/main/adapters">adapters/ — wiring for each host</a></li>
+        </ul>
+      </div>
+
+    </div>
+
+    <div class="foot-rule"></div>
+    <div class="foot-meta">
+      <span>Vouch · An anatomical reference to agent memory</span>
+      <span>Vol. I · No. 1 · MMXXVI</span>
+    </div>
+  </footer>
+
+<script src="app.js" defer></script>
+
+</body>
+</html>
