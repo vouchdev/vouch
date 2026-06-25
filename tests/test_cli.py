@@ -305,9 +305,14 @@ def test_crystallize_cli_all_failures_exits_1(store: KBStore) -> None:
     assert "all 2 proposal(s) failed" in result.stderr
 
 
-def test_crystallize_cli_partial_failures_shows_warning(store: KBStore) -> None:
+def test_crystallize_cli_partial_failures_shows_warning(store: KBStore, monkeypatch) -> None:
     from vouch.proposals import approve as real_approve
 
+    # the approver comes from _whoami() (VOUCH_AGENT/VOUCH_USER/getpass); pin it
+    # to a reviewer distinct from the proposer so the non-injected approval isn't
+    # blocked as a self-approval on machines whose OS username happens to be "a".
+    monkeypatch.delenv("VOUCH_AGENT", raising=False)
+    monkeypatch.setenv("VOUCH_USER", "reviewer")
     with patch.object(KBStore, "_embed_and_store"):
         src = store.put_source(b"e")
     sess = sess_mod.session_start(store, agent="a", task="t")
