@@ -2049,10 +2049,13 @@ def dual_solve_cmd(issue_url: str, claude_effort: str, codex_effort: str,
     if reason is None and chosen is not None and not no_record and not dry_run:
         reason = click.prompt("one line: why this solution", default="")
 
-    ids = ds_mod.finalize(
-        store, root, issue, chosen, engines, candidates, reason or "", runner,
-        record=not no_record and not dry_run, proposed_by=_whoami(),
-    )
+    try:
+        ids = ds_mod.finalize(
+            store, root, issue, chosen, engines, candidates, reason or "", runner,
+            record=not no_record and not dry_run, proposed_by=_whoami(),
+        )
+    except (ValueError, RuntimeError) as e:
+        raise click.ClickException(f"failed to record/clean up: {e}") from e
     if chosen is None:
         click.echo("kept neither; both branches discarded", err=True)
         return

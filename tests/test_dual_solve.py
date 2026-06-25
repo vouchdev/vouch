@@ -222,6 +222,29 @@ def test_record_to_kb_decision_only_when_summary_blank(tmp_path):
     assert len(ids) == 1  # only the decision claim
 
 
+def test_record_to_kb_coerces_nonascii_title(tmp_path):
+    # a github issue title / engine summary with non-latin-1 chars (em dash,
+    # smart quotes) must not crash the yaml write or leave a corrupt proposal:
+    # storage encodes with the locale default, so claim text is coerced to ascii.
+    store = KBStore.init(tmp_path)
+    fr = FakeRunner([(["codex"],
+                      ap.RunResult(0, "ROOT CAUSE: bad — regex\nFIX: anchor", ""))])
+    eng = ds.Engine("codex", "high", fr)
+    issue = ds.Issue(title="Fix — the “lexer”", body="b", number=8, url="u")
+    chosen = ds.Candidate(engine="codex", branch="vouch-dual/8-x-codex",
+                          worktree=tmp_path / "wt", diff="patch", sha="dead", ok=True)
+    ids = ds.record_to_kb(store, issue, chosen, eng, "cleaner — diff",
+                          proposed_by="dual-solve")
+    assert len(ids) == 3
+    # the writes succeeded and left no corrupt (zero-byte) proposal behind.
+    pending = store.list_proposals(ProposalStatus.PENDING)
+    assert len(pending) == 3
+    for p in pending:
+        # raises if any non-ascii survived into the yaml-written claim text.
+        p.payload["text"].encode("ascii")
+    assert any("--" in p.payload["text"] for p in pending)
+
+
 def test_cleanup_removes_worktrees_and_loser_branch(tmp_path):
     fr = FakeRunner()
     c1 = ds.Candidate("claude", "vouch-dual/win", tmp_path / "a", ok=True)

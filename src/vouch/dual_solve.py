@@ -12,6 +12,7 @@ import json
 import re
 import shutil
 import tempfile
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -141,7 +142,7 @@ def ground_prompt(store: KBStore, query: str, *, limit: int = 8) -> str:
     Returns a string like:
       - [c1] auth uses jwt
       - [c2] session expiry is 1 hour
-    If the KB is empty for this query, returns an explicit "(nothing)" message.
+    If the KB has nothing for this query, returns an explicit message saying so.
     """
     pack = build_context_pack(store, query=query, limit=limit)
     items = pack.items if isinstance(pack, ContextPack) else []
@@ -213,6 +214,30 @@ _SUMMARY_PROMPT = (
     "line 2 must start with `FIX:` then one sentence on the fix pattern."
 )
 
+# common typographic characters -> ascii, applied before the catch-all below.
+# keys use \u escapes so ruff (RUF001) doesn't flag ambiguous glyphs in source.
+_PUNCT = {
+    "\u2014": "--", "\u2013": "-",      # em dash, en dash
+    "\u2018": "'", "\u2019": "'",       # single curly quotes
+    "\u201c": '"', "\u201d": '"',       # double curly quotes
+    "\u2026": "...",                       # ellipsis
+}
+
+
+def _ascii(text: str) -> str:
+    """Coerce text to ascii before it becomes a KB claim.
+
+    storage writes proposals as yaml using the locale default encoding
+    (latin-1 in some environments), so an untrusted issue title or engine
+    summary carrying a character outside that range would raise
+    UnicodeEncodeError mid-write and leave a zero-byte, KB-poisoning proposal.
+    claim text is a derived summary; the verbatim original is preserved in the
+    Source content, which is written as bytes.
+    """
+    for raw, rep in _PUNCT.items():
+        text = text.replace(raw, rep)
+    return unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
+
 
 def parse_summary(text: str) -> tuple[str, str]:
     root_cause, fix = "", ""
@@ -260,7 +285,7 @@ def record_to_kb(store: KBStore, issue: Issue, chosen: Candidate, engine: Engine
     ids: list[str] = []
     for text, ctype, conf in drafts[:3]:
         res = propose_claim(
-            store, text=text, evidence=[src.id], proposed_by=proposed_by,
+            store, text=_ascii(text), evidence=[src.id], proposed_by=proposed_by,
             claim_type=ctype, confidence=conf,
             tags=["dual-solve", f"issue-{n}"],
             rationale=f"recorded by vouch dual-solve; winner={chosen.engine}",
