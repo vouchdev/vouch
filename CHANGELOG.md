@@ -7,6 +7,15 @@ All notable changes to vouch are documented here. Format follows
 ## [Unreleased]
 
 ### Added
+- `vouch dual-solve <issue-url>` — run claude + codex on one github issue in
+  isolated git worktrees, compare the two diffs, keep the branch you pick, and
+  propose the chosen solution's rationale into the KB. A sibling tool to
+  `auto-pr`, and the first that writes to the KB — but only ever as review-gated
+  proposals: the winning commit is registered as a `Source` and the decision
+  plus up to three approach claims land in `proposed/`, so approval still
+  requires a human `vouch approve`. Nothing is auto-approved. `--json` is
+  non-interactive (emits both diffs, keeps both branches); `--no-record` and
+  `--dry-run` propose nothing.
 - `vouch auto-pr <repo-url>` — open N mergeable PRs against any github repo.
   Sources open issues first then agent-discovered improvements, bootstraps a
   contribution skill from the repo's merged PRs when it ships no guidance, and

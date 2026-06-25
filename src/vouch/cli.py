@@ -1963,6 +1963,107 @@ def auto_pr_cmd(repo_url: str, workspace: str, count: int, claude_effort: str,
     click.echo(f"opened {opened}/{len(results)} PRs", err=True)
 
 
+# --- dual-solve: run claude + codex on one issue; operator picks a winner ---
+
+
+@cli.command(name="dual-solve")
+@click.argument("issue_url")
+@click.option("--claude-effort", default="high", show_default=True,
+              type=click.Choice(["low", "medium", "high", "max"]))
+@click.option("--codex-effort", default="high", show_default=True,
+              type=click.Choice(["low", "medium", "high", "max"]))
+@click.option("--autonomy", default="edit", show_default=True,
+              type=click.Choice(["edit", "full"]),
+              help="'edit' auto-accepts file edits only (safer default); "
+                   "'full' lets engines run arbitrary commands.")
+@click.option("--reason", default=None,
+              help="why you picked the winner (skips the interactive prompt).")
+@click.option("--no-record", is_flag=True,
+              help="keep the chosen branch but propose nothing to the kb.")
+@click.option("--dry-run", is_flag=True,
+              help="run both engines but make no commits / kb writes.")
+@click.option("--json", "as_json", is_flag=True,
+              help="non-interactive: emit both diffs + metadata, no prompt.")
+def dual_solve_cmd(issue_url: str, claude_effort: str, codex_effort: str,
+                   autonomy: str, reason: str | None, no_record: bool,
+                   dry_run: bool, as_json: bool) -> None:
+    """Run claude + codex on ISSUE_URL; you pick the winning diff.
+
+    Each engine works in its own git worktree on a fresh branch. You compare
+    the two diffs, keep one branch, and (unless --no-record) the rationale is
+    proposed into the kb for review. A sibling tool to auto-pr; the review
+    gate is untouched -- nothing is auto-approved.
+    """
+    from . import dual_solve as ds_mod
+    from .auto_pr import SubprocessRunner
+    store = _load_store()
+    runner = SubprocessRunner()
+    try:
+        ds_mod._require_engines()
+        root = ds_mod.repo_root(runner, Path.cwd())
+        issue, candidates, engines = ds_mod.prepare(
+            store, issue_url, root, runner,
+            claude_effort=claude_effort, codex_effort=codex_effort,
+            autonomy=autonomy, dry_run=dry_run,
+        )
+    except (ValueError, RuntimeError) as e:
+        raise click.ClickException(str(e)) from e
+
+    if as_json:
+        _emit_json({
+            "issue": {"number": issue.number, "title": issue.title,
+                      "url": issue.url},
+            "candidates": [
+                {"engine": c.engine, "branch": c.branch, "ok": c.ok,
+                 "error": c.error, "diff": c.diff} for c in candidates
+            ],
+        })
+        return
+
+    for c in candidates:
+        click.echo(f"\n=== {c.engine} ({c.branch}) ===", err=True)
+        if c.ok:
+            click.echo(c.diff)
+        else:
+            click.echo(f"(failed: {c.error})", err=True)
+
+    ok = [c for c in candidates if c.ok]
+    if not ok:
+        raise click.ClickException("both engines failed; nothing to choose")
+    choice: str | None
+    if len(ok) == 1:
+        survivor = ok[0]
+        if not click.confirm(
+                f"only {survivor.engine} produced a usable diff; proceed with it?",
+                default=True):
+            ds_mod.finalize(store, root, issue, None, engines, candidates, "",
+                            runner, record=False, proposed_by=_whoami())
+            raise click.ClickException("aborted; both branches discarded")
+        choice = survivor.engine
+    else:
+        letter = click.prompt("pick a winner [c]laude / [x]codex / [n]either",
+                              type=click.Choice(["c", "x", "n"]), default="c")
+        choice = {"c": "claude", "x": "codex", "n": None}[letter]
+
+    chosen = next((c for c in candidates if c.engine == choice), None)
+    if reason is None and chosen is not None and not no_record and not dry_run:
+        reason = click.prompt("one line: why this solution", default="")
+
+    try:
+        ids = ds_mod.finalize(
+            store, root, issue, chosen, engines, candidates, reason or "", runner,
+            record=not no_record and not dry_run, proposed_by=_whoami(),
+        )
+    except (ValueError, RuntimeError) as e:
+        raise click.ClickException(f"failed to record/clean up: {e}") from e
+    if chosen is None:
+        click.echo("kept neither; both branches discarded", err=True)
+        return
+    click.echo(f"kept {chosen.branch}", err=True)
+    for pid in ids:
+        click.echo(f"proposed {pid} -- review with `vouch approve {pid}`", err=True)
+
+
 # --- sync ------------------------------------------------------------------
 
 
