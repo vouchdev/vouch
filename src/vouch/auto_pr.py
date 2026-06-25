@@ -17,10 +17,21 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
+
+
+def _require_engines() -> None:
+    """Fail fast (before any clone) if an engine binary isn't on PATH."""
+    missing = [b for b in ("claude", "codex") if shutil.which(b) is None]
+    if missing:
+        raise RuntimeError(
+            f"required CLI not on PATH: {', '.join(missing)} "
+            "(auto-pr cross-verifies, so both claude and codex must be installed)"
+        )
 
 # --- effort mapping -------------------------------------------------------
 
@@ -216,6 +227,7 @@ def resolve_workspace(url: str, workspace: str, runner: Runner, *,
                       has_push: bool = False) -> RepoCtx:
     repo = parse_repo(url)
     clone_dir = Path(workspace)
+    forked = False
     if not (clone_dir / ".git").exists():
         clone_dir.parent.mkdir(parents=True, exist_ok=True)
         if has_push:
@@ -225,14 +237,22 @@ def resolve_workspace(url: str, workspace: str, runner: Runner, *,
             # for fork --clone, the dir goes to the underlying git clone after `--`.
             res = runner.run(["gh", "repo", "fork", repo, "--clone",
                               "--default-branch-only", "--", str(clone_dir)])
+            forked = True
         if res.code != 0:
             raise RuntimeError(f"could not obtain workspace: {res.stderr}")
     res = runner.run(["git", "-C", str(clone_dir), "symbolic-ref", "--short",
                       "refs/remotes/origin/HEAD"])
-    default_branch = res.stdout.strip().rsplit("/", 1)[-1] or "main"
-    # without push access the PR comes from a fork; qualify the head as
-    # <fork-owner>:<branch> so `gh pr create --repo <parent>` is unambiguous.
-    if fork_owner is None and not has_push:
+    default_branch = res.stdout.strip().rsplit("/", 1)[-1]
+    if not default_branch:
+        # origin/HEAD isn't always set on a fresh clone; ask the api directly
+        # rather than blindly assuming "main" (repos use master/trunk too).
+        view = runner.run(["gh", "repo", "view", repo, "--json",
+                           "defaultBranchRef", "-q", ".defaultBranchRef.name"])
+        default_branch = view.stdout.strip() or "main"
+    # qualify the PR head as <fork-owner>:<branch> only when *we* forked this
+    # run -- for an existing clone we can't assume origin is the user's fork, so
+    # leave fork_owner unset unless the caller passed it explicitly.
+    if fork_owner is None and forked:
         who = runner.run(["gh", "api", "user", "--jq", ".login"])
         fork_owner = who.stdout.strip() or None
     return RepoCtx(repo, url, clone_dir, default_branch, fork_owner)
@@ -312,10 +332,14 @@ def is_duplicate(ctx: RepoCtx, topic: str, runner: Runner) -> bool:
         "gh", "pr", "list", "--repo", ctx.repo, "--state", "all",
         "--search", topic, "--limit", "20", "--json", "title,url",
     ])
+    # fail *closed*: if we can't verify uniqueness (gh error / bad json), assume
+    # a duplicate and skip rather than risk opening the Nth copy of a known PR.
+    if res.code != 0:
+        return True
     try:
         rows = json.loads(res.stdout or "[]")
     except json.JSONDecodeError:
-        return False
+        return True
     needle = topic.lower().strip()
     if not needle:
         return False
@@ -423,9 +447,22 @@ _REVIEW_PROMPT = (
 )
 
 
+def reset_workspace(ctx: RepoCtx, runner: Runner) -> None:
+    """Return the clone to a clean default branch so a skipped item's failed
+    edits don't bleed into the next one. The workspace is treated as a
+    throwaway working tree owned by auto-pr."""
+    clone = str(ctx.clone_dir)
+    runner.run(["git", "-C", clone, "switch", ctx.default_branch])
+    runner.run(["git", "-C", clone, "reset", "--hard",
+                f"origin/{ctx.default_branch}"])
+    runner.run(["git", "-C", clone, "clean", "-fd"])
+
+
 def git_branch(ctx: RepoCtx, slug: str, runner: Runner) -> str:
+    # `switch -C` creates-or-resets, so a leftover branch from a prior run
+    # (same slug) can't wedge the pipeline onto the wrong branch.
     branch = f"auto-pr/{slug}"
-    runner.run(["git", "-C", str(ctx.clone_dir), "switch", "-c", branch,
+    runner.run(["git", "-C", str(ctx.clone_dir), "switch", "-C", branch,
                 f"origin/{ctx.default_branch}"])
     return branch
 
@@ -440,20 +477,27 @@ def commit_all(ctx: RepoCtx, title: str, runner: Runner) -> None:
     runner.run(["git", "-C", str(ctx.clone_dir), "commit", "-m", title])
 
 
-def open_pr(ctx: RepoCtx, item: WorkItem, branch: str, runner: Runner, *,
-            dry_run: bool) -> str | None:
+def open_pr(ctx: RepoCtx, item: WorkItem, branch: str, runner: Runner) -> str:
+    """Push the branch and open the PR. Raises RuntimeError on any failure so
+    the caller never reports a PR that wasn't actually created."""
     closes = f"\n\ncloses #{item.number}" if item.number else ""
     body = (f"{item.body.strip()[:600]}{closes}").strip() or "see linked issue."
-    if dry_run:
-        return None
-    runner.run(["git", "-C", str(ctx.clone_dir), "push", "-u", "origin", branch])
+    push = runner.run(["git", "-C", str(ctx.clone_dir), "push", "-u", "origin",
+                       branch])
+    if push.code != 0:
+        raise RuntimeError(f"git push failed: {push.stderr.strip()[:300]}")
     head = f"{ctx.fork_owner}:{branch}" if ctx.fork_owner else branch
     res = runner.run([
         "gh", "pr", "create", "--repo", ctx.repo, "--head", head,
         "--base", ctx.default_branch, "--title", item.title, "--body", body,
     ], cwd=str(ctx.clone_dir))
+    if res.code != 0:
+        raise RuntimeError(f"gh pr create failed: {res.stderr.strip()[:300]}")
     out = res.stdout.strip()
-    return out.splitlines()[-1] if out else None
+    url = out.splitlines()[-1] if out else ""
+    if not url:
+        raise RuntimeError("gh pr create produced no url")
+    return url
 
 
 def process_item(ctx: RepoCtx, item: WorkItem, fixer: Engine, verifier: Engine,
@@ -461,7 +505,9 @@ def process_item(ctx: RepoCtx, item: WorkItem, fixer: Engine, verifier: Engine,
                  dry_run: bool = False) -> PRResult:
     result = PRResult(item=item, status="skipped", fixer=fixer.name,
                       verifier=verifier.name)
-    branch = git_branch(ctx, item.slug, runner)
+    reset_workspace(ctx, runner)
+    branch_slug = f"{item.number}-{item.slug}" if item.number else item.slug
+    branch = git_branch(ctx, branch_slug, runner)
     issue_ref = f"issue: {item.url}" if item.url else "(no tracked issue)"
     revise_note = ""
     for attempt in range(max_revise + 1):
@@ -485,7 +531,15 @@ def process_item(ctx: RepoCtx, item: WorkItem, fixer: Engine, verifier: Engine,
         )
         if verdict.approved:
             commit_all(ctx, item.title, runner)
-            result.url = open_pr(ctx, item, branch, runner, dry_run=dry_run)
+            if dry_run:
+                result.status = "opened"
+                result.reason = "dry-run (not pushed)"
+                return result
+            try:
+                result.url = open_pr(ctx, item, branch, runner)
+            except RuntimeError as e:
+                result.reason = f"pr creation failed: {e}"
+                return result
             result.status = "opened"
             result.reason = verdict.notes
             return result
@@ -504,7 +558,10 @@ def run_auto_pr(repo_url: str, workspace: str, count: int,
                 max_revise: int = 2,
                 autonomy: str = "edit",
                 dry_run: bool = False) -> list[PRResult]:
-    runner = runner or SubprocessRunner()
+    if runner is None:
+        # only enforce the PATH check for real runs; tests inject a fake.
+        _require_engines()
+        runner = SubprocessRunner()
     full = autonomy == "full"
     claude = Engine("claude", claude_effort, runner, full_autonomy=full)
     codex = Engine("codex", codex_effort, runner, full_autonomy=full)

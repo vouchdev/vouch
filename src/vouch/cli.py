@@ -820,6 +820,9 @@ def auto_pr_cmd(repo_url: str, workspace: str, count: int, claude_effort: str,
             for r in results
         ])
         return
+    if not results:
+        click.echo(f"no work items found for {repo_url}", err=True)
+        return
     opened = 0
     for r in results:
         if r.status == "opened":

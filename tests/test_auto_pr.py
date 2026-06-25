@@ -224,6 +224,12 @@ def test_is_duplicate_false_when_no_hit():
     assert ap.is_duplicate(ctx, "totally novel thing", fr) is False
 
 
+def test_is_duplicate_fails_closed_on_error():
+    ctx = ap.RepoCtx("o/n", "o/n", Path("/w"), "main")
+    fr = FakeRunner([(["gh", "pr", "list"], ap.RunResult(1, "", "rate limited"))])
+    assert ap.is_duplicate(ctx, "anything", fr) is True
+
+
 def test_source_fills_remainder_with_discovery(monkeypatch):
     ctx = ap.RepoCtx("o/n", "o/n", Path("/w"), "main")
     fr = FakeRunner([
@@ -281,22 +287,52 @@ def test_open_pr_qualifies_head_with_fork_owner(tmp_path):
     fr = FakeRunner([(["gh", "pr", "create"],
                       ap.RunResult(0, "https://github.com/o/n/pull/5", ""))])
     item = ap.WorkItem("issue", "t", "b", "t", number=2)
-    url = ap.open_pr(ctx, item, "auto-pr/t", fr, dry_run=False)
+    url = ap.open_pr(ctx, item, "auto-pr/t", fr)
     assert url == "https://github.com/o/n/pull/5"
     create = next(c for c in fr.calls if c[:3] == ["gh", "pr", "create"])
     assert "me:auto-pr/t" in create
     assert any("push" in c for c in fr.calls if c[:2] == ["git", "-C"])
 
 
-def test_resolve_detects_fork_owner_when_no_push(tmp_path):
+def test_open_pr_raises_when_create_fails(tmp_path):
+    ctx = ap.RepoCtx("o/n", "o/n", tmp_path, "main", fork_owner="me")
+    fr = FakeRunner([(["gh", "pr", "create"], ap.RunResult(1, "", "denied"))])
+    item = ap.WorkItem("issue", "t", "b", "t")
+    with pytest.raises(RuntimeError):
+        ap.open_pr(ctx, item, "auto-pr/t", fr)
+
+
+def test_resolve_detects_fork_owner_on_fork(tmp_path):
+    target = tmp_path / "wk"  # missing clone -> resolve forks it
+    fr = FakeRunner([
+        (["git", "-C", str(target), "symbolic-ref"],
+         ap.RunResult(0, "origin/main\n", "")),
+        (["gh", "api", "user"], ap.RunResult(0, "octocat\n", "")),
+    ])
+    ctx = ap.resolve_workspace("owner/name", str(target), fr)
+    assert ctx.fork_owner == "octocat"
+
+
+def test_resolve_existing_clone_does_not_autodetect_fork_owner(tmp_path):
     (tmp_path / ".git").mkdir()
     fr = FakeRunner([
         (["git", "-C", str(tmp_path), "symbolic-ref"],
          ap.RunResult(0, "origin/main\n", "")),
-        (["gh", "api", "user"], ap.RunResult(0, "octocat\n", "")),
     ])
     ctx = ap.resolve_workspace("owner/name", str(tmp_path), fr)
-    assert ctx.fork_owner == "octocat"
+    assert ctx.fork_owner is None
+    assert not any(c[:3] == ["gh", "api", "user"] for c in fr.calls)
+
+
+def test_resolve_default_branch_gh_fallback(tmp_path):
+    (tmp_path / ".git").mkdir()
+    fr = FakeRunner([
+        (["git", "-C", str(tmp_path), "symbolic-ref"],
+         ap.RunResult(1, "", "no HEAD")),
+        (["gh", "repo", "view"], ap.RunResult(0, "trunk\n", "")),
+    ])
+    ctx = ap.resolve_workspace("owner/name", str(tmp_path), fr)
+    assert ctx.default_branch == "trunk"
 
 
 def test_process_item_opens_on_approve(tmp_path):
@@ -342,6 +378,21 @@ def test_process_item_skips_on_empty_diff(tmp_path):
     assert "no diff" in (res.reason or "")
 
 
+def test_process_item_skips_when_pr_create_fails(tmp_path):
+    ctx = _ctx(tmp_path)
+    fr = FakeRunner([
+        (["git", "-C", str(tmp_path), "diff"], ap.RunResult(0, "patch", "")),
+        (["gh", "pr", "create"], ap.RunResult(1, "", "denied")),
+        (["claude"], ap.RunResult(0, '{"result": "APPROVE"}', "")),
+    ])
+    fixer = ap.Engine("codex", "high", fr)
+    verifier = ap.Engine("claude", "high", fr)
+    item = ap.WorkItem("issue", "Fix bug", "b", "fix-bug")
+    res = ap.process_item(ctx, item, fixer, verifier, fr, "g")
+    assert res.status == "skipped"
+    assert "pr creation failed" in (res.reason or "")
+
+
 def test_process_item_dry_run_never_creates_pr(tmp_path):
     ctx = _ctx(tmp_path)
     fr = FakeRunner([
@@ -357,6 +408,12 @@ def test_process_item_dry_run_never_creates_pr(tmp_path):
 
 
 # --- Task 8: orchestrator --------------------------------------------------
+
+def test_require_engines_raises_when_missing(monkeypatch):
+    monkeypatch.setattr(ap.shutil, "which", lambda b: None)
+    with pytest.raises(RuntimeError, match="not on PATH"):
+        ap._require_engines()
+
 
 def test_run_auto_pr_alternates_and_collects(tmp_path, monkeypatch):
     (tmp_path / ".git").mkdir()
