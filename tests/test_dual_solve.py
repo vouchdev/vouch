@@ -220,3 +220,63 @@ def test_record_to_kb_decision_only_when_summary_blank(tmp_path):
                           diff="d", sha="s", ok=True)
     ids = ds.record_to_kb(store, issue, chosen, eng, "", proposed_by="dual-solve")
     assert len(ids) == 1  # only the decision claim
+
+
+def test_cleanup_removes_worktrees_and_loser_branch(tmp_path):
+    fr = FakeRunner()
+    c1 = ds.Candidate("claude", "vouch-dual/win", tmp_path / "a", ok=True)
+    c2 = ds.Candidate("codex", "vouch-dual/lose", tmp_path / "b", ok=True)
+    ds.cleanup(tmp_path, [c1, c2], {"vouch-dual/win"}, fr)
+    removes = [c for c in fr.calls if c[3:5] == ["worktree", "remove"]]
+    assert len(removes) == 2
+    deletes = [c for c in fr.calls if c[3:5] == ["branch", "-D"]]
+    assert deletes == [["git", "-C", str(tmp_path), "branch", "-D",
+                        "vouch-dual/lose"]]
+
+
+def test_prepare_runs_both_engines(tmp_path, monkeypatch):
+    store = KBStore.init(tmp_path)
+    monkeypatch.setattr(ds, "fetch_issue",
+                        lambda ref, runner: ds.Issue("t", "b", number=1))
+    monkeypatch.setattr(ds, "ground_prompt", lambda store, q, **k: "ctx")
+    seen: list[str] = []
+
+    def fake_rc(engine, issue, prompt, root, base, worktree, runner, *, commit=True):
+        seen.append(engine.name)
+        return ds.Candidate(engine.name, f"b-{engine.name}", worktree,
+                            diff="d", ok=True)
+
+    monkeypatch.setattr(ds, "run_candidate", fake_rc)
+    _, cands, engines = ds.prepare(store, "o/n#1", tmp_path, FakeRunner(),
+                                   workdir=tmp_path / "wd")
+    assert seen == ["claude", "codex"]
+    assert [c.engine for c in cands] == ["claude", "codex"]
+    assert set(engines) == {"claude", "codex"}
+
+
+def test_finalize_records_and_keeps_winner(tmp_path, monkeypatch):
+    store = KBStore.init(tmp_path)
+    monkeypatch.setattr(ds, "record_to_kb",
+                        lambda *a, **k: ["prop-1", "prop-2"])
+    fr = FakeRunner()
+    win = ds.Candidate("codex", "vouch-dual/win", tmp_path / "a", ok=True)
+    lose = ds.Candidate("claude", "vouch-dual/lose", tmp_path / "b", ok=True)
+    engines = {"codex": ds.Engine("codex", "high", fr)}
+    ids = ds.finalize(store, tmp_path, ds.Issue("t", "b", 1), win, engines,
+                      [win, lose], "reason", fr, record=True, proposed_by="x")
+    assert ids == ["prop-1", "prop-2"]
+    assert any(c[3:5] == ["branch", "-D"] and "vouch-dual/lose" in c
+               for c in fr.calls)
+    assert not any(c[3:5] == ["branch", "-D"] and "vouch-dual/win" in c
+                   for c in fr.calls)
+
+
+def test_finalize_no_record_proposes_nothing(tmp_path, monkeypatch):
+    store = KBStore.init(tmp_path)
+    called = {"n": 0}
+    monkeypatch.setattr(ds, "record_to_kb",
+                        lambda *a, **k: called.__setitem__("n", called["n"] + 1))
+    win = ds.Candidate("codex", "b", tmp_path / "a", ok=True)
+    ids = ds.finalize(store, tmp_path, ds.Issue("t", "b", 1), win, {}, [win],
+                      "", FakeRunner(), record=False, proposed_by="x")
+    assert ids == [] and called["n"] == 0

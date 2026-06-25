@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -24,10 +25,13 @@ __all__ = [
     "Candidate",
     "Issue",
     "build_prompt",
+    "cleanup",
     "fetch_issue",
+    "finalize",
     "ground_prompt",
     "parse_issue_ref",
     "parse_summary",
+    "prepare",
     "record_to_kb",
     "repo_root",
     "run_candidate",
@@ -262,4 +266,49 @@ def record_to_kb(store: KBStore, issue: Issue, chosen: Candidate, engine: Engine
             rationale=f"recorded by vouch dual-solve; winner={chosen.engine}",
         )
         ids.append(res.id)
+    return ids
+
+
+def cleanup(root: Path, candidates: list[Candidate], keep_branches: set[str],
+            runner: Runner) -> None:
+    for c in candidates:
+        runner.run(["git", "-C", str(root), "worktree", "remove", "--force",
+                    str(c.worktree)])
+        if c.branch not in keep_branches:
+            runner.run(["git", "-C", str(root), "branch", "-D", c.branch])
+
+
+def prepare(store: KBStore, issue_ref: str, root: Path, runner: Runner, *,
+            claude_effort: str = "high", codex_effort: str = "high",
+            autonomy: str = "edit", dry_run: bool = False,
+            workdir: Path | None = None
+            ) -> tuple[Issue, list[Candidate], dict[str, Engine]]:
+    full = autonomy == "full"
+    engines: dict[str, Engine] = {
+        "claude": Engine("claude", claude_effort, runner, full_autonomy=full),
+        "codex": Engine("codex", codex_effort, runner, full_autonomy=full),
+    }
+    issue = fetch_issue(issue_ref, runner)
+    grounding = ground_prompt(store, f"{issue.title}\n{issue.body}")
+    prompt = build_prompt(issue, grounding)
+    wd = workdir if workdir is not None else Path(
+        tempfile.mkdtemp(prefix="vouch-dual-"))
+    candidates: list[Candidate] = []
+    for name in ("claude", "codex"):
+        candidates.append(run_candidate(
+            engines[name], issue, prompt, root, "HEAD", wd / name, runner,
+            commit=not dry_run,
+        ))
+    return issue, candidates, engines
+
+
+def finalize(store: KBStore, root: Path, issue: Issue, chosen: Candidate | None,
+             engines: dict[str, Engine], candidates: list[Candidate], reason: str,
+             runner: Runner, *, record: bool, proposed_by: str) -> list[str]:
+    ids: list[str] = []
+    if chosen is not None and record:
+        ids = record_to_kb(store, issue, chosen, engines[chosen.engine], reason,
+                           proposed_by=proposed_by)
+    keep = {chosen.branch} if chosen is not None else set()
+    cleanup(root, candidates, keep, runner)
     return ids
