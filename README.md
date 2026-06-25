@@ -19,6 +19,8 @@
 
 Still alpha — surface is small on purpose; expect breaking changes pre-1.0.
 
+> **Featured for Gittensor (SN74).** vouch ships a one-command starter pack for **Gittensor** — Bittensor subnet 74. `vouch init --template gittensor` seeds a cited, already-approved decision-memory of SN74's scoring model: merged-PR rewards, PAT verification, sybil-resistance, the repo allow-list, the issue multiplier, and the emission split. It's the durable *why* behind each rule — reviewed, cited, and committed alongside your code. → **[docs/gittensor.md](docs/gittensor.md)**
+
 ## Why this exists
 
 Three opinionated choices distinguish vouch from the neighbours:
@@ -31,6 +33,7 @@ Three opinionated choices distinguish vouch from the neighbours:
 
 Worth it when:
 
+- **You run or contribute to a Gittensor (SN74) repo.** Scoring weights, the repo allow-list, anti-sybil thresholds, and emission splits get debated across PRs, Discord, and validator changes — then settle into nobody's notes. `vouch init --template gittensor` gives you a cited, reviewed record of *why* each rule exists and what it superseded. See [docs/gittensor.md](docs/gittensor.md).
 - **Multiple agents share a repo** (Claude Code + Cursor + a CI bot). Per-agent attribution in the audit log makes "which agent claimed what" answerable.
 - **Sessions keep re-explaining the same context.** Curated, cited claims let new sessions start from your team's agreed answer instead of re-grepping.
 - **You want decision records without the ADR ceremony.** `vouch crystallize` promotes a session's durable parts into proposals; one approve and they're permanent.
@@ -102,6 +105,24 @@ with your project's first real source and claim when you are ready.
 ![vouch end-to-end demo](docs/demo.gif)
 
 The full captured walkthrough lives at [docs/example-session.md](docs/example-session.md); re-render the GIF from [docs/demo.tape](docs/demo.tape) with `vhs docs/demo.tape`.
+
+## Gittensor (SN74)
+
+vouch's first domain template targets **Gittensor** — Bittensor subnet 74, which rewards open-source contribution by rule. Its scoring model evolves across PRs, Discord, and validator changes, and the rationale usually lives in people's heads. vouch is the durable, cited memory for it:
+
+```bash
+cd your-gittensor-repo
+vouch init --template gittensor   # seeds 1 source, 1 entity, 7 cited claims about SN74 scoring
+vouch status                      #   durable: 7 claims · 1 source · 1 entity
+vouch search "emission split"
+git add .vouch && git commit -m "chore: add vouch decision-memory KB"
+```
+
+The seeded pack covers merged-PR rewards, PAT verification, scoring factors, sybil-resistance, the repo allow-list, the issue-solving multiplier, and the emission split — each a cited, approved, supersede-able claim. When a rule changes, `vouch supersede` the old claim with the new one so the history of *what changed* stays queryable.
+
+vouch stores **no** live signals — it is not a validator or miner client and never reads on-chain scores. It is the institutional memory that sits beside the live layer (Gittensory). The seeded claims are starter-grade; `vouch supersede` them with the real spec or PR once you confirm the live rule.
+
+Full adoption guide — install, seed, wire the MCP server, capture decisions as cited claims: **[docs/gittensor.md](docs/gittensor.md)**.
 
 ## Object model
 
