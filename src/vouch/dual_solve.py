@@ -171,7 +171,11 @@ def run_candidate(engine: Engine, issue: Issue, prompt: str, root: Path,
         cand.error = f"worktree add failed: {add.stderr.strip()[:200]}"
         return cand
 
-    engine.fix(cwd=str(worktree), prompt=prompt)
+    try:
+        engine.fix(cwd=str(worktree), prompt=prompt)
+    except Exception as exc:
+        cand.error = f"engine failed: {exc}"
+        return cand
 
     # intent-to-add so a fix that only *creates* files still shows in `diff HEAD`.
     runner.run(["git", "-C", str(worktree), "add", "-A", "-N"])

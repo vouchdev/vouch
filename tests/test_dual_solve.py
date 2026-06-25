@@ -131,6 +131,7 @@ def test_run_candidate_success_commits_and_captures_sha(tmp_path):
     assert cand.diff == "patch text" and cand.sha == "abc123"
     assert any(c[:5] == ["git", "-C", str(root), "worktree", "add"] for c in fr.calls)
     assert any(c[:4] == ["git", "-C", str(wt), "commit"] for c in fr.calls)
+    assert any(c and c[0] == "claude" for c in fr.calls)
 
 
 def test_run_candidate_worktree_add_failure(tmp_path):
@@ -150,6 +151,7 @@ def test_run_candidate_empty_diff(tmp_path):
                             "p", root, "HEAD", wt, fr)
     assert cand.ok is False and "no diff" in (cand.error or "")
     assert not any(c[:4] == ["git", "-C", str(wt), "commit"] for c in fr.calls)
+    assert any(c[:5] == ["git", "-C", str(root), "worktree", "add"] for c in fr.calls)
 
 
 def test_run_candidate_dry_run_skips_commit(tmp_path):
@@ -160,3 +162,18 @@ def test_run_candidate_dry_run_skips_commit(tmp_path):
                             "p", root, "HEAD", wt, fr, commit=False)
     assert cand.ok is True and cand.diff == "patch" and cand.sha == ""
     assert not any(c[:4] == ["git", "-C", str(wt), "commit"] for c in fr.calls)
+
+
+def test_run_candidate_engine_crash_is_caught(tmp_path):
+    root, wt = tmp_path, tmp_path / "wt"
+
+    class Boom:
+        def run(self, argv, *, cwd=None, stdin=None, timeout=None):
+            if argv[0] in ("claude", "codex"):
+                raise RuntimeError("engine binary exploded")
+            return ap.RunResult(0, "", "")
+
+    boom = Boom()
+    cand = ds.run_candidate(ds.Engine("codex", "high", boom), _issue(),
+                            "p", root, "HEAD", wt, boom)
+    assert cand.ok is False and "engine failed" in (cand.error or "")
