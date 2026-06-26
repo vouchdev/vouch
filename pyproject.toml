@@ -25,7 +25,7 @@ dependencies = [
 
 [project.optional-dependencies]
 embeddings = [
-    "sentence-transformers>=3,<4",
+    "sentence-transformers>=5.6.0,<6",
     "numpy>=1.26,<2",
 ]
 web = [
@@ -52,7 +52,7 @@ embeddings-fast = [
     "sqlite-vec>=0.1,<1",
 ]
 rerank = [
-    "sentence-transformers>=2.7,<4",
+    "sentence-transformers>=5.6.0,<6",
 ]
 
 [project.scripts]
