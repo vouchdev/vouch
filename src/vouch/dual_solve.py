@@ -12,7 +12,9 @@ import json
 import re
 import shutil
 import tempfile
+import time
 import unicodedata
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -20,6 +22,7 @@ from .auto_pr import Engine, Runner, slugify
 from .context import build_context_pack
 from .models import ContextPack, SourceType
 from .proposals import propose_claim
+from .sandbox import DEFAULT_SANDBOX_IMAGE, require_docker_sandbox
 from .storage import KBStore
 
 __all__ = [
@@ -39,14 +42,19 @@ __all__ = [
 ]
 
 
-def _require_engines() -> None:
+def _require_engines(*, sandboxed: bool = False,
+                     sandbox_image: str = DEFAULT_SANDBOX_IMAGE,
+                     runner: Runner | None = None) -> None:
     """Fail fast before any worktree is created if a required binary is absent."""
-    missing = [b for b in ("git", "gh", "claude", "codex") if shutil.which(b) is None]
+    bins = ("git", "gh", "docker") if sandboxed else ("git", "gh", "claude", "codex")
+    missing = [b for b in bins if shutil.which(b) is None]
     if missing:
         raise RuntimeError(
             f"required CLI not on PATH: {', '.join(missing)} "
-            "(dual-solve needs git, gh, and both engines claude and codex)"
+            "(dual-solve needs git, gh, and either host engines or docker sandbox mode)"
         )
+    if sandboxed:
+        require_docker_sandbox(sandbox_image, runner=runner)
 
 
 @dataclass(frozen=True)
@@ -303,27 +311,54 @@ def cleanup(root: Path, candidates: list[Candidate], keep_branches: set[str],
             runner.run(["git", "-C", str(root), "branch", "-D", c.branch])
 
 
+def _fmt_dur(seconds: float) -> str:
+    m, s = divmod(int(seconds), 60)
+    return f"{m}m{s:02d}s" if m else f"{s}s"
+
+
 def prepare(store: KBStore, issue_ref: str, root: Path, runner: Runner, *,
             claude_effort: str = "high", codex_effort: str = "high",
             autonomy: str = "edit", dry_run: bool = False,
-            workdir: Path | None = None
+            workdir: Path | None = None,
+            on_progress: Callable[[str], None] | None = None
             ) -> tuple[Issue, list[Candidate], dict[str, Engine]]:
+    def report(msg: str) -> None:
+        # both engine runs are multi-minute and silent; surface phase progress
+        # so the operator knows which engine is active and that it started.
+        if on_progress is not None:
+            on_progress(msg)
+
     full = autonomy == "full"
     engines: dict[str, Engine] = {
         "claude": Engine("claude", claude_effort, runner, full_autonomy=full),
         "codex": Engine("codex", codex_effort, runner, full_autonomy=full),
     }
+    report(f"fetching issue {issue_ref}")
     issue = fetch_issue(issue_ref, runner)
+    report(f"issue #{issue.number}: {issue.title}" if issue.number is not None
+           else f"issue: {issue.title}")
+    report("grounding from the knowledge base")
     grounding = ground_prompt(store, f"{issue.title}\n{issue.body}")
     prompt = build_prompt(issue, grounding)
     wd = workdir if workdir is not None else Path(
         tempfile.mkdtemp(prefix="vouch-dual-"))
+    efforts = {"claude": claude_effort, "codex": codex_effort}
     candidates: list[Candidate] = []
     for name in ("claude", "codex"):
-        candidates.append(run_candidate(
+        report(f"running {name} (effort={efforts[name]}); "
+               "this can take a few minutes")
+        start = time.monotonic()
+        cand = run_candidate(
             engines[name], issue, prompt, root, "HEAD", wd / name, runner,
             commit=not dry_run,
-        ))
+        )
+        dur = _fmt_dur(time.monotonic() - start)
+        if cand.ok:
+            report(f"{name}: produced a diff "
+                   f"({len(cand.diff.splitlines())} lines) in {dur}")
+        else:
+            report(f"{name}: {cand.error or 'failed'} (after {dur})")
+        candidates.append(cand)
     return issue, candidates, engines
 
 

@@ -1982,11 +1982,16 @@ def auto_pr_cmd(repo_url: str, workspace: str, count: int, claude_effort: str,
               help="keep the chosen branch but propose nothing to the kb.")
 @click.option("--dry-run", is_flag=True,
               help="run both engines but make no commits / kb writes.")
+@click.option("--sandbox", is_flag=True,
+              help="Run claude/codex inside a Docker sandbox image instead of on the host.")
+@click.option("--sandbox-image", default=None,
+              help="Docker image for --sandbox (default: amika/coder:latest).")
 @click.option("--json", "as_json", is_flag=True,
               help="non-interactive: emit both diffs + metadata, no prompt.")
 def dual_solve_cmd(issue_url: str, claude_effort: str, codex_effort: str,
                    autonomy: str, reason: str | None, no_record: bool,
-                   dry_run: bool, as_json: bool) -> None:
+                   dry_run: bool, sandbox: bool, sandbox_image: str | None,
+                   as_json: bool) -> None:
     """Run claude + codex on ISSUE_URL; you pick the winning diff.
 
     Each engine works in its own git worktree on a fresh branch. You compare
@@ -1996,15 +2001,26 @@ def dual_solve_cmd(issue_url: str, claude_effort: str, codex_effort: str,
     """
     from . import dual_solve as ds_mod
     from .auto_pr import SubprocessRunner
+    from .sandbox import DEFAULT_SANDBOX_IMAGE, DockerAgentRunner
     store = _load_store()
-    runner = SubprocessRunner()
+    base_runner = SubprocessRunner()
+    sandbox_image = sandbox_image or DEFAULT_SANDBOX_IMAGE
     try:
-        ds_mod._require_engines()
-        root = ds_mod.repo_root(runner, Path.cwd())
+        if sandbox:
+            ds_mod._require_engines(
+                sandboxed=True, sandbox_image=sandbox_image, runner=base_runner)
+        else:
+            ds_mod._require_engines()
+        root = ds_mod.repo_root(base_runner, Path.cwd())
+        runner = (
+            DockerAgentRunner(repo_root=root, runner=base_runner, image=sandbox_image)
+            if sandbox else base_runner
+        )
         issue, candidates, engines = ds_mod.prepare(
             store, issue_url, root, runner,
             claude_effort=claude_effort, codex_effort=codex_effort,
             autonomy=autonomy, dry_run=dry_run,
+            on_progress=lambda m: click.echo(m, err=True),
         )
     except (ValueError, RuntimeError) as e:
         raise click.ClickException(str(e)) from e
@@ -2697,6 +2713,22 @@ def _resolve_auth_token(auth: str | None) -> str | None:
     show_default=True,
     help="Open the browser to the queue on startup.",
 )
+@click.option(
+    "--allow-dual-solve",
+    is_flag=True,
+    help="Mount the dual-solve runner SPA (spawns claude+codex; edit-only). "
+         "Off by default; the server must run inside the target git repo.",
+)
+@click.option(
+    "--dual-solve-sandbox",
+    is_flag=True,
+    help="Run dual-solve claude/codex invocations inside a Docker sandbox image.",
+)
+@click.option(
+    "--dual-solve-sandbox-image",
+    default=None,
+    help="Docker image for --dual-solve-sandbox (default: amika/coder:latest).",
+)
 def review_ui(
     bind: str,
     auth: str | None,
@@ -2704,6 +2736,9 @@ def review_ui(
     page_size: int | None,
     kb_root: str | None,
     open_browser: bool,
+    allow_dual_solve: bool,
+    dual_solve_sandbox: bool,
+    dual_solve_sandbox_image: str | None,
 ) -> None:
     """Run the browser-based review console (issue #194).
 
@@ -2743,7 +2778,10 @@ def review_ui(
 
     try:
         app = web_pkg.create_app(
-            kb_root, auth_token=token, auth_label=reviewer, page_size=page_size
+            kb_root, auth_token=token, auth_label=reviewer, page_size=page_size,
+            allow_dual_solve=allow_dual_solve,
+            dual_solve_sandbox=dual_solve_sandbox,
+            dual_solve_sandbox_image=dual_solve_sandbox_image,
         )
     except (FileNotFoundError, RuntimeError) as e:
         raise click.ClickException(str(e)) from e

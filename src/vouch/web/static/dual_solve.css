@@ -1,0 +1,14 @@
+.ds { max-width: 1200px; margin: 0 auto; }
+.ds-run { display: flex; gap: .5rem; margin: 1rem 0; }
+.ds-run input { flex: 1; }
+.ds-progress { background:#111; color:#ddd; padding:.5rem; white-space:pre-wrap; }
+.ds-error { color:#b00; }
+.ds-panes { display:grid; grid-template-columns:1fr 1fr; gap:1rem; }
+.ds-pane { border:1px solid #ccc; padding:.5rem; overflow:auto; }
+.ds-file-head { font-weight:600; margin-top:.5rem; }
+.ds-pane pre { margin:0; font-size:12px; overflow-x:auto; }
+.ln-add { background:#e6ffed; display:block; }
+.ln-del { background:#ffeef0; display:block; }
+.ln-hunk { color:#06c; display:block; }
+.ln-ctx { display:block; }
+.ds-choose, .ds-result { margin:1rem 0; display:flex; gap:.5rem; align-items:center; flex-wrap:wrap; }

@@ -61,6 +61,7 @@ from .. import lifecycle as life
 from .. import proposals as proposals_mod
 from ..models import Proposal, ProposalStatus
 from ..storage import ArtifactNotFoundError, KBStore, _yaml_load, discover_root
+from .dual_solve_api import register as _register_dual_solve
 
 _MODULE_DIR = Path(__file__).resolve().parent
 _TEMPLATES_DIR = _MODULE_DIR / "templates"
@@ -270,6 +271,9 @@ def build_app(
     *,
     auth: AuthConfig | None = None,
     page_size: int = DEFAULT_PAGE_SIZE,
+    allow_dual_solve: bool = False,
+    dual_solve_sandbox: bool = False,
+    dual_solve_sandbox_image: str | None = None,
 ) -> FastAPI:
     """FastAPI app bound to a KB root.
 
@@ -352,6 +356,7 @@ def build_app(
         # Thread the auth-enabled flag into every template (display only — the
         # browser authenticates via the HttpOnly cookie, not via JS).
         ctx.setdefault("auth_enabled", auth.enabled)
+        ctx.setdefault("dual_solve_enabled", allow_dual_solve)
         return templates.TemplateResponse(request, name, ctx)
 
     async def _notify(kind: str, **extra: Any) -> None:
@@ -586,4 +591,9 @@ def build_app(
             with contextlib.suppress(Exception):
                 await hub.disconnect(websocket)
 
+    _register_dual_solve(
+        app, store=store, hub=hub, auth=auth, guarded=guarded,
+        render=_tmpl, reviewer=reviewer, enabled=allow_dual_solve,
+        sandboxed=dual_solve_sandbox, sandbox_image=dual_solve_sandbox_image,
+    )
     return app

@@ -15,7 +15,21 @@ All notable changes to vouch are documented here. Format follows
   plus up to three approach claims land in `proposed/`, so approval still
   requires a human `vouch approve`. Nothing is auto-approved. `--json` is
   non-interactive (emits both diffs, keeps both branches); `--no-record` and
-  `--dry-run` propose nothing.
+  `--dry-run` propose nothing. Each phase (fetch, ground, and per-engine run
+  with elapsed time and diff size) reports progress to stderr while it works.
+- `vouch dual-solve --sandbox` and
+  `vouch review-ui --dual-solve-sandbox` — run Claude Code and Codex inside a
+  Docker image (default `amika/coder:latest`) while leaving git/GitHub commands
+  on the host. The sandbox runner mounts only each candidate worktree plus a
+  temporary copied home containing known Claude/Codex credential files, so agent
+  writes stay in the throwaway dual-solve branches and host credential files are
+  not modified.
+- `vouch review-ui --allow-dual-solve` — a browser SPA that runs `dual-solve`
+  on a github issue link, streams progress over the review-ui's websocket, shows
+  both engines' diffs side by side, and lets you pick the winner. Off by default;
+  localhost-first; edit-only over http; the pick keeps the branch and proposes
+  the rationale into the KB through the existing review gate (nothing
+  auto-approves). See `proposals/VEP-0006-dual-solve-web.md`.
 - `vouch auto-pr <repo-url>` — open N mergeable PRs against any github repo.
   Sources open issues first then agent-discovered improvements, bootstraps a
   contribution skill from the repo's merged PRs when it ships no guidance, and
