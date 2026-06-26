@@ -42,15 +42,37 @@ def test_pr_labeler_workflow_is_pull_request_metadata_only() -> None:
     workflow = _load_yaml(WORKFLOW)
     triggers = workflow["on"]
     assert "pull_request_target" in triggers
+    assert "workflow_dispatch" in triggers
     assert "pull_request" not in triggers
 
-    steps = workflow["jobs"]["label"]["steps"]
+    jobs = workflow["jobs"]
+    assert jobs["label"]["if"] == "github.event_name == 'pull_request_target'"
+    assert jobs["backfill-pr-labels"]["if"] == "github.event_name == 'workflow_dispatch'"
+
+    steps = [
+        step
+        for job in jobs.values()
+        for step in job.get("steps", [])
+    ]
     used_actions = [step.get("uses", "") for step in steps]
-    assert "actions/labeler@v6" in used_actions
+    assert any(
+        action.startswith("actions/labeler@")
+        and not action.endswith("@v6")
+        for action in used_actions
+    )
     assert "actions/checkout@v4" not in used_actions
 
-    labeler_step = next(step for step in steps if step.get("uses") == "actions/labeler@v6")
+    labeler_step = next(
+        step for step in jobs["label"]["steps"]
+        if step.get("uses", "").startswith("actions/labeler@")
+    )
     assert labeler_step["with"]["sync-labels"] is True
+
+    backfill_step = next(
+        step for step in jobs["backfill-pr-labels"]["steps"]
+        if step.get("uses", "").startswith("actions/labeler@")
+    )
+    assert backfill_step["with"]["pr-number"] == "${{ steps.open-prs.outputs.result }}"
 
 
 def test_pr_labeler_workflow_creates_every_configured_label() -> None:
