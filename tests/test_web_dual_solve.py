@@ -41,8 +41,13 @@ def test_dual_solve_page_renders_when_enabled(git_kb):
 
 
 def test_dual_solve_routes_absent_when_disabled(git_kb):
-    r = _client(git_kb, enabled=False).get("/dual-solve")
-    assert r.status_code == 404
+    # the security gate: with --allow-dual-solve off, NOTHING mounts -- not just
+    # the page, but the executing run/choose routes that spawn engines.
+    c = _client(git_kb, enabled=False)
+    assert c.get("/dual-solve").status_code == 404
+    assert c.post("/dual-solve/run", json={"issue_url": "o/n#4"}).status_code == 404
+    assert c.post("/dual-solve/choose",
+                  json={"job_id": "x", "winner": None}).status_code == 404
 
 
 def _fake_prepare(monkeypatch, *, calls):

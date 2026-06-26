@@ -118,6 +118,10 @@ def register(
             # broad on purpose: any prepare failure must mark the job as errored
             # and notify, never crash the background task. (BLE is not in the
             # ruff ruleset, so no noqa is needed or wanted here.)
+            # leak-free today: prepare only raises in fetch_issue/ground_prompt,
+            # i.e. BEFORE any worktree is created (run_candidate swallows its own
+            # errors into cand.error). if prepare ever grows a raising path after
+            # worktree creation, those worktrees would orphan here -- clean them.
             job.status = "error"
             job.error = str(exc)
             await hub.broadcast(_frame(job, "error", str(exc)))
