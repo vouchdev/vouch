@@ -6,6 +6,8 @@ All notable changes to vouch are documented here. Format follows
 
 ## [Unreleased]
 
+## [1.0.0] — 2026-06-26
+
 ### Added
 - `vouch dual-solve <issue-url>` — run claude + codex on one github issue in
   isolated git worktrees, compare the two diffs, keep the branch you pick, and
