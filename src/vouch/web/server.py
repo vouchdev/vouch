@@ -201,6 +201,11 @@ def _pending_page(store: KBStore, page: int, page_size: int
     return proposals, page, pages, total
 
 
+def _pending_count(store: KBStore) -> int:
+    proposed_dir = store.kb_dir / "proposed"
+    return len(list(proposed_dir.glob("*.yaml"))) if proposed_dir.is_dir() else 0
+
+
 # --- auth -----------------------------------------------------------------
 
 
@@ -369,7 +374,7 @@ def build_app(
         return {
             "ok": True,
             "kb": str(store.root),
-            "pending": len(store.list_proposals(ProposalStatus.PENDING)),
+            "pending": _pending_count(store),
             "auth": auth.enabled,
             "clients": hub.client_count,
         }

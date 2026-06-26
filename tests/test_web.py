@@ -239,6 +239,22 @@ def test_healthz(client: TestClient, store: KBStore) -> None:
     assert body["pending"] == 1
 
 
+def test_healthz_survives_unreadable_pending_yaml(
+    client: TestClient, store: KBStore,
+) -> None:
+    (store.kb_dir / "proposed" / "bad.yaml").write_text(
+        "id: bad\npayload: '\x80'\n",
+        encoding="utf-8",
+    )
+
+    r = client.get("/healthz")
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    assert body["pending"] == 1
+
+
 # --- bring-up errors ------------------------------------------------------
 
 
