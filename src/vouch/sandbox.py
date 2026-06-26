@@ -15,7 +15,7 @@ from pathlib import Path
 
 from .auto_pr import Runner, RunResult, SubprocessRunner
 
-DEFAULT_SANDBOX_IMAGE = "amika/coder:latest"
+DEFAULT_SANDBOX_IMAGE = "vouch/coder:latest"
 CONTAINER_HOME = "/home/vouch"
 AGENT_BINARIES = {"claude", "codex"}
 AGENT_CONFIG_PATHS = (
@@ -43,7 +43,7 @@ def require_docker_sandbox(image: str = DEFAULT_SANDBOX_IMAGE,
     if res.code != 0:
         detail = res.stderr.strip() or res.stdout.strip()
         hint = (
-            f"sandbox image {image!r} is not available. Build Amika's coder "
+            f"sandbox image {image!r} is not available. Build vouch's coder "
             "preset first, or pass --sandbox-image with an image that contains "
             "claude and codex."
         )
@@ -58,9 +58,9 @@ class DockerAgentRunner:
     The mounted home is a temporary copy of known Claude/Codex credential files,
     so agents can authenticate without being able to rewrite the host's real
     config. The candidate worktree is mounted at the same absolute path so
-    existing `--cd` / cwd arguments continue to work. The Amika image is used as
-    the runtime, but its lifecycle entrypoint is bypassed for these one-shot
-    commands so host bind mounts keep the caller's UID/GID ownership.
+    existing `--cd` / cwd arguments continue to work. The sandbox image is used
+    as the runtime, but its entrypoint is bypassed for these one-shot commands
+    so host bind mounts keep the caller's UID/GID ownership.
     """
 
     def __init__(

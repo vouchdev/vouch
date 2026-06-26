@@ -19,7 +19,7 @@ All notable changes to vouch are documented here. Format follows
   with elapsed time and diff size) reports progress to stderr while it works.
 - `vouch dual-solve --sandbox` and
   `vouch review-ui --dual-solve-sandbox` — run Claude Code and Codex inside a
-  Docker image (default `amika/coder:latest`) while leaving git/GitHub commands
+  Docker image (default `vouch/coder:latest`) while leaving git/GitHub commands
   on the host. The sandbox runner mounts only each candidate worktree plus a
   temporary copied home containing known Claude/Codex credential files, so agent
   writes stay in the throwaway dual-solve branches and host credential files are

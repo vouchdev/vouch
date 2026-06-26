@@ -1985,7 +1985,7 @@ def auto_pr_cmd(repo_url: str, workspace: str, count: int, claude_effort: str,
 @click.option("--sandbox", is_flag=True,
               help="Run claude/codex inside a Docker sandbox image instead of on the host.")
 @click.option("--sandbox-image", default=None,
-              help="Docker image for --sandbox (default: amika/coder:latest).")
+              help="Docker image for --sandbox (default: vouch/coder:latest).")
 @click.option("--json", "as_json", is_flag=True,
               help="non-interactive: emit both diffs + metadata, no prompt.")
 def dual_solve_cmd(issue_url: str, claude_effort: str, codex_effort: str,
@@ -2727,7 +2727,7 @@ def _resolve_auth_token(auth: str | None) -> str | None:
 @click.option(
     "--dual-solve-sandbox-image",
     default=None,
-    help="Docker image for --dual-solve-sandbox (default: amika/coder:latest).",
+    help="Docker image for --dual-solve-sandbox (default: vouch/coder:latest).",
 )
 def review_ui(
     bind: str,
