@@ -27,6 +27,9 @@ All notable changes to vouch are documented here. Format follows
 - dual-solve JSON, review-ui job, and choose responses now include
   `changed_files` for each candidate and the kept branch, so desktop and browser
   clients can show the resulting files without parsing unified diffs.
+- dual-solve JSON and review-ui job responses now include each engine's returned
+  output log plus a deterministic recommendation hint based on success and diff
+  scope, so clients can compare Claude and Codex results before choosing.
 - `vouch review-ui --allow-dual-solve` — a browser SPA that runs `dual-solve`
   on a github issue link, streams progress over the review-ui's websocket, shows
   both engines' diffs side by side, and lets you pick the winner. Off by default;
