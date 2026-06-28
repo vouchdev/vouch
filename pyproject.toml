@@ -47,7 +47,7 @@ dev = [
 ]
 embeddings-fast = [
     "fastembed>=0.3,<1",
-    "onnxruntime>=1.18,<2",
+    "onnxruntime>=1.27.0,<2",
     "numpy>=1.26,<3",
     "sqlite-vec>=0.1,<1",
 ]
