@@ -69,10 +69,12 @@ METHODS = [
     "kb.impact",
     "kb.graph_export",
     "kb.provenance_rebuild",
+    "kb.list_skills",
+    "kb.get_skill",
 ]
 
 
-def capabilities() -> Capabilities:
+def capabilities(*, publish_skills: bool = True) -> Capabilities:
     retrieval = ["fts5", "substring"]
     try:
         from .embeddings import get_embedder
@@ -94,4 +96,5 @@ def capabilities() -> Capabilities:
             "config_path": "retrieval.scope",
         },
         context_engines=[describe_engine()],
+        mcp={"publish_skills": publish_skills},
     )

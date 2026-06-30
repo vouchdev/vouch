@@ -92,6 +92,12 @@ def _starter_config() -> dict[str, Any]:
                 "human review via vouch pending/show/approve",
             ],
         },
+        "mcp": {
+            # Publish the slash-command / SKILL.md catalogue over MCP via
+            # kb.list_skills / kb.get_skill. Flip to false for "company-brain"
+            # mode where the catalogue itself is sensitive.
+            "publish_skills": True,
+        },
         # Extra page kinds beyond the built-in PageType enum. Each maps a kind
         # name to {required_fields, frontmatter_schema, required_citations,
         # extends}. See `vouch schema list` / docs for the shape. (issue #234)
