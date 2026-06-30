@@ -1,0 +1,13 @@
+version: 1
+review:
+  require_human_approval: true
+  expire_pending_after_days: 90
+retrieval:
+  backend: auto
+  default_limit: 10
+agents:
+  recommended_loop:
+  - kb.search before writing
+  - kb.propose_* with citations
+  - human review via vouch pending/show/approve
+page_kinds: {}

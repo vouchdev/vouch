@@ -1,0 +1,27 @@
+id: 20260630-022917-fb42862e
+kind: page
+proposed_by: example-agent
+session_id: null
+proposed_at: '2026-06-30T02:29:17.474258Z'
+payload:
+  id: team-glossary
+  title: Team glossary
+  body: "Shared vocabulary for the acme-example platform team. A living wiki page;\n\
+    edits land via the normal review gate but the content is just definitions.\n\n\
+    ## Terms\n\n- **monorepo** -- the single `acme-example/platform` repository that\
+    \ holds\n  the API, web app, and shared libraries.\n- **staging** -- the pre-production\
+    \ environment that mirrors prod; safe to\n  break.\n- **onboarding buddy** --\
+    \ the engineer assigned to a new hire for their\n  first two weeks.\n- **starter\
+    \ ticket** -- a deliberately small, well-scoped issue used to\n  walk a new engineer\
+    \ through the full ship cycle.\n"
+  type: concept
+  claims: []
+  entities: []
+  sources: []
+  tags: []
+  metadata: {}
+rationale: null
+status: approved
+decided_at: '2026-06-30T02:29:38.892165Z'
+decided_by: alice-example
+decision_reason: initial wiki seed

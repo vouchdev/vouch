@@ -1,0 +1,54 @@
+id: 20260630-022916-d3df5b0d
+kind: page
+proposed_by: example-agent
+session_id: null
+proposed_at: '2026-06-30T02:29:16.770596Z'
+payload:
+  id: onboarding-a-new-engineer-at-acme-example
+  title: Onboarding a new engineer at acme-example
+  body: 'This page is the running notes for getting a new engineer productive in
+
+    their first week. It is a plain wiki page: no review-gated claims, no
+
+    graph edges, just prose someone typed up.
+
+
+    ## Day one
+
+
+    - Get a laptop from it-example and set up SSO.
+
+    - Clone the `acme-example/platform` monorepo.
+
+    - Read the architecture overview page and the local-dev page.
+
+
+    ## First week
+
+
+    - Pair with your onboarding buddy on a small starter ticket.
+
+    - Ship one change to staging by Friday. It does not have to be big.
+
+    - Add yourself to the team roster page.
+
+
+    ## Who to ask
+
+
+    - Build/CI questions: ask in `#eng-build`.
+
+    - Access/permissions: file a ticket with it-example.
+
+    '
+  type: concept
+  claims: []
+  entities: []
+  sources: []
+  tags: []
+  metadata: {}
+rationale: null
+status: approved
+decided_at: '2026-06-30T02:29:38.868470Z'
+decided_by: alice-example
+decision_reason: initial wiki seed

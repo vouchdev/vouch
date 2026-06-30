@@ -1,0 +1,26 @@
+id: 20260630-023150-732a4743
+kind: page
+proposed_by: example-agent
+session_id: null
+proposed_at: '2026-06-30T02:31:50.050646Z'
+payload:
+  id: billing-platform-overview
+  title: Billing platform overview
+  body: Canonical overview of the billing platform. billing-service charges customers
+    and persists to postgres-billing. Owned by ledger-api / platform-team.
+  type: concept
+  claims:
+  - billing-service-depends-on-postgres-billing-for-all-durable-
+  - ledger-api-owns-the-billing-service-and-is-maintained-by-pla
+  entities:
+  - billing-service
+  - postgres-billing
+  - ledger-api
+  sources: []
+  tags: []
+  metadata: {}
+rationale: null
+status: approved
+decided_at: '2026-06-30T02:31:50.812934Z'
+decided_by: plind-junior
+decision_reason: null

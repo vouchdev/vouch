@@ -1,0 +1,21 @@
+id: billing-service-depends-on-postgres-billing-for-all-durable-
+text: billing-service depends on postgres-billing for all durable state.
+type: decision
+status: working
+confidence: 0.95
+evidence:
+- 767fad9400fac95d7c0f8e548ae0fdec2ff26945613b16dab0e3f75f7f78c496
+entities: []
+supersedes: []
+superseded_by: null
+contradicts: []
+scope:
+  visibility: project
+  project: null
+  agent: null
+tags:
+- billing
+created_at: '2026-06-30T02:31:44.198735Z'
+updated_at: '2026-06-30T02:31:44.198738Z'
+last_confirmed_at: null
+approved_by: plind-junior

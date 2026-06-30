@@ -1,0 +1,21 @@
+id: 20260630-023143-b576a486
+kind: claim
+proposed_by: example-agent
+session_id: null
+proposed_at: '2026-06-30T02:31:43.826272Z'
+payload:
+  id: every-charge-endpoint-write-must-carry-an-idempotency-key-st
+  text: Every charge-endpoint write must carry an idempotency key stored in postgres-billing
+    for 24h.
+  type: decision
+  confidence: 0.85
+  evidence:
+  - 294d6209814a465c62e43a6acdbf7a90323649bfba5eae6dcc0fc7db0b3dcd09
+  entities: []
+  tags:
+  - billing
+rationale: null
+status: approved
+decided_at: '2026-06-30T02:31:45.381101Z'
+decided_by: plind-junior
+decision_reason: null

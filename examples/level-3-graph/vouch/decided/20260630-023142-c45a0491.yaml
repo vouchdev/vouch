@@ -1,0 +1,20 @@
+id: 20260630-023142-c45a0491
+kind: claim
+proposed_by: example-agent
+session_id: null
+proposed_at: '2026-06-30T02:31:42.820572Z'
+payload:
+  id: billing-service-depends-on-postgres-billing-for-all-durable-
+  text: billing-service depends on postgres-billing for all durable state.
+  type: decision
+  confidence: 0.95
+  evidence:
+  - 767fad9400fac95d7c0f8e548ae0fdec2ff26945613b16dab0e3f75f7f78c496
+  entities: []
+  tags:
+  - billing
+rationale: null
+status: approved
+decided_at: '2026-06-30T02:31:44.206509Z'
+decided_by: plind-junior
+decision_reason: null

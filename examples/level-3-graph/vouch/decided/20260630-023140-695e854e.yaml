@@ -1,0 +1,16 @@
+id: 20260630-023140-695e854e
+kind: entity
+proposed_by: example-agent
+session_id: null
+proposed_at: '2026-06-30T02:31:40.124174Z'
+payload:
+  id: ledger-api
+  name: ledger-api
+  type: project
+  aliases: []
+  description: project owning the billing-service
+rationale: null
+status: approved
+decided_at: '2026-06-30T02:31:42.034845Z'
+decided_by: plind-junior
+decision_reason: null

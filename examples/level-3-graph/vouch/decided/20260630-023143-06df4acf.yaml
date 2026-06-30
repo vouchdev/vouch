@@ -1,0 +1,20 @@
+id: 20260630-023143-06df4acf
+kind: claim
+proposed_by: example-agent
+session_id: null
+proposed_at: '2026-06-30T02:31:43.457581Z'
+payload:
+  id: incident-247-was-caused-by-a-missing-idempotency-key-on-the-
+  text: incident-247 was caused by a missing idempotency key on the charge endpoint.
+  type: observation
+  confidence: 0.9
+  evidence:
+  - 511434079b5d91900c46d7eeaccd2fbb883a47a6632337b4a8420f18edc0a4ff
+  entities: []
+  tags:
+  - incident
+rationale: null
+status: approved
+decided_at: '2026-06-30T02:31:44.988507Z'
+decided_by: plind-junior
+decision_reason: null

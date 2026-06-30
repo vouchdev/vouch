@@ -1,0 +1,17 @@
+id: 20260630-023150-f2cbafde
+kind: relation
+proposed_by: vouch-extractor
+session_id: null
+proposed_at: '2026-06-30T02:31:50.801677Z'
+payload:
+  id: billing-platform-overview-relates-to-billing-service
+  source: billing-platform-overview
+  relation: relates_to
+  target: billing-service
+  confidence: 0.5
+  evidence: []
+rationale: auto-extracted from page billing-platform-overview
+status: rejected
+decided_at: '2026-06-30T02:32:11.156831Z'
+decided_by: plind-junior
+decision_reason: out of scope for this example snapshot

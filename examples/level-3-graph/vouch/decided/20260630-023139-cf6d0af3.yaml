@@ -1,0 +1,16 @@
+id: 20260630-023139-cf6d0af3
+kind: entity
+proposed_by: example-agent
+session_id: null
+proposed_at: '2026-06-30T02:31:39.249320Z'
+payload:
+  id: billing-service
+  name: billing-service
+  type: system
+  aliases: []
+  description: service that charges customers
+rationale: null
+status: approved
+decided_at: '2026-06-30T02:31:41.663925Z'
+decided_by: plind-junior
+decision_reason: null

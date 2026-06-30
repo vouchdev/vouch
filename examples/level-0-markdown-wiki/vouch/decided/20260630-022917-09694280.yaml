@@ -1,0 +1,27 @@
+id: 20260630-022917-09694280
+kind: page
+proposed_by: example-agent
+session_id: null
+proposed_at: '2026-06-30T02:29:17.124301Z'
+payload:
+  id: local-development-setup
+  title: Local development setup
+  body: "How to run the acme-example platform on your own machine. These are just\n\
+    notes; nothing here is a reviewed claim yet.\n\n## Prerequisites\n\n- Python 3.11+\
+    \ and a recent Node.\n- Docker for the local Postgres and Redis containers.\n\n\
+    ## Steps\n\n1. `make bootstrap` installs deps and seeds a local database.\n2.\
+    \ `make dev` starts the API on :8080 and the web app on :3000.\n3. `make test`\
+    \ runs the unit suite; it should be green on a clean clone.\n\n## Gotchas\n\n\
+    - If `make dev` fails on the database, run `docker compose down -v` and\n  retry;\
+    \ a stale volume is the usual cause.\n- The web app expects `VITE_API_URL=http://localhost:8080`.\n"
+  type: concept
+  claims: []
+  entities: []
+  sources: []
+  tags: []
+  metadata: {}
+rationale: null
+status: approved
+decided_at: '2026-06-30T02:29:38.877911Z'
+decided_by: alice-example
+decision_reason: initial wiki seed

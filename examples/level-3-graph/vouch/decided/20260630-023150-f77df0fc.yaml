@@ -1,0 +1,17 @@
+id: 20260630-023150-f77df0fc
+kind: relation
+proposed_by: vouch-extractor
+session_id: null
+proposed_at: '2026-06-30T02:31:50.809622Z'
+payload:
+  id: billing-platform-overview-relates-to-ledger-api
+  source: billing-platform-overview
+  relation: relates_to
+  target: ledger-api
+  confidence: 0.5
+  evidence: []
+rationale: auto-extracted from page billing-platform-overview
+status: rejected
+decided_at: '2026-06-30T02:32:11.161341Z'
+decided_by: plind-junior
+decision_reason: out of scope for this example snapshot

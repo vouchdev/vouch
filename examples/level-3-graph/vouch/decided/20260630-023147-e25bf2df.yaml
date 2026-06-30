@@ -1,0 +1,17 @@
+id: 20260630-023147-e25bf2df
+kind: relation
+proposed_by: example-agent
+session_id: null
+proposed_at: '2026-06-30T02:31:47.164737Z'
+payload:
+  id: idempotency-keys-implements-billing-service
+  source: idempotency-keys
+  relation: implements
+  target: billing-service
+  confidence: 0.7
+  evidence: []
+rationale: null
+status: approved
+decided_at: '2026-06-30T02:31:49.326632Z'
+decided_by: plind-junior
+decision_reason: null

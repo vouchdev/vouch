@@ -1,0 +1,17 @@
+id: 20260630-023147-4f7c23ef
+kind: relation
+proposed_by: example-agent
+session_id: null
+proposed_at: '2026-06-30T02:31:47.524108Z'
+payload:
+  id: idempotency-keys-depends-on-postgres-billing
+  source: idempotency-keys
+  relation: depends_on
+  target: postgres-billing
+  confidence: 0.8
+  evidence: []
+rationale: null
+status: approved
+decided_at: '2026-06-30T02:31:49.694806Z'
+decided_by: plind-junior
+decision_reason: null

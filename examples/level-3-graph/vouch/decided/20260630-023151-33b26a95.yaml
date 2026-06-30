@@ -1,0 +1,17 @@
+id: 20260630-023151-33b26a95
+kind: relation
+proposed_by: vouch-extractor
+session_id: null
+proposed_at: '2026-06-30T02:31:51.195432Z'
+payload:
+  id: idempotency-keys-relates-to-incident-247
+  source: idempotency-keys
+  relation: relates_to
+  target: incident-247
+  confidence: 0.5
+  evidence: []
+rationale: auto-extracted from page idempotency-keys
+status: rejected
+decided_at: '2026-06-30T02:32:11.165167Z'
+decided_by: plind-junior
+decision_reason: out of scope for this example snapshot

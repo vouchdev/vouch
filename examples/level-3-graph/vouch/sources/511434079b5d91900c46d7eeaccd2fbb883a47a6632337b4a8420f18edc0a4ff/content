@@ -1,0 +1,4 @@
+# Postmortem: incident-247 (duplicate-charge)
+
+Root cause: a missing idempotency key on the billing-service charge
+endpoint. The fix introduces idempotency-keys, owned by ledger-api.

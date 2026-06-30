@@ -1,0 +1,17 @@
+id: 20260630-023139-c828c6f8
+kind: entity
+proposed_by: example-agent
+session_id: null
+proposed_at: '2026-06-30T02:31:39.650531Z'
+payload:
+  id: postgres-billing
+  name: postgres-billing
+  type: system
+  aliases:
+  - billing-db
+  description: durable store for billing
+rationale: null
+status: approved
+decided_at: '2026-06-30T02:31:41.848016Z'
+decided_by: plind-junior
+decision_reason: null

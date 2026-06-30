@@ -1,0 +1,17 @@
+id: 20260630-023150-682c8fb4
+kind: relation
+proposed_by: vouch-extractor
+session_id: null
+proposed_at: '2026-06-30T02:31:50.805585Z'
+payload:
+  id: billing-platform-overview-relates-to-postgres-billing
+  source: billing-platform-overview
+  relation: relates_to
+  target: postgres-billing
+  confidence: 0.5
+  evidence: []
+rationale: auto-extracted from page billing-platform-overview
+status: rejected
+decided_at: '2026-06-30T02:32:11.150880Z'
+decided_by: plind-junior
+decision_reason: out of scope for this example snapshot

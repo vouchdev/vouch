@@ -1,0 +1,15 @@
+id: 511434079b5d91900c46d7eeaccd2fbb883a47a6632337b4a8420f18edc0a4ff
+type: file
+locator: /tmp/claude-1000/-home-a-Dev-plind-junior-vouch/4b58ec49-6b74-497d-b48e-5f7b30d160e0/scratchpad/l3build/src/incident-247-postmortem.md
+title: incident-247 postmortem
+hash: 511434079b5d91900c46d7eeaccd2fbb883a47a6632337b4a8420f18edc0a4ff
+immutable: true
+scope:
+  visibility: project
+  project: null
+  agent: null
+byte_size: 183
+media_type: text/plain
+created_at: '2026-06-30T02:31:38.500346Z'
+metadata: {}
+tags: []

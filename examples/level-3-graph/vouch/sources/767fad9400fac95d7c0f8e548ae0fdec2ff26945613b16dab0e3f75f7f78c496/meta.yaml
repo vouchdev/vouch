@@ -1,0 +1,15 @@
+id: 767fad9400fac95d7c0f8e548ae0fdec2ff26945613b16dab0e3f75f7f78c496
+type: file
+locator: /tmp/claude-1000/-home-a-Dev-plind-junior-vouch/4b58ec49-6b74-497d-b48e-5f7b30d160e0/scratchpad/l3build/src/arch-review-2026-q1.md
+title: Arch review 2026 Q1
+hash: 767fad9400fac95d7c0f8e548ae0fdec2ff26945613b16dab0e3f75f7f78c496
+immutable: true
+scope:
+  visibility: project
+  project: null
+  agent: null
+byte_size: 273
+media_type: text/plain
+created_at: '2026-06-30T02:31:38.108147Z'
+metadata: {}
+tags: []

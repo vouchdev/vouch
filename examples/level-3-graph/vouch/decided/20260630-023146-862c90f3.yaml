@@ -1,0 +1,17 @@
+id: 20260630-023146-862c90f3
+kind: relation
+proposed_by: example-agent
+session_id: null
+proposed_at: '2026-06-30T02:31:46.099755Z'
+payload:
+  id: billing-service-owned-by-ledger-api
+  source: billing-service
+  relation: owned_by
+  target: ledger-api
+  confidence: 0.9
+  evidence: []
+rationale: null
+status: approved
+decided_at: '2026-06-30T02:31:48.238141Z'
+decided_by: plind-junior
+decision_reason: null

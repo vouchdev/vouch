@@ -1,0 +1,15 @@
+id: 294d6209814a465c62e43a6acdbf7a90323649bfba5eae6dcc0fc7db0b3dcd09
+type: file
+locator: /tmp/claude-1000/-home-a-Dev-plind-junior-vouch/4b58ec49-6b74-497d-b48e-5f7b30d160e0/scratchpad/l3build/src/idempotency-rfc.md
+title: idempotency-keys RFC
+hash: 294d6209814a465c62e43a6acdbf7a90323649bfba5eae6dcc0fc7db0b3dcd09
+immutable: true
+scope:
+  visibility: project
+  project: null
+  agent: null
+byte_size: 181
+media_type: text/plain
+created_at: '2026-06-30T02:31:38.876686Z'
+metadata: {}
+tags: []

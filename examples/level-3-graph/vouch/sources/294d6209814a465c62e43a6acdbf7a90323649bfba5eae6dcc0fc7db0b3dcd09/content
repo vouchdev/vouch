@@ -1,0 +1,4 @@
+# RFC: idempotency-keys for the charge endpoint
+
+Every write to the charge endpoint of billing-service must carry an
+idempotency key. The key is stored in postgres-billing for 24h.

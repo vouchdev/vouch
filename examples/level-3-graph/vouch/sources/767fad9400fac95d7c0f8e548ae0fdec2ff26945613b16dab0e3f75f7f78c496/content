@@ -1,0 +1,5 @@
+# Architecture review — acme-example billing platform (2026 Q1)
+
+The billing-service depends on the postgres-billing database for all
+durable state. The ledger-api project owns the billing-service and is
+maintained by the platform-team. alice-example chaired the review.
