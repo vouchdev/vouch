@@ -1,0 +1,242 @@
+{
+  "protocol": {
+    "framing": "Newline-delimited JSON (NDJSON), one object per line, in both directions. The server (`run_jsonl` in src/vouch/jsonl_server.py) loops `for line in stdin:`, `line.strip()`s each line, skips blank lines, and `json.loads` exactly one request envelope per line. For each request it writes exactly one response object via `stdout.write(json.dumps(response, default=str) + \"\\n\")` followed by `stdout.flush()`. There is NO Content-Length header, no length prefix, no framing other than the trailing newline. The model is strictly one request per line \u00e2\u0086\u0092 one response per line, processed sequentially and synchronously (no concurrency, no batching, no interleaving). The Electron main process should: spawn `vouch serve --transport jsonl` (or `python -m vouch ... serve --transport jsonl`) with cwd inside the project so the .vouch/ KB is discovered, write each request as `JSON.stringify(req) + \"\\n\"` to child.stdin, and parse child.stdout line-by-line (split on \"\\n\"). Because the response carries back the request `id`, you can correlate, but since processing is strictly in-order you can also just match responses to requests FIFO.",
+    "request_format": "A single JSON object (\"request envelope\") per line with three fields: `id` (any JSON value \u00e2\u0080\u0094 string/number/null \u00e2\u0080\u0094 echoed back verbatim; optional, treated as None if absent), `method` (string, REQUIRED, must be one of the registered handler names e.g. \"kb.search\"), and `params` (object, optional; if missing or null it defaults to `{}`). This is a VOUCH-SPECIFIC envelope, NOT JSON-RPC: there is no `jsonrpc: \"2.0\"` field, the verb key is `method` (matching JSON-RPC) but the response uses `ok`/`result`/`error` rather than JSON-RPC's `result`/`error` discriminated union. Params are passed straight into the handler as a plain dict; each handler reaches into `params` by key (e.g. `p[\"query\"]`, `p.get(\"limit\", 10)`).",
+    "response_format": "Success: `{\"id\": <echoed request id>, \"ok\": true, \"result\": <handler return value>}`. The `result` is whatever the handler returns \u00e2\u0080\u0094 usually a dict (for reads/proposals), sometimes a JSON array (list handlers like kb.list_claims, kb.list_pages, kb.cite, kb.source_verify return a bare JSON array as `result`). Before being placed in `result`, the value passes through `trust_mod.finish_kb_result()`: if (and ONLY if) it is a dict, a `_meta.vouch_trust` sidebar is merged in via setdefault, i.e. `result._meta.vouch_trust = {\"remote\": false, \"caller_kind\": \"jsonl\", \"auth_subject\": null}` (caller_kind is \"jsonl\" for the stdio transport because run_jsonl calls `set_stdio_default(JSONL_STDIO)`). List/array results are passed through UNMODIFIED (no _meta is attached to a top-level array). The whole response object is serialized with `json.dumps(response, default=str)`, so non-JSON-native values (datetimes, Path, etc.) are coerced to their str() form.",
+    "error_format": "`{\"id\": <echoed request id, may be null>, \"ok\": false, \"error\": {\"code\": \"<code>\", \"message\": \"<str>\"}}`. The `ok` boolean is the discriminator \u00e2\u0080\u0094 check `ok === false`. Error codes emitted: \"invalid_json\" (line failed json.loads; id is always null here since the envelope couldn't be parsed), \"method_not_found\" (method missing or not in HANDLERS; message \"unknown method: <method>\"), \"missing_param\" (a handler hit a KeyError reaching for a required param; message is the str of the KeyError, e.g. the missing key name in quotes), \"invalid_request\" (raised on ValueError / ProposalError / ArtifactNotFoundError \u00e2\u0080\u0094 bad arg, lifecycle violation, or artifact-not-found), and \"internal_error\" (any other uncaught exception \u00e2\u0080\u0094 and this case ADDITIONALLY includes a `\"traceback\"` string field with the full Python traceback alongside `code` and `message`). There is no numeric error code and no JSON-RPC error.code integer; codes are these fixed strings.",
+    "example_request": "{\"id\": \"req-1\", \"method\": \"kb.search\", \"params\": {\"query\": \"jwt\", \"limit\": 5}}",
+    "example_response": "{\"id\": \"req-1\", \"ok\": true, \"result\": {\"backend\": \"fts5\", \"viewer\": {\"project\": null, \"agent\": null}, \"hits\": [{\"kind\": \"claim\", \"id\": \"claim-abc123\", \"snippet\": \"jwt tokens expire after 15 minutes\", \"score\": 1.0, \"backend\": \"fts5\"}], \"_meta\": {\"vouch_trust\": {\"remote\": false, \"caller_kind\": \"jsonl\", \"auth_subject\": null}}}}",
+    "handler_names": [
+      "kb.capabilities",
+      "kb.status",
+      "kb.stats",
+      "kb.search",
+      "kb.neighbors",
+      "kb.context",
+      "kb.synthesize",
+      "kb.read_page",
+      "kb.read_claim",
+      "kb.read_entity",
+      "kb.read_relation",
+      "kb.list_pages",
+      "kb.list_claims",
+      "kb.list_entities",
+      "kb.list_relations",
+      "kb.list_sources",
+      "kb.list_pending",
+      "kb.register_source",
+      "kb.register_source_from_path",
+      "kb.propose_claim",
+      "kb.propose_page",
+      "kb.propose_entity",
+      "kb.propose_relation",
+      "kb.approve",
+      "kb.reject",
+      "kb.reject_extracted",
+      "kb.expire",
+      "kb.supersede",
+      "kb.contradict",
+      "kb.archive",
+      "kb.confirm",
+      "kb.cite",
+      "kb.source_verify",
+      "kb.session_start",
+      "kb.session_end",
+      "kb.volunteer_context",
+      "kb.crystallize",
+      "kb.index_rebuild",
+      "kb.lint",
+      "kb.doctor",
+      "kb.export",
+      "kb.export_check",
+      "kb.import_check",
+      "kb.import_apply",
+      "kb.audit",
+      "kb.reindex_embeddings",
+      "kb.dedup_scan",
+      "kb.eval_embeddings",
+      "kb.embeddings_stats",
+      "kb.why",
+      "kb.trace",
+      "kb.impact",
+      "kb.graph_export",
+      "kb.provenance_rebuild"
+    ],
+    "notes": "DISPATCH: `handle_request(envelope)` is a pure no-I/O function (good for tests). It pulls `id`, `method`, `params = envelope.get(\"params\") or {}`, then does a single dict lookup `HANDLERS[method](params)`. HANDLERS is a flat `dict[str, Callable[[dict], Any]]` keyed by the full dotted method string (e.g. \"kb.search\"). No prefix stripping, no reflection \u00e2\u0080\u0094 the method string must match a key exactly. Unknown/missing method \u00e2\u0086\u0092 method_not_found before any handler runs.\n\nPARAMS MAPPING: handlers index `params` directly. Required params use `p[\"x\"]` (a missing one raises KeyError \u00e2\u0086\u0092 caught as \"missing_param\"). Optional params use `p.get(\"x\", default)` and are coerced inside the handler (int(...), float(...), bool(...)). So send numbers/bools as JSON numbers/bools or as strings \u00e2\u0080\u0094 both work where the handler casts, but prefer native types.\n\n_meta / SIDEBAR: the ONLY sidebar is `_meta.vouch_trust`, attached by `finish_kb_result` \u00e2\u0086\u0092 `attach_trust` and ONLY when the handler result is a dict. caller_kind is fixed to \"jsonl\", remote=false, auth_subject=null for the stdio JSONL transport (set once at startup via `set_stdio_default(JSONL_STDIO)`). IMPORTANT: there is NO hot-memory sidebar on the JSONL transport \u00e2\u0080\u0094 `vouch_hot_memory` is wired per-tool only in the MCP/server.py surface, not here (grep confirms jsonl_server.py never imports hot_memory). Do not expect `_meta.vouch_hot_memory` over JSONL. Array-returning handlers (the list_* ones, kb.cite, kb.source_verify) return a bare JSON array with NO _meta wrapper, since attach_trust only touches dicts.\n\nSTDOUT/STDERR DISCIPLINE: stdout is the protocol channel ONLY \u00e2\u0080\u0094 every write is one compact JSON line + \"\\n\" + an explicit flush(), so responses arrive promptly and you can read line-buffered. `configure_logging()` is called at startup; logs go to stderr (or wherever logging_config routes them), NOT stdout \u00e2\u0080\u0094 keep stderr separate in Electron (do not parse it as protocol). Malformed input lines never crash the loop: a json.loads failure emits an `{\"id\": null, \"ok\": false, \"error\": {\"code\": \"invalid_json\", ...}}` line and continues. Blank lines are silently skipped (no response emitted) \u00e2\u0080\u0094 so don't expect a 1:1 response for empty lines you send.\n\nLIFECYCLE / SHUTDOWN: the server runs until stdin EOF (the `for line in stdin` loop ends). To shut down cleanly from Electron, close the child's stdin; the process then exits. There's no explicit \"shutdown\"/\"exit\" method.\n\nLAUNCH: `vouch serve --transport jsonl` (cli.py serve command). It first calls `_load_store()` to fail fast with a clear error if there's no .vouch/ KB in the discovered root, so spawn with cwd set to the project containing .vouch/ (or set VOUCH_KB_PATH). The default transport is \"stdio\" (MCP) \u00e2\u0080\u0094 you MUST pass `--transport jsonl` to get this NDJSON protocol. Actor attribution for audit comes from env var VOUCH_AGENT (falls back to \"unknown-agent\"); the JSONL/stdio path leaves the per-request _actor ContextVar unset, so set VOUCH_AGENT in the child env if you want correct audit attribution.\n\nSERIALIZATION GOTCHA: responses are dumped with `json.dumps(response, default=str)` \u00e2\u0080\u0094 any value not natively JSON-serializable (datetime, Path, enum without .value) is stringified, so consumers should treat timestamp-like fields as strings. Most handlers already call `.model_dump(mode=\"json\")` on pydantic models so this is mostly belt-and-suspenders."
+  },
+  "launch": {
+    "serve_command": "Two distinct launchers, both via the single `vouch` console-script (entry point `vouch = \"vouch.cli:cli\"`).\n\nA) AGENT TRANSPORTS \u00e2\u0080\u0094 `vouch serve` (cli.py serve, ~L2140-2233):\n  stdio (MCP, default):  argv = [\"vouch\", \"serve\"]  or  [\"vouch\", \"serve\", \"--transport\", \"stdio\"]\n      -> server.run_stdio(): configure_logging(); set_stdio_default(MCP_STDIO); mcp.run() (FastMCP over stdin/stdout, JSON-RPC framing).\n  jsonl (vouch-native line protocol):  argv = [\"vouch\", \"serve\", \"--transport\", \"jsonl\"]\n      -> jsonl_server.run_jsonl(): one JSON request object per stdin line, one JSON response per stdout line.\n  http (Streamable-HTTP MCP + legacy /rpc):  argv = [\"vouch\", \"serve\", \"--transport\", \"http\", \"--host\", \"127.0.0.1\", \"--port\", \"8731\"]\n      add auth: [\"--token\", \"<tok>\"] (or env VOUCH_HTTP_TOKEN) and/or [\"--config\", \"config.yaml\"]; [\"--allow-public\"] required to bind a non-loopback host.\n      -> http_server.run_http(host, port, token=, tokens=, allow_public=) -> uvicorn.Server serving a Starlette app.\n\nB) BROWSER REVIEW CONSOLE \u00e2\u0080\u0094 `vouch review-ui` (cli.py review_ui, ~L2661-2783; needs the [web] extra):\n  argv = [\"vouch\", \"review-ui\", \"--bind\", \"127.0.0.1:7780\"]\n  add [\"--no-open-browser\"] for headless/Electron, [\"--auth\", \"<token>|generate|env\"], [\"--reviewer\", \"<label>\"], [\"--kb\", \"/path/to/repo\"], [\"--page-size\", \"50\"], [\"--allow-dual-solve\"].\n  -> web.create_app(...) builds the FastAPI app (web/server.py build_app) and runs uvicorn.run(app, host=host, port=port, log_level=\"info\").\n\nNote: `vouch serve --transport http` does NOT serve the FastAPI review console; it serves the MCP/JSONL HTTP surface (http_server.py). The HTML review UI is only via `vouch review-ui`. For an Electron child process, set stdio to inherit/pipe; with --transport stdio/jsonl the app speaks to the process over stdin/stdout. For http/review-ui, the app connects over a TCP socket to host:port. The process exits cleanly on SIGINT (http) / EOF on stdin (jsonl).",
+    "transports": [
+      "stdio (MCP over stdin/stdout, default) \u00e2\u0080\u0094 vouch serve --transport stdio",
+      "jsonl (vouch-native one-JSON-object-per-line over stdin/stdout) \u00e2\u0080\u0094 vouch serve --transport jsonl",
+      "http (Streamable-HTTP MCP at POST /mcp + alias POST /messages, legacy vouch-native POST /rpc, unauthenticated GET /health|/healthz|/capabilities) \u00e2\u0080\u0094 vouch serve --transport http",
+      "review-ui (FastAPI/uvicorn browser review console; separate command, requires [web] extra) \u00e2\u0080\u0094 vouch review-ui --bind host:port"
+    ],
+    "env_vars": [
+      {
+        "name": "VOUCH_KB_PATH",
+        "purpose": "Absolute path to a .vouch directory; when set it short-circuits the cwd upward-walk discovery (must point AT a directory literally named '.vouch'; its parent becomes the KB root). The way to pin the KB when Electron launches the child from an arbitrary cwd.",
+        "default": "unset (falls back to walking up from cwd for a .vouch/ dir)"
+      },
+      {
+        "name": "VOUCH_AGENT",
+        "purpose": "Actor/agent identity recorded on every proposal and audit event across all surfaces (server.py _agent, jsonl_server actor, cli _whoami). For the web review console it is the reviewer label only when Bearer auth is OFF.",
+        "default": "'unknown-agent' (server/jsonl); CLI falls back to VOUCH_USER then OS login user; web review-ui falls back to 'web-reviewer'"
+      },
+      {
+        "name": "VOUCH_HTTP_TOKEN",
+        "purpose": "Bearer token for the http transport's /rpc and /mcp endpoints (envvar backing the `vouch serve --token` option). Required (with --allow-public) to bind a non-loopback host.",
+        "default": "unset (no token => bearer gate disabled, loopback-only bind)"
+      },
+      {
+        "name": "VOUCH_REVIEW_TOKEN",
+        "purpose": "Bearer token consumed by `vouch review-ui --auth env` for the browser review console (web/server.py AuthConfig).",
+        "default": "unset"
+      },
+      {
+        "name": "VOUCH_LOG_FORMAT",
+        "purpose": "Log output format for vouch loggers; 'json' emits one JSON object per log line (level, logger, time, event, actor, object_ids); any other value is a no-op keeping stdlib defaults. Read at startup via configure_logging() in run_stdio/run_jsonl/cli.",
+        "default": "'text'"
+      },
+      {
+        "name": "VOUCH_LOG_LEVEL",
+        "purpose": "Standard level name applied to the 'vouch' logger namespace.",
+        "default": "'WARNING'"
+      },
+      {
+        "name": "VOUCH_LOG_FILE",
+        "purpose": "Optional filesystem path; when set, logs are also appended there (in addition to stderr). A bad path warns to stderr rather than crashing.",
+        "default": "unset (stderr only)"
+      },
+      {
+        "name": "VOUCH_USER",
+        "purpose": "CLI-only escape hatch for actor identity when VOUCH_AGENT is unset (used by _whoami in cli.py).",
+        "default": "unset (falls back to OS login user)"
+      },
+      {
+        "name": "VOUCH_TOKEN",
+        "purpose": "Referenced indirectly: config.yaml serve.bearer_token can be 'env:VOUCH_TOKEN' (or any env var name); http_server._resolve_token reads it. Name is whatever the config references; VOUCH_TOKEN is the documented example.",
+        "default": "unset (fails loudly if config references a missing var)"
+      }
+    ],
+    "kb_discovery": "storage.discover_root(start=None) (src/vouch/storage.py:106). If env VOUCH_KB_PATH is set it is used verbatim: must resolve to an existing directory literally named '.vouch'; the KB root returned is that dir's parent (raises KBNotFoundError otherwise). Otherwise it walks UP from `start` or Path.cwd(), git-style, returning the first ancestor that contains a `.vouch/` subdirectory; raises KBNotFoundError at filesystem root if none found. `vouch serve` calls _load_store() at startup to fail fast (exit code 2, hint 'run vouch init') if no KB is found. The http_server inherits this via vouch.server import. The web review console resolves the root once at app-construction time: build_app(kb_root) -> discover_root(Path(kb_root) if given else None), so --kb pins it, else it walks up from the cwd the process was launched in. Practical Electron note: set cwd to the target repo OR (more robust) pass VOUCH_KB_PATH=<repo>/.vouch in the child env.",
+    "auth_model": "Two separate bearer-token models, both constant-time compared, both disabled by default on loopback.\n\n(1) http transport (http_server.py): accept-LIST of bearer tokens. Sources merged: `--token <tok>` / env VOUCH_HTTP_TOKEN (single), plus config.yaml `serve:` section (`bearer_tokens: [..]` list, and/or `bearer_token: env:VAR` resolved from the environment). Empty accept-list => gate OFF. Client passes `Authorization: Bearer <token>` on POST /rpc, POST /mcp, POST /messages; BearerMiddleware OR-matches against every accepted token with hmac.compare_digest. Public bypass paths (always unauthenticated): GET /healthz, /health, /capabilities. Bind policy: make_server refuses any non-loopback host unless BOTH --allow-public AND >=1 token are present (RuntimeError). TLS is NOT terminated in-process \u00e2\u0080\u0094 front it with a reverse proxy for public use.\n\n(2) review-ui web console (web/server.py AuthConfig): a SINGLE token (token=None => auth disabled, loopback dev mode). Set via `vouch review-ui --auth <literal-token | generate | env>` (env reads VOUCH_REVIEW_TOKEN; 'generate' mints+prints a random token). When enabled, every route except /healthz and /static requires it. Credentials accepted three ways: `Authorization: Bearer <token>` header (API/CLI clients), an HttpOnly SameSite=Strict cookie named `vouch_review_token` (browser), or a one-time `?token=<tok>` query bootstrap on a GET/HEAD that is immediately moved into the cookie via a 303 redirect that strips the query. WebSocket /ws authenticates via the cookie or ?token=. Reviewer identity logged = the token's label (--reviewer, default 'web-reviewer'); when auth is off it falls back to env VOUCH_AGENT. Non-loopback --bind without --auth is refused at the CLI.",
+    "http_host_port": "http transport (vouch serve --transport http): default host 127.0.0.1, default port 8731 (http_server.DEFAULT_PORT; --port overrides, --host overrides). review-ui web console (vouch review-ui): default --bind 127.0.0.1:7780 (host:port string, split on the last ':'). Both default to loopback only.",
+    "install_invocation": "Installed from the `vouch` package (pyproject [project] name = \"vouch\", version 0.0.1; build backend hatchling, wheel packages = [\"src/vouch\"]). One console_scripts entry point: [project.scripts] `vouch = \"vouch.cli:cli\"` \u00e2\u0080\u0094 i.e. the binary on PATH is `vouch`, dispatching to the Click group in src/vouch/cli.py. There is NO separate vouch-web/vouch-serve binary; both `vouch serve` and `vouch review-ui` are subcommands of the same `vouch` script. pipx install: `pipx install vouch` (agent transports only) or `pipx install 'vouch[web]'` to pull the FastAPI/jinja2/uvicorn/websockets/python-multipart stack needed for `vouch review-ui` and the http transport's uvicorn server. NOTE the in-code ImportError messages reference the PyPI name `vouch-kb[web]` (\"pip install 'vouch-kb[web]'\"), which diverges from pyproject's `vouch` name \u00e2\u0080\u0094 confirm the published distribution name before scripting the install. For Electron, the most reliable invocation is the absolute interpreter path into the module: `<venv>/bin/python -m vouch ...` or the resolved `<venv>/bin/vouch` shim; spawn with the child env carrying VOUCH_KB_PATH and (for http) VOUCH_HTTP_TOKEN.",
+    "notes": "Files of record: src/vouch/cli.py serve cmd ~L2140-2233 and review-ui cmd ~L2661-2783; src/vouch/http_server.py (DEFAULT_PORT=8731, make_app/make_server/run_http, BearerMiddleware, _LOOPBACK_HOSTS={127.0.0.1,::1,localhost}); src/vouch/web/server.py build_app + AuthConfig; src/vouch/web/__init__.py create_app (+ _require_web_extra); src/vouch/storage.py discover_root L106; src/vouch/server.py run_stdio L871; src/vouch/jsonl_server.py run_jsonl L731; src/vouch/logging_config.py.\n\nElectron child-process guidance:\n- stdio/jsonl: spawn with piped stdin/stdout/stderr; the renderer/main process speaks JSON-RPC (stdio) or newline-delimited JSON (jsonl) over the pipes. jsonl exits on EOF of stdin; stdio (FastMCP) follows the MCP transport lifecycle. Both call configure_logging() once at startup and write logs to stderr (or VOUCH_LOG_FILE).\n- http: connect over TCP to host:port; process runs until SIGINT (run_http catches KeyboardInterrupt and closes the socket). Pre-binds the socket before serving, so server_address is valid immediately.\n- review-ui: uvicorn.run blocks the process; loopback bind needs no token. Pass --no-open-browser when Electron owns the window (otherwise it auto-opens the system browser after 0.5s on a loopback bind).\n- KB root: set the child cwd inside the target repo OR pass VOUCH_KB_PATH=<repo>/.vouch in env (latter is launcher-cwd-independent and recommended for Electron). serve fails fast with exit code 2 if no KB; review-ui raises a ClickException.\n- Auth caveats: http transport uses an accept-LIST (multi-token, rotatable) sourced from --token/VOUCH_HTTP_TOKEN + config.yaml serve.bearer_tokens|bearer_token(env:VAR). review-ui uses a SINGLE token with cookie+header+one-shot-query bootstrap. Non-loopback binds are refused without a token on both surfaces.\n- The two ports differ: http=8731, review-ui=7780. Don't conflate them. TLS is never in-process; use a reverse proxy for any non-loopback exposure.\n- Discrepancy to verify before shipping installer: code error strings say `vouch-kb[web]` while pyproject distribution name is `vouch`."
+  },
+  "web": {
+    "auth": "Bearer-token gate, configured at app build via AuthConfig(token, label). auth.enabled is true iff token is not None. When disabled (the loopback/dev default, and what build_app() gives with no auth arg), every route is open and the reviewer identity falls back to env VOUCH_AGENT (default \"web-reviewer\"). The CLI refuses a non-loopback bind without a token; loopback may run tokenless.\n\nWhen enabled, every route EXCEPT GET /healthz and the /static mount requires the token (enforced by the `guarded = [Depends(require_auth)]` dependency attached to all other routes). Three credential channels, all compared constant-time via secrets.compare_digest:\n  1. `Authorization: Bearer <token>` header \u00e2\u0080\u0094 the channel a desktop app / API client should use on every request.\n  2. HttpOnly cookie `vouch_review_token` (SameSite=Strict, path=/, not Secure so plain-http localhost works) \u00e2\u0080\u0094 the browser channel.\n  3. `?token=<token>` query param \u00e2\u0080\u0094 accepted ONLY as a one-time bootstrap. On a GET/HEAD with a valid query token, require_auth raises _BootstrapRedirect which the exception handler turns into a 303 that Set-Cookies the token into the HttpOnly cookie and redirects to the same path with ?token stripped (so the bare token never lingers in a URL/log). On non-GET/HEAD methods a valid query token authenticates inline (no redirect, body preserved).\n\nReviewer identity recorded in the audit log = auth.label when auth is enabled, else env VOUCH_AGENT. This is the `approved_by`/`rejected_by`/`actor`/`proposed_by` recorded for every web-initiated decision.\n\nWebSocket auth (GET /ws): a browser can't set an Authorization header on a WS handshake, so the primary credential is the same-origin HttpOnly cookie; `?token=` is also accepted (for CLI/test/non-browser clients). On mismatch the server closes with WS code 4401. If auth is disabled the socket is open. A desktop app driving /ws should pass `?token=<token>` on the WS URL (or carry the cookie from a prior bootstrap).",
+    "http_endpoints": [
+      {
+        "method": "GET",
+        "path": "/healthz",
+        "purpose": "liveness + KB status; UNGUARDED even when auth is enabled",
+        "request": "none",
+        "response": "JSON {ok:true, kb:<store.root str>, pending:<int count of PENDING proposals>, auth:<bool auth.enabled>, clients:<int connected ws clients>}"
+      },
+      {
+        "method": "GET",
+        "path": "/",
+        "purpose": "paginated pending-review queue (HTML). The landing review page.",
+        "request": "query ?page=<int, 1-based, default 1>; out-of-range clamps to last page",
+        "response": "HTML (queue.html). Underlying data == GET /api/pending: {count,page,pages,items:[{id,kind,proposed_by,session_id,proposed_at,preview}]}"
+      },
+      {
+        "method": "GET",
+        "path": "/api/pending",
+        "purpose": "machine-readable pending queue; the JSON the JS layer polls and the natural endpoint for a desktop app to list the review queue",
+        "request": "query ?page=<int default 1>",
+        "response": "JSON {count:<int total pending on disk>, page:<int clamped>, pages:<int>, items:[{id, kind, proposed_by, session_id, proposed_at (iso seconds), preview (one-line, max 160 chars from payload text/title/name)}]}. Pages by globbing proposed/*.yaml filenames then parsing only the requested page; an unreadable proposal is skipped (logged) but still counted in total."
+      },
+      {
+        "method": "GET",
+        "path": "/claim/{proposal_id}",
+        "purpose": "single proposal detail (HTML) \u00e2\u0080\u0094 the claim a reviewer is about to decide on",
+        "request": "path proposal_id",
+        "response": "HTML (claim.html) built from {proposal: <full Proposal model_dump(mode=json)>, preview}. 404 if proposal not found (ArtifactNotFoundError)."
+      },
+      {
+        "method": "GET",
+        "path": "/session/{session_id}",
+        "purpose": "all proposals produced by one agent run, grouped (HTML), regardless of status",
+        "request": "path session_id",
+        "response": "HTML (session.html): {session:{id,agent,task,started_at,ended_at|null,note}, rows:[{id,kind,status,preview,proposed_at}], pending_count}. 404 if session not found."
+      },
+      {
+        "method": "GET",
+        "path": "/sources/{source_id}",
+        "purpose": "reverse index \u00e2\u0080\u0094 every durable claim whose evidence cites this source (HTML)",
+        "request": "path source_id",
+        "response": "HTML (source.html): {source:{id,type,locator,title,media_type,byte_size,created_at}, citing:[{id,text(<=200 chars),status}]}. 404 if source not found."
+      },
+      {
+        "method": "POST",
+        "path": "/approve/{proposal_id}",
+        "purpose": "REVIEW-GATE ACTION: approve a pending proposal; routes through proposals.approve so the audit entry matches the CLI",
+        "request": "form-encoded; optional field `reason`",
+        "response": "303 redirect to /. 400 (HTTPException) on ProposalError/ArtifactNotFoundError. Side effects: proposals.approve(store, id, approved_by=reviewer(), reason) runs in threadpool, moves proposed/ -> decided/, writes audit; then broadcasts ws {type:refresh, view:queue, action:approve, proposal_id, artifact_id}."
+      },
+      {
+        "method": "POST",
+        "path": "/reject/{proposal_id}",
+        "purpose": "REVIEW-GATE ACTION: reject a pending proposal",
+        "request": "form-encoded; field `reason` REQUIRED and must be non-empty (else 400)",
+        "response": "303 redirect to /. 400 on empty reason or ProposalError/ArtifactNotFoundError. Side effects: proposals.reject(store, id, rejected_by=reviewer(), reason); broadcasts {type:refresh, view:queue, action:reject, proposal_id}."
+      },
+      {
+        "method": "POST",
+        "path": "/contradict/{claim_id}",
+        "purpose": "REVIEW-GATE/LIFECYCLE ACTION: mark two durable claims as contradicting; routes through lifecycle.contradict (== vouch contradict)",
+        "request": "form-encoded; field `against` REQUIRED (the other claim id)",
+        "response": "303 redirect to /audit. 400 on LifecycleError/ArtifactNotFoundError/ValueError. Side effects: lifecycle.contradict(store, claim_a=claim_id, claim_b=against, actor=reviewer()); broadcasts {type:refresh, view:audit, action:contradict, claim_id}."
+      },
+      {
+        "method": "GET",
+        "path": "/audit",
+        "purpose": "review-decision timeline (HTML), newest first, filtered to gate/lifecycle events only",
+        "request": "query ?limit=<int default 100>",
+        "response": "HTML (audit.html): rows:[{id,event,actor,object_ids,at,reason}]. Only events matching _is_review_event are shown: proposal.*.approve, proposal.*.reject, and claim.supersede|contradict|archive|confirm. Scoping applied via viewer_from(config)."
+      },
+      {
+        "method": "GET",
+        "path": "/ws",
+        "purpose": "single realtime fan-out channel per KB; server pushes refresh + dual_solve frames, client messages ignored",
+        "request": "WebSocket upgrade. Auth via vouch_review_token cookie or ?token= query (see ws_protocol)",
+        "response": "text frames (see ws_protocol). Closes 4401 on bad token."
+      },
+      {
+        "method": "GET",
+        "path": "/dual-solve",
+        "purpose": "dual-solve runner page (HTML). Only mounted when build_app(allow_dual_solve=True)",
+        "request": "none",
+        "response": "HTML (dual_solve.html). 404 if dual-solve not enabled."
+      },
+      {
+        "method": "POST",
+        "path": "/dual-solve/run",
+        "purpose": "DUAL-SOLVE: start a run that fires claude+codex on one issue; returns immediately, work proceeds in background",
+        "request": "JSON body {issue_url:<str, owner/name#42 or github issue URL>, claude_effort?:<str default 'high'>, codex_effort?:<str default 'high'>}",
+        "response": "201 JSON {job_id:<hex>}. 409 if a job is already running/finalizing. 400 if issue_url unparseable (ds.parse_issue_ref). Side effects: cleans up the prior job's leftover worktrees (keeping its kept_branch), creates DualSolveJob, stores on app.state.dual_solve_job, launches asyncio task running ds.prepare in a threadpool. Only when allow_dual_solve=True."
+      },
+      {
+        "method": "GET",
+        "path": "/dual-solve/job/{job_id}",
+        "purpose": "DUAL-SOLVE: poll full job state (the alternative to subscribing to ws frames)",
+        "request": "path job_id",
+        "response": "JSON {id, issue_url, status('running'|'ready'|'finalizing'|'done'|'error'), progress:[str], issue:{number,title,url}|null, candidates:[{engine,branch,ok,error,diff}], proposed_ids:[str], kept_branch:str|null, error:str|null}. 404 if no job or id mismatch (only the single most-recent job is retained on app.state)."
+      },
+      {
+        "method": "POST",
+        "path": "/dual-solve/choose",
+        "purpose": "DUAL-SOLVE: pick the winning engine (or neither); finalizes the run and PROPOSES winner facts to the KB (review gate preserved \u00e2\u0080\u0094 nothing auto-approved)",
+        "request": "JSON body {job_id:<str>, winner:'claude'|'codex'|null, reason?:<str default ''>}",
+        "response": "JSON {kept_branch:str|null, proposed_ids:[str]}. 404 if job missing/id mismatch. 409 if job.status != 'ready'. 500 'finalize failed: ...' on ValueError/RuntimeError (job marked error + ws error frame). Side effects: ds.finalize(store, git_root, issue, chosen, engines, candidates, reason, runner, record=True, proposed_by=reviewer()) in threadpool \u00e2\u0080\u0094 records winner diff as a Source and proposes up to 3 claims (decision/fact/workflow) into proposed/; removes loser worktrees, keeps winner branch; status->done; ws {type:dual_solve,event:done}."
+      }
+    ],
+    "ws_protocol": "Path: GET /ws (one channel per KB / per app instance; in-process _Hub fan-out). Auth: when enabled, cookie `vouch_review_token` (primary, browser) or `?token=` query (CLI/desktop); constant-time compare; close code 4401 on mismatch. After accept the server immediately sends a greeting, then only ever pushes \u00e2\u0080\u0094 any client->server text is received and discarded (the loop just keeps the socket open).\n\nAll frames are JSON text, sent with separators (\",\",\":\") (compact). Two frame families:\n\nGREETING (once, on connect):\n  {\"type\":\"hello\",\"kb\":\"<str store.root>\"}\n\nREVIEW frames (type==\"refresh\"), emitted by the mutation handler AFTER the write succeeds, via _notify(kind, **extra) -> hub.broadcast({\"type\":\"refresh\",\"view\":kind,...extra}). Exact shapes seen:\n  approve:     {\"type\":\"refresh\",\"view\":\"queue\",\"action\":\"approve\",\"proposal_id\":\"<id>\",\"artifact_id\":\"<id|null>\"}\n  reject:      {\"type\":\"refresh\",\"view\":\"queue\",\"action\":\"reject\",\"proposal_id\":\"<id>\"}\n  contradict:  {\"type\":\"refresh\",\"view\":\"audit\",\"action\":\"contradict\",\"claim_id\":\"<id>\"}\n  The frame is a SIGNAL, not data \u00e2\u0080\u0094 on receipt the client re-pulls the affected view (GET /api/pending for view==queue, /audit for view==audit). `view` is the only guaranteed field besides type; action/ids are advisory.\n\nDUAL_SOLVE frames (type==\"dual_solve\"), shape from _frame(job,event,message):\n  {\"type\":\"dual_solve\",\"job_id\":\"<hex>\",\"event\":\"<event>\",\"message\":\"<str>\"}\n  events: \"progress\" (message = one human-readable phase line, e.g. 'running claude (effort=high); this can take a few minutes', 'claude: produced a diff (N lines) in 2m03s'); \"ready\" (both engines done, message=''); \"error\" (message = exception text, from prepare-failure or finalize-failure); \"done\" (message='', after choose finalizes). The frame carries NO candidate data/diffs \u00e2\u0080\u0094 the client must GET /dual-solve/job/{job_id} to read issue/candidates/diffs/proposed_ids after a 'ready' or 'done'.\n\nBroadcast robustness: each send is wrapped in asyncio.wait_for with a 1.0s per-client timeout; a slow/dead client is dropped, never stalls the approve/reject handler that awaits the broadcast inline.",
+    "dual_solve_flow": "Lifecycle as a client (desktop app) drives it; requires the server built with allow_dual_solve=True (else /dual-solve* routes 404, and app build fails fast if cwd isn't a git repo). Only ONE job is tracked at a time (app.state.dual_solve_job, single slot).\n\n1) RUN: POST /dual-solve/run {issue_url, claude_effort?, codex_effort?}. If an active job is running/finalizing -> 409. issue_url validated via parse_issue_ref (accepts 'owner/name#42' or a github issues URL) else 400. Prior job's worktrees are cleaned up. Returns 201 {job_id}. A background asyncio task immediately runs ds.prepare(store, issue_url, git_root, runner, claude_effort, codex_effort, autonomy='edit', on_progress=...) in a threadpool. prepare: fetches the issue via gh, grounds a prompt from the KB (build_context_pack), then runs claude then codex sequentially (each multi-minute) via run_candidate, which adds a git worktree on a branch vouch-dual/<num>-<slug>-<engine>, invokes the engine, captures `git diff HEAD`, and commits. Each Candidate = {engine, branch, worktree, diff, sha, ok, error}. Note run_candidate swallows its own failures into candidate.error (ok=False) rather than raising.\n\n2) OBSERVE: the client subscribes to /ws and watches type=='dual_solve' frames for this job_id: 'progress' lines while engines run, then 'ready' when both candidates exist (status->'ready'), or 'error' if prepare raised (only the pre-worktree fetch_issue/ground_prompt paths raise; status->'error'). Alternatively poll GET /dual-solve/job/{job_id} for the same state plus full candidate diffs. The client reads job.candidates (each with .ok/.error/.diff) to render the two diff panes and decide.\n\n3) CHOOSE: once status=='ready', POST /dual-solve/choose {job_id, winner:'claude'|'codex'|null, reason?}. Wrong status -> 409 'job is <status>, not ready'; missing job -> 404. The chosen candidate is matched by engine==winner (winner=null or an engine with no candidate -> chosen=None, i.e. 'pick neither'). status->'finalizing', then ds.finalize(...record=True, proposed_by=reviewer()) runs in threadpool: if a winner was chosen it records the winning diff as a Source and PROPOSES up to 3 claims (decision conf 0.8, root-cause fact 0.7, fix workflow 0.7, tags ['dual-solve','issue-N']) into proposed/ via proposals.propose_claim \u00e2\u0080\u0094 these are PENDING, not approved. cleanup() removes loser worktrees and keeps the winner's branch. status->'done', ws 'done' frame, returns {kept_branch, proposed_ids}. finalize failure (ValueError/RuntimeError) -> status 'error' + ws error frame + HTTP 500.\n\n4) APPROVE (separate step): the proposed_ids land in the normal review queue. The desktop app then drives the same review-gate endpoints (GET /api/pending, POST /approve/{id} or /reject/{id}) to actually commit them to the KB. dual-solve never bypasses the gate.",
+    "review_ui_endpoints": "The HTTP server already exposes these review-queue actions directly:\n  - LIST PENDING: GET /api/pending (JSON, paginated) and GET / (HTML queue). healthz also returns the pending count.\n  - VIEW A CLAIM/PROPOSAL: GET /claim/{proposal_id} (full Proposal as JSON inside the HTML; the proposal model_dump is right there).\n  - VIEW BY SESSION: GET /session/{session_id} (all proposals of a run, any status).\n  - VIEW BY SOURCE: GET /sources/{source_id} (reverse-index of citing claims).\n  - APPROVE: POST /approve/{proposal_id} (optional reason) -> proposals.approve.\n  - REJECT: POST /reject/{proposal_id} (reason required) -> proposals.reject.\n  - CONTRADICT: POST /contradict/{claim_id} (against=other claim id) -> lifecycle.contradict.\n  - AUDIT TIMELINE: GET /audit (review/lifecycle events only).\n\nNOT exposed over HTTP (review/lifecycle actions available ONLY via JSONL/MCP/CLI, per the HANDLERS map in jsonl_server.py): kb.supersede, kb.archive, kb.confirm, kb.expire, kb.reject_extracted, kb.cite, kb.source_verify, and the entire propose family (kb.propose_claim/page/entity/relation, kb.register_source[_from_path]) \u00e2\u0080\u0094 the web UI is read+decide only, it has no propose path except indirectly via dual-solve/choose. Also JSONL-only: all read/search/graph/maintenance methods (kb.search, kb.context, kb.neighbors, kb.synthesize, kb.why/trace/impact, kb.graph_export, kb.lint, kb.doctor, kb.export/import_*, kb.crystallize, kb.dedup_scan, embeddings ops, kb.session_start/end, kb.index_rebuild, kb.provenance_rebuild). Note the audit HTML view only surfaces approve/reject + claim.supersede/contradict/archive/confirm even though supersede/archive/confirm themselves can only be triggered via JSONL/CLI, not the web UI.",
+    "notes": "Gotchas for a desktop client:\n\n- Content types are inconsistent: review mutations (/approve, /reject, /contradict) take application/x-www-form-urlencoded (FastAPI Form) and respond 303 redirect to / or /audit \u00e2\u0080\u0094 NOT JSON. The dual-solve endpoints (/dual-solve/run, /choose) take application/json (pydantic models) and respond JSON. /api/pending is JSON. Don't send JSON to the form endpoints.\n- /reject requires a non-empty `reason` (400 otherwise). /approve's reason is optional. /contradict requires `against`.\n- The 303 redirects after approve/reject/contradict mean a non-browser client should NOT auto-follow into re-rendered HTML to confirm success; treat 303 as success and re-pull /api/pending. Errors come back as 400 with `detail`.\n- Single dual-solve job slot: app.state.dual_solve_job holds only the most recent job. Polling an older job_id 404s. /dual-solve/run is 409 while a job is running or finalizing. Engines run SEQUENTIALLY (claude then codex), each multi-minute; expect long latency before the 'ready' frame.\n- ws frames are signals only: 'refresh' carries no proposal payload and dual_solve frames carry no diffs \u00e2\u0080\u0094 always re-fetch (/api/pending or /dual-solve/job/{id}) on a frame. A frame can be missed if the socket reconnects; treat polling as the source of truth and ws as a wake-up.\n- ws auth: a browser uses the HttpOnly cookie automatically, but a desktop/native ws client must pass ?token= on the ws URL (it can't read the HttpOnly cookie and can't set Authorization on the handshake). Bad token => close 4401, not an HTTP error.\n- The query-token bootstrap (?token=) only redirects on GET/HEAD; on other methods it authenticates inline. Prefer the Bearer header for all programmatic HTTP calls; reserve cookie for the embedded browser view.\n- Cookie is not Secure (works on plain-http localhost); a TLS deployment must add Secure at the proxy. SameSite=Strict.\n- /healthz and /static are the only unguarded surfaces when auth is on \u00e2\u0080\u0094 use /healthz to probe liveness, pending count, ws client count, and whether auth is enabled before authenticating.\n- _pending_page tolerates a corrupt proposal file (skipped + logged, still counted in total), so item count can exceed rendered items \u00e2\u0080\u0094 don't assume len(items)==count beyond the current page.\n- dual-solve in desktop mode uses vouch review-ui's docker sandbox path; it requires git, gh, docker on PATH and the vouch/coder:latest image. build_app(allow_dual_solve=True, dual_solve_sandbox=True) calls ds.repo_root and require_docker_sandbox at construction and fails fast outside a git repo or without the sandbox image.\n- finalize with winner=null still cleans up worktrees but proposes nothing (proposed_ids=[]) \u00e2\u0080\u0094 that's the explicit 'reject both' path.\n- App factory: build_app(kb_root=None, *, auth=None, page_size=50, allow_dual_solve=False). Default is auth-disabled (open) and dual-solve off; the CLI is what wires the token and the non-loopback refusal.\n\nRelevant files (all absolute): /home/a/Dev/plind-junior/vouch/src/vouch/web/server.py, /home/a/Dev/plind-junior/vouch/src/vouch/web/dual_solve_api.py, /home/a/Dev/plind-junior/vouch/src/vouch/dual_solve.py, /home/a/Dev/plind-junior/vouch/src/vouch/jsonl_server.py (HANDLERS map for the HTTP-vs-JSONL gap), /home/a/Dev/plind-junior/vouch/src/vouch/proposals.py and lifecycle.py (the gate functions the mutations call)."
+  }
+}
