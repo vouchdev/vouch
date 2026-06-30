@@ -47,14 +47,15 @@ function TreeRow({
   }
   const cls = node.path === selected ? 'fc-file sel' : 'fc-file'
   return (
-    <div
+    <button
+      type="button"
       className={cls}
       style={pad}
       title={node.path}
       onClick={() => onSelect(node.path)}
     >
       {node.name}
-    </div>
+    </button>
   )
 }
 

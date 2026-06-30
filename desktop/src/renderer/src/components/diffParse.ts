@@ -24,8 +24,11 @@ export function parseDiff(diff: string): DiffFile[] {
     } else if (!cur) {
       continue
     } else if (
-      line.startsWith('+++') ||
-      line.startsWith('---') ||
+      // only the file-header markers, which always carry a trailing space and
+      // path ("+++ b/x", "--- a/x"). a content line like "++counter" or
+      // "--flag" must NOT be skipped.
+      line.startsWith('+++ ') ||
+      line.startsWith('--- ') ||
       line.startsWith('index ')
     ) {
       continue
