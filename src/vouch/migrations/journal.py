@@ -60,7 +60,7 @@ def latest_journal(store: KBStore) -> Path | None:
 def read_journal(path: Path) -> tuple[dict[str, object], list[JournalEntry]]:
     header: dict[str, object] = {}
     entries: list[JournalEntry] = []
-    for line in path.read_text().splitlines():
+    for line in path.read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
         rec = json.loads(line)

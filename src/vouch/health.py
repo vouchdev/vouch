@@ -97,7 +97,7 @@ def _load_claims_for_lint(store: KBStore) -> tuple[list[Claim], list[Finding]]:
     for p in sorted(cdir.glob("*.yaml")):
         cid = p.stem
         try:
-            valid.append(Claim.model_validate(_yaml_load(p.read_text())))
+            valid.append(Claim.model_validate(_yaml_load(p.read_text(encoding="utf-8"))))
         except ValidationError as e:
             tail = str(e).splitlines()[-1].strip() if str(e) else "validation failed"
             findings.append(

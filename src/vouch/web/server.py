@@ -195,7 +195,7 @@ def _pending_page(store: KBStore, page: int, page_size: int
     proposals: list[Proposal] = []
     for p in paths[lo:hi]:
         try:
-            proposals.append(Proposal.model_validate(_yaml_load(p.read_text())))
+            proposals.append(Proposal.model_validate(_yaml_load(p.read_text(encoding="utf-8"))))
         except Exception as e:
             _log.warning("skipping unreadable proposal %s: %s", p.name, e)
     return proposals, page, pages, total

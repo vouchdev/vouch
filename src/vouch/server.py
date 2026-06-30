@@ -177,7 +177,7 @@ def kb_search(
 
 def _load_cfg(store: KBStore) -> dict[str, Any]:
     try:
-        loaded = yaml.safe_load((store.kb_dir / "config.yaml").read_text())
+        loaded = yaml.safe_load((store.kb_dir / "config.yaml").read_text(encoding="utf-8"))
     except Exception:
         return {}
     return loaded if isinstance(loaded, dict) else {}

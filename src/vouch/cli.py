@@ -2797,7 +2797,7 @@ def review_ui(
     auth_note = " (Bearer auth on)" if token else ""
     if open_browser and is_loopback:
         # Lazy-import webbrowser; some CI envs (headless) don't have a default
-        # browser configured and webbrowser.open() returns False rather than
+        # browser configured and webbrowser.open(encoding="utf-8") returns False rather than
         # raising — that's fine, the URL is also printed to stdout. When auth
         # is on, hand the browser the token once via ?token= so it can stash it.
         import threading

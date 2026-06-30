@@ -54,7 +54,7 @@ def _configured_backend(store: KBStore) -> str:
     falls back to "auto".
     """
     try:
-        loaded = yaml.safe_load(store.config_path.read_text())
+        loaded = yaml.safe_load(store.config_path.read_text(encoding="utf-8"))
     except (OSError, yaml.YAMLError):
         return "auto"
     if not isinstance(loaded, dict):

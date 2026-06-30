@@ -831,3 +831,32 @@ def test_cite_resolves_source_and_evidence(store: KBStore) -> None:
         for c in citations
     }
     assert "source" in kinds and "evidence" in kinds
+
+
+# --- resilience: a single corrupt file must not break bulk listing --------
+
+
+def test_list_proposals_skips_unreadable_file(store: KBStore) -> None:
+    """One unparseable proposal file must not take down `vouch pending`."""
+    src = store.put_source(b"evidence")
+    good = propose_claim(store, text="good", evidence=[src.id],
+                         proposed_by="agent")
+
+    # a raw U+0080 (C1 control byte) — pyyaml's loader rejects it even though
+    # its dumper would have escaped it. mirrors a hand-edited / mojibake file.
+    corrupt = store.kb_dir / "proposed" / "20990101-000000-corrupt.yaml"
+    corrupt.write_bytes(b"text: bad\xc2\x80value\n")
+
+    pending = store.list_proposals(ProposalStatus.PENDING)
+    assert [p.id for p in pending] == [good.id]
+
+
+def test_list_claims_skips_unreadable_file(store: KBStore) -> None:
+    """Same resilience for durable claim listing (vouch search/status)."""
+    src = store.put_source(b"e")
+    store.put_claim(Claim(id="c-ok", text="x", evidence=[src.id]))
+    (store.kb_dir / "claims" / "c-bad.yaml").write_bytes(
+        b"text: bad\xc2\x80value\n")
+
+    claims = store.list_claims()
+    assert [c.id for c in claims] == ["c-ok"]

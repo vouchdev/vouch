@@ -55,7 +55,7 @@ class MigrationResult:
 def read_config(store: KBStore) -> dict[str, Any]:
     if not store.config_path.exists():
         return {}
-    loaded = yaml.safe_load(store.config_path.read_text())
+    loaded = yaml.safe_load(store.config_path.read_text(encoding="utf-8"))
     if loaded is None:
         return {}
     if not isinstance(loaded, dict):
@@ -64,7 +64,8 @@ def read_config(store: KBStore) -> dict[str, Any]:
 
 
 def write_config(store: KBStore, config: dict[str, Any]) -> None:
-    store.config_path.write_text(yaml.safe_dump(config, sort_keys=False, allow_unicode=True))
+    store.config_path.write_text(
+        yaml.safe_dump(config, sort_keys=False, allow_unicode=True), encoding="utf-8")
 
 
 def detect_version(store: KBStore) -> int:
@@ -162,14 +163,14 @@ def _migration_0_to_1(store: KBStore, dry_run: bool) -> list[str]:
     required_ignores = ("proposed/", "state.db", "state.db-*")
     existing_ignores: list[str] = []
     if gitignore_path.exists():
-        existing_ignores = gitignore_path.read_text().splitlines()
+        existing_ignores = gitignore_path.read_text(encoding="utf-8").splitlines()
     missing_ignores = [line for line in required_ignores if line not in existing_ignores]
     if missing_ignores:
         changes.append("ensure .gitignore excludes proposed/ and state.db")
         if not dry_run:
             gitignore_path.parent.mkdir(parents=True, exist_ok=True)
             lines = [*existing_ignores, *missing_ignores]
-            gitignore_path.write_text("\n".join(lines).rstrip() + "\n")
+            gitignore_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
 
     return changes
 

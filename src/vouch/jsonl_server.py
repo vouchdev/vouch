@@ -164,7 +164,7 @@ def _h_search(p: dict) -> dict:
 
 def _load_cfg(store: KBStore) -> dict:
     try:
-        loaded = yaml.safe_load((store.kb_dir / "config.yaml").read_text())
+        loaded = yaml.safe_load((store.kb_dir / "config.yaml").read_text(encoding="utf-8"))
     except Exception:
         return {}
     return loaded if isinstance(loaded, dict) else {}
