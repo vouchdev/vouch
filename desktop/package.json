@@ -1,0 +1,41 @@
+{
+  "name": "vouch-desktop",
+  "version": "1.0.0",
+  "license": "MIT",
+  "author": "vouch-desktop contributors",
+  "description": "A cross-platform Electron desktop GUI over the entire vouch command surface.",
+  "main": "out/main/index.cjs",
+  "type": "module",
+  "scripts": {
+    "gen:methods": "tsx scripts/gen-methods.ts",
+    "dev": "electron-vite dev",
+    "dev:vouch": "tsx scripts/dev-with-vouch.ts",
+    "build": "electron-vite build",
+    "start": "electron-vite preview",
+    "typecheck": "tsc -b --noEmit",
+    "test": "vitest run",
+    "smoke": "tsx test/smoke-jsonl.ts",
+    "pack": "electron-vite build && electron-builder --dir",
+    "dist": "electron-vite build && electron-builder"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0",
+    "electron-vite": "^2.3.0",
+    "vite": "^5.4.0",
+    "@vitejs/plugin-react": "^4.3.0",
+    "typescript": "^5.5.0",
+    "tsx": "^4.19.0",
+    "vitest": "^2.1.0",
+    "jsdom": "^25.0.0",
+    "@testing-library/react": "^16.0.0",
+    "@testing-library/dom": "^10.4.0",
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "@types/node": "^20.14.0"
+  }
+}

@@ -1,0 +1,24 @@
+# deps
+node_modules/
+src/renderer/node_modules/
+
+# build output
+dist/
+out/
+release/
+*.log
+*.tsbuildinfo
+
+# os
+.DS_Store
+Thumbs.db
+
+# editor / local
+.vscode/
+.idea/
+.claude/
+.superpowers/
+docs/superpowers/
+docs/releases/
+*.local
+.env
