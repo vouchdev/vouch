@@ -7,7 +7,7 @@
 
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
 import * as api from '../lib/client'
-import { Diff } from '../components/Diff'
+import { FileChanges } from '../components/FileChanges'
 import type { ProgressFrame } from '../../../shared/ipc'
 
 // ---------------------------------------------------------------------------
@@ -347,11 +347,6 @@ export default function DualSolve() {
                 ? <span className="pill good">ok</span>
                 : <span className="pill warn">failed</span>}
             </div>
-            {c.changed_files && c.changed_files.length > 0 && (
-              <ul className="mono ds-files">
-                {c.changed_files.map((f, fi) => <li key={fi}>{f}</li>)}
-              </ul>
-            )}
             {c.log && (
               <details className="ds-log">
                 <summary>{c.engine} log</summary>
@@ -359,7 +354,7 @@ export default function DualSolve() {
               </details>
             )}
             {c.ok
-              ? <Diff diff={c.diff} />
+              ? <FileChanges diff={c.diff} />
               : <p className="errbox">{c.error || 'engine produced no diff'}</p>}
           </div>
         ))}

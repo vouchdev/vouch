@@ -1,53 +1,13 @@
 // Diff.tsx — minimal unified-diff renderer.
-// Ported from src/renderer/views/dualsolve.js renderDiff (lines 162-179).
-// Splits a unified diff string into per-file sections; colors +/-/context lines.
+// Splits a unified diff into per-file sections (via the shared diffParse helper)
+// and colors +/-/context lines. The dual-solve file-changes view reuses the
+// same parser; this component stays for the all-files stacked rendering.
 
 import type { ReactNode } from 'react'
+import { parseDiff } from './diffParse'
 
 interface DiffProps {
   diff?: string | null
-}
-
-interface DiffLine {
-  cls: 'hunk' | 'add' | 'del' | 'ctx'
-  text: string
-}
-
-interface DiffFile {
-  head: string
-  lines: DiffLine[]
-}
-
-function parseDiff(diff: string): DiffFile[] {
-  const files: DiffFile[] = []
-  let cur: DiffFile | null = null
-
-  for (const line of diff.split('\n')) {
-    if (line.startsWith('diff --git')) {
-      const m = line.match(/ b\/(.+)$/)
-      cur = { head: m ? m[1] : line, lines: [] }
-      files.push(cur)
-    } else if (!cur) {
-      continue
-    } else if (
-      line.startsWith('+++') ||
-      line.startsWith('---') ||
-      line.startsWith('index ')
-    ) {
-      continue
-    } else {
-      const cls: DiffLine['cls'] = line.startsWith('@@')
-        ? 'hunk'
-        : line.startsWith('+')
-          ? 'add'
-          : line.startsWith('-')
-            ? 'del'
-            : 'ctx'
-      cur.lines.push({ cls, text: line || ' ' })
-    }
-  }
-
-  return files
 }
 
 export function Diff({ diff }: DiffProps): ReactNode {

@@ -255,6 +255,16 @@ details summary { cursor: pointer; color: var(--ink-2); }
 .dl.hunk { background: var(--panel); color: var(--sepia); }
 .dl.ctx { color: var(--ink-2); }
 
+/* file-changes view (dual-solve candidate pane): tree rail + diff pane */
+.fc { display: flex; gap: 8px; align-items: stretch; max-height: 460px; }
+.fc-rail { flex: 0 0 140px; max-width: 140px; overflow: auto; font-family: var(--mono); font-size: 11.5px; padding-right: 4px; border-right: 1px solid var(--line); }
+.fc-pane { flex: 1 1 auto; min-width: 0; overflow: auto; }
+.fc-dir { color: var(--ink-2); padding: 1px 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fc-file { color: var(--ink); padding: 1px 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; border-radius: 3px; }
+.fc-file:hover { background: var(--panel-2); }
+.fc-file.sel { background: var(--verm-dim); color: var(--ink); }
+.fc-empty { font-size: 12.5px; }
+
 /* spinner / boxes */
 .spinner-row { display: flex; align-items: center; gap: 8px; color: var(--ink-2); font-size: 12.5px; }
 .spinner { width: 13px; height: 13px; border: 2px solid var(--line-2); border-top-color: var(--verm); border-radius: 50%; animation: spin .7s linear infinite; }
