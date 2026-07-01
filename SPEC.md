@@ -373,7 +373,7 @@ Returned by `kb.capabilities`:
 ```json
 {
   "name": "vouch",
-  "version": "0.0.1",
+  "version": "1.0.0",
   "spec": "vouch-0.1",
   "methods": ["kb.capabilities", "kb.status", ...],
   "retrieval": ["fts5", "substring"],
