@@ -82,6 +82,18 @@ def _coerce_artifact_scope(value: object) -> object:
     return value
 
 
+def _require_non_empty(v: str, label: str) -> str:
+    """Reject empty / whitespace-only required text fields (#155).
+
+    Shared by the ``Claim.text`` / ``Entity.name`` / ``Page.title``
+    validators. Gates on emptiness only — non-blank values pass through
+    unchanged, so surrounding whitespace is preserved.
+    """
+    if not v.strip():
+        raise ValueError(f"{label} must not be empty")
+    return v
+
+
 class ArtifactScope(BaseModel):
     """Structured scope: visibility tier plus optional project/agent binding."""
 
@@ -240,9 +252,7 @@ class Claim(BaseModel):
         # store.update_claim, and bundle.import_apply via _validate_content
         # accepted text="" / whitespace and landed a claim carrying zero
         # semantic content. Enforce on the model to close all paths at once.
-        if not v.strip():
-            raise ValueError("claim text must not be empty")
-        return v
+        return _require_non_empty(v, "claim text")
     entities: list[str] = Field(default_factory=list)
     supersedes: list[str] = Field(default_factory=list)
     superseded_by: str | None = None
@@ -283,9 +293,7 @@ class Entity(BaseModel):
     def _name_non_empty(cls, v: str) -> str:
         # See Claim._text_non_empty — the propose_entity check alone left
         # store.put_entity and bundle import accepting name="" / whitespace.
-        if not v.strip():
-            raise ValueError("entity name must not be empty")
-        return v
+        return _require_non_empty(v, "entity name")
 
 
 class Relation(BaseModel):
@@ -340,9 +348,7 @@ class Page(BaseModel):
     def _title_non_empty(cls, v: str) -> str:
         # See Claim._text_non_empty — the propose_page check alone left
         # store.put_page and bundle import accepting title="" / whitespace.
-        if not v.strip():
-            raise ValueError("page title must not be empty")
-        return v
+        return _require_non_empty(v, "page title")
 
 
 # --- audit + sessions -----------------------------------------------------
