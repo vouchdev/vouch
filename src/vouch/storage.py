@@ -249,7 +249,11 @@ class KBStore:
             return Config()
         except OSError as e:
             raise ConfigError(f"cannot read {self.config_path}: {e}") from e
-        return Config.load(_yaml_load(text))
+        try:
+            raw = _yaml_load(text)
+        except yaml.YAMLError as e:
+            raise ConfigError(f"{self.config_path}: invalid YAML: {e}") from e
+        return Config.load(raw)
 
     def _yaml(self, sub: str, obj_id: str) -> Path:
         return self.kb_dir / sub / f"{obj_id}.yaml"

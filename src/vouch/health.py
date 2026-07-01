@@ -219,20 +219,6 @@ def doctor(store: KBStore) -> HealthReport:
             f"audit chain broken at line {chain.line}{detail}",
         ))
 
-    # Config validity — a malformed value is an error; an unknown top-level
-    # key is a likely typo silently ignored before #243, now surfaced.
-    if store.config_path.exists():
-        try:
-            cfg = store.config
-        except ConfigError as e:
-            report.findings.append(Finding("error", "config_invalid", str(e)))
-        else:
-            for key in cfg.unknown_keys():
-                report.findings.append(Finding(
-                    "warning", "config_unknown_key",
-                    f"unknown config key {key!r} — possible typo, ignored",
-                ))
-
     # Source integrity (content hash).
     for vr in verify_all(store):
         if not vr.stored_ok:
@@ -254,7 +240,9 @@ def doctor(store: KBStore) -> HealthReport:
                 )
             )
 
-    # Config sanity.
+    # Config sanity — a missing file is an error; otherwise a malformed value
+    # is an error and an unknown key is a likely typo (silently ignored before
+    # #243, now surfaced).
     if not store.config_path.exists():
         report.findings.append(
             Finding(
@@ -263,6 +251,17 @@ def doctor(store: KBStore) -> HealthReport:
                 "config.yaml is missing",
             )
         )
+    else:
+        try:
+            cfg = store.config
+        except ConfigError as e:
+            report.findings.append(Finding("error", "config_invalid", str(e)))
+        else:
+            for key in cfg.unknown_keys():
+                report.findings.append(Finding(
+                    "warning", "config_unknown_key",
+                    f"unknown config key {key!r} — possible typo, ignored",
+                ))
 
     # Index presence (warning only — the index is derivable).
     if not (store.kb_dir / index_db.DB_FILENAME).exists():

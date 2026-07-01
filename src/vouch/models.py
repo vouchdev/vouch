@@ -557,5 +557,13 @@ class Config(BaseModel):
             raise ConfigError(f"config.yaml: {loc}: {first['msg']}") from e
 
     def unknown_keys(self) -> list[str]:
-        """Top-level keys outside the known schema (likely typos)."""
-        return sorted(self.__pydantic_extra__ or {})
+        """Keys outside the known schema (likely typos), dotted for nesting.
+
+        Walks the top level plus the two validated nested blocks, so a typo
+        one level deep (`review.expier_pending_after_days`) is surfaced the
+        same way a top-level one is, rather than silently swallowed.
+        """
+        keys = set(self.__pydantic_extra__ or {})
+        keys |= {f"review.{k}" for k in (self.review.__pydantic_extra__ or {})}
+        keys |= {f"retrieval.{k}" for k in (self.retrieval.__pydantic_extra__ or {})}
+        return sorted(keys)

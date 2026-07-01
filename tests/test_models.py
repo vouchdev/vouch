@@ -71,6 +71,23 @@ def test_unknown_top_level_key_preserved_not_dropped() -> None:
     assert cfg.review.require_human_approval is True
 
 
+def test_unknown_nested_key_surfaced_with_dotted_path() -> None:
+    # A typo one level deep must be flagged too, not just top-level ones.
+    cfg = Config.load(
+        {
+            "review": {"expier_pending_after_days": 1},
+            "retrieval": {"defualt_limit": 5},
+        }
+    )
+    assert cfg.unknown_keys() == [
+        "retrieval.defualt_limit",
+        "review.expier_pending_after_days",
+    ]
+    # Correctly-spelled defaults are untouched.
+    assert cfg.review.expire_pending_after_days == 90
+    assert cfg.retrieval.default_limit == 10
+
+
 def test_known_sections_never_flagged_as_unknown() -> None:
     cfg = Config.load(
         {
@@ -108,6 +125,20 @@ def test_store_config_round_trips_starter(tmp_path: Path) -> None:
     assert store.config.review.expire_pending_after_days == 90
 
 
+def test_store_config_is_cached_per_instance(tmp_path: Path) -> None:
+    store = _init_kb(tmp_path)
+    assert store.config is store.config
+
+
+def test_store_config_raises_configerror_on_malformed_yaml(tmp_path: Path) -> None:
+    # Broken YAML *syntax* (not just a bad value) must surface as ConfigError,
+    # not an uncaught YAMLError that would crash callers like doctor().
+    store = _init_kb(tmp_path)
+    store.config_path.write_text("retrieval: {backend: [unterminated\n")
+    with pytest.raises(ConfigError):
+        _ = KBStore(tmp_path).config
+
+
 def test_store_config_raises_on_malformed(tmp_path: Path) -> None:
     store = _init_kb(tmp_path)
     _write_config(store, {"retrieval": {"default_limit": "ten"}})
@@ -136,3 +167,24 @@ def test_doctor_errors_on_invalid_config(tmp_path: Path) -> None:
     codes = {(f.severity, f.code) for f in report.findings}
     assert ("error", "config_invalid") in codes
     assert report.ok is False
+
+
+def test_doctor_reports_malformed_yaml_without_crashing(tmp_path: Path) -> None:
+    from vouch.health import doctor
+
+    store = _init_kb(tmp_path)
+    store.config_path.write_text("retrieval: {backend: [unterminated\n")
+    report = doctor(KBStore(tmp_path))  # must not raise
+    codes = {(f.severity, f.code) for f in report.findings}
+    assert ("error", "config_invalid") in codes
+    assert report.ok is False
+
+
+def test_doctor_surfaces_nested_unknown_key(tmp_path: Path) -> None:
+    from vouch.health import doctor
+
+    store = _init_kb(tmp_path)
+    _write_config(store, {**_starter_config(), "review": {"expier_after": 1}})
+    report = doctor(KBStore(tmp_path))
+    warns = [f for f in report.findings if f.code == "config_unknown_key"]
+    assert any("review.expier_after" in f.message for f in warns)
