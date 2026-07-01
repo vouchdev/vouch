@@ -12,7 +12,6 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-import yaml
 from pydantic import ValidationError
 
 from . import audit, index_db
@@ -35,7 +34,6 @@ class ProposalError(RuntimeError):
 
 EXPIRE_REASON = "expired"
 EXPIRE_ACTOR = "vouch-expire"
-_DEFAULT_EXPIRE_PENDING_DAYS = 90
 
 
 @dataclass
@@ -330,23 +328,14 @@ def _approval_block_reason(
     """
     if proposal.status != ProposalStatus.PENDING:
         return f"proposal {proposal.id} is {proposal.status.value}, not pending"
-    if approved_by == proposal.proposed_by:
-        cfg: dict[str, Any] = {}
-        try:
-            loaded = yaml.safe_load((store.kb_dir / "config.yaml").read_text())
-            if isinstance(loaded, dict):
-                cfg = loaded
-        except Exception:
-            pass
-        review_cfg = cfg.get("review")
-        approver_role = (
-            review_cfg.get("approver_role") if isinstance(review_cfg, dict) else None
+    if (
+        approved_by == proposal.proposed_by
+        and store.config.review.approver_role != "trusted-agent"
+    ):
+        return (
+            f"forbidden_self_approval: {approved_by} cannot approve their own "
+            "proposal (set review.approver_role: trusted-agent in config.yaml to opt out)"
         )
-        if approver_role != "trusted-agent":
-            return (
-                f"forbidden_self_approval: {approved_by} cannot approve their own "
-                "proposal (set review.approver_role: trusted-agent in config.yaml to opt out)"
-            )
     return None
 
 
@@ -576,19 +565,7 @@ def expire_pending_after_days(store: KBStore, *, override: int | None = None) ->
     """Resolve GC threshold from config (`review.expire_pending_after_days`)."""
     if override is not None:
         return override
-    try:
-        loaded = yaml.safe_load(store.config_path.read_text())
-    except Exception:
-        return _DEFAULT_EXPIRE_PENDING_DAYS
-    if not isinstance(loaded, dict):
-        return _DEFAULT_EXPIRE_PENDING_DAYS
-    review_cfg = loaded.get("review")
-    if not isinstance(review_cfg, dict):
-        return _DEFAULT_EXPIRE_PENDING_DAYS
-    days = review_cfg.get("expire_pending_after_days")
-    if isinstance(days, int) and days >= 0:
-        return days
-    return _DEFAULT_EXPIRE_PENDING_DAYS
+    return store.config.review.expire_pending_after_days
 
 
 def _utc(dt: datetime) -> datetime:

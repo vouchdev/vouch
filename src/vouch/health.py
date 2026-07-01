@@ -17,7 +17,15 @@ from pydantic import ValidationError
 
 from . import index_db
 from .audit import count_events, verify_chain
-from .models import Claim, ClaimStatus, Entity, Page, ProposalKind, ProposalStatus
+from .models import (
+    Claim,
+    ClaimStatus,
+    ConfigError,
+    Entity,
+    Page,
+    ProposalKind,
+    ProposalStatus,
+)
 from .storage import KBStore, _yaml_load, sha256_hex
 from .verify import verify_all
 
@@ -210,6 +218,20 @@ def doctor(store: KBStore) -> HealthReport:
             "error", "audit_chain_broken",
             f"audit chain broken at line {chain.line}{detail}",
         ))
+
+    # Config validity — a malformed value is an error; an unknown top-level
+    # key is a likely typo silently ignored before #243, now surfaced.
+    if store.config_path.exists():
+        try:
+            cfg = store.config
+        except ConfigError as e:
+            report.findings.append(Finding("error", "config_invalid", str(e)))
+        else:
+            for key in cfg.unknown_keys():
+                report.findings.append(Finding(
+                    "warning", "config_unknown_key",
+                    f"unknown config key {key!r} — possible typo, ignored",
+                ))
 
     # Source integrity (content hash).
     for vr in verify_all(store):

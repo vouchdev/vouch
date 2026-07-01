@@ -29,6 +29,7 @@ import os
 import re
 import sqlite3
 import stat
+from functools import cached_property
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +37,8 @@ import yaml
 
 from .models import (
     Claim,
+    Config,
+    ConfigError,
     Entity,
     Evidence,
     Page,
@@ -230,6 +233,23 @@ class KBStore:
     @property
     def config_path(self) -> Path:
         return self.kb_dir / CONFIG_FILENAME
+
+    @cached_property
+    def config(self) -> Config:
+        """Typed, validated view of config.yaml, parsed once. (#243)
+
+        A missing file yields all-defaults (a KB may predate `config.yaml`);
+        a malformed file raises `ConfigError` naming the offending key.
+        Cached per store instance — construct a fresh `KBStore` to re-read
+        after rewriting config.
+        """
+        try:
+            text = self.config_path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return Config()
+        except OSError as e:
+            raise ConfigError(f"cannot read {self.config_path}: {e}") from e
+        return Config.load(_yaml_load(text))
 
     def _yaml(self, sub: str, obj_id: str) -> Path:
         return self.kb_dir / sub / f"{obj_id}.yaml"

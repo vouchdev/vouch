@@ -16,8 +16,6 @@ from __future__ import annotations
 import sqlite3
 from typing import Any, Literal, cast
 
-import yaml
-
 from . import graph, index_db
 from .models import ClaimStatus, ContextItem, ContextPack, ContextQuality
 from .scoping import (
@@ -42,35 +40,15 @@ _RETRACTED_CLAIM_STATUSES = frozenset({
 
 ContextItemKind = Literal["claim", "page", "entity", "relation", "source"]
 
-_VALID_BACKENDS = ("auto", "embedding", "fts5", "substring")
-
-
 def _configured_backend(store: KBStore) -> str:
     """Resolve the retrieval backend from `config.yaml`, defaulting to "auto".
 
     Reads the singular `retrieval.backend` string. For KBs initialised
     before this knob existed, a legacy `retrieval.backends` list is honoured
-    by taking its first recognised entry. Anything unreadable or unrecognised
-    falls back to "auto".
+    by taking its first recognised entry. Anything unrecognised falls back to
+    "auto". Parsing + validation now lives in the typed `Config` model (#243).
     """
-    try:
-        loaded = yaml.safe_load(store.config_path.read_text())
-    except (OSError, yaml.YAMLError):
-        return "auto"
-    if not isinstance(loaded, dict):
-        return "auto"
-    retrieval = loaded.get("retrieval")
-    if not isinstance(retrieval, dict):
-        return "auto"
-    backend = retrieval.get("backend")
-    if isinstance(backend, str) and backend in _VALID_BACKENDS:
-        return backend
-    legacy = retrieval.get("backends")
-    if isinstance(legacy, list):
-        for entry in legacy:
-            if isinstance(entry, str) and entry in _VALID_BACKENDS:
-                return entry
-    return "auto"
+    return store.config.retrieval.resolved_backend()
 
 
 def _retrieve(
