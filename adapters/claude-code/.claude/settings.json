@@ -25,6 +25,10 @@
         "hooks": [
           {
             "type": "command",
+            "command": "vouch capture finalize-all || true"
+          },
+          {
+            "type": "command",
             "command": "vouch status --json || true"
           },
           {
