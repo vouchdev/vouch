@@ -64,6 +64,33 @@ Claude Code install to point you at the next step (`vouch install-mcp
 claude-code`). Inspect it first if you'd like — it's [`install.sh`](install.sh)
 at the repo root.
 
+## Running the tests
+
+From a clone with the dev extras installed (`pip install -e '.[dev]'`):
+
+```bash
+# the full CI gate — lint + types + unit tests (exactly what CI runs)
+make check                       # == ruff check + mypy src + pytest
+
+# just the unit tests
+python -m pytest tests/ -q --ignore=tests/embeddings
+
+# a single module or test
+python -m pytest tests/test_capture.py -q
+python -m pytest tests/test_recall.py::test_digest_includes_approved_claim_and_page -q
+
+# with coverage
+make test-cov                    # term-missing + coverage.xml
+
+# end-to-end smoke checks for the claude-code session hooks
+make smoke-capture               # capture: observe → finalize → pending summary
+make smoke-recall                # recall: approved knowledge injected at session start
+```
+
+The embedding-heavy tests live under `tests/embeddings/` and need the extra
+`pip install -e '.[embeddings]'` (they run as a separate CI job); drop the
+`--ignore` flag once installed.
+
 ## Quick start
 
 ```bash

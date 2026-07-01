@@ -26,6 +26,17 @@ All notable changes to vouch are documented here. Format follows
   auto-approved. a `SessionStart` banner (`vouch capture banner`) nudges the
   next session when captured summaries await review. opt out with
   `capture.enabled: false` in `.vouch/config.yaml`.
+- session-start recall: a `SessionStart` hook (`vouch recall`) injects a digest
+  of every live approved claim (`[id] text`) plus approved page titles into a
+  new claude session's context, so it starts aware of the reviewed KB. only
+  approved knowledge is emitted; archived / superseded / redacted claims are
+  excluded; size-guarded by `recall.max_chars` with an explicit truncation
+  notice. opt out with `recall.enabled: false`.
+- `vouch install-mcp claude-code` now merges its hooks and read-only permission
+  allowlist into an existing `.claude/settings.json` (a `json_merge` install
+  strategy) instead of skipping it, so the capture / recall hooks land on
+  projects that already have a settings file. idempotent; user entries are
+  preserved.
 - GitHub PR auto-labeling: a pull-request metadata-only labeler workflow now
   applies vouch surface labels from `.github/labeler.yml`, keeps those labels
   in sync as files change, and adds OpenClaw-style `size: XS` through
@@ -105,6 +116,12 @@ All notable changes to vouch are documented here. Format follows
   KB under `eval/fixture-kb/`, and an `eval` workflow gating retrieval changes
   (#226).
 ### Fixed
+- storage now reads and writes all KB files with an explicit `encoding="utf-8"`
+  instead of relying on the process locale. on a non-utf-8 locale (e.g.
+  ISO-8859-1) a claim/page/proposal containing a normal character like an
+  em-dash would mis-decode and crash reads (`vouch pending` raised a
+  `yaml.reader.ReaderError`) or fail writes; KB files are utf-8 regardless of
+  locale now.
 - `parse_since` (the `--since` parser behind `vouch metrics`/`vouch audit`) now raises a clean `MetricsError` for a duration too large to represent (e.g. `--since 1000000000000d`), instead of letting an uncaught `OverflowError` traceback escape — restoring the documented "clean error, not a traceback" contract.
 - `sync_apply` now loads the sync source exactly once and passes the same `_SyncSource` instance into `sync_check`, closing a TOCTOU window where a bundle replaced on disk between the two `_load_source` calls could cause the validation and write phases to operate on different snapshots. Also eliminates redundant directory walks (KB sources) and triple tarball opens (bundle sources). Fixes #217.
 - `vault_to_kb` now passes `slug_hint=page_id` to `propose_page` so vault edit proposals target the existing page id from frontmatter instead of a slugified copy of the title (fixes #219).
