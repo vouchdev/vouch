@@ -1,24 +1,16 @@
-"""Typed Config model + validation for `.vouch/config.yaml` (issue #243)."""
+"""Typed `Config` model + validation for `.vouch/config.yaml` (issue #243).
+
+Pure model unit tests live here; `KBStore.config` integration is in
+`test_storage.py` and the `vouch doctor` diagnostics in `test_health.py`,
+per the mirror-the-module convention.
+"""
 
 from __future__ import annotations
-
-from pathlib import Path
 
 import pytest
 
 from vouch.models import Config, ConfigError
-from vouch.storage import KBStore, _starter_config, _yaml_dump
-
-
-def _init_kb(tmp_path: Path) -> KBStore:
-    return KBStore.init(tmp_path)
-
-
-def _write_config(store: KBStore, raw: dict) -> None:
-    store.config_path.write_text(_yaml_dump(raw))
-
-
-# --- the model in isolation ------------------------------------------------
+from vouch.storage import _starter_config
 
 
 def test_starter_config_parses_with_no_unknown_keys() -> None:
@@ -107,84 +99,3 @@ def test_resolved_backend_honours_legacy_list() -> None:
 def test_resolved_backend_falls_back_on_unrecognised() -> None:
     cfg = Config.load({"retrieval": {"backend": "nonsense"}})
     assert cfg.retrieval.resolved_backend() == "auto"
-
-
-# --- KBStore integration ---------------------------------------------------
-
-
-def test_store_config_defaults_when_file_missing(tmp_path: Path) -> None:
-    store = _init_kb(tmp_path)
-    store.config_path.unlink()
-    fresh = KBStore(tmp_path)
-    assert fresh.config.retrieval.resolved_backend() == "auto"
-
-
-def test_store_config_round_trips_starter(tmp_path: Path) -> None:
-    store = _init_kb(tmp_path)
-    assert store.config.unknown_keys() == []
-    assert store.config.review.expire_pending_after_days == 90
-
-
-def test_store_config_is_cached_per_instance(tmp_path: Path) -> None:
-    store = _init_kb(tmp_path)
-    assert store.config is store.config
-
-
-def test_store_config_raises_configerror_on_malformed_yaml(tmp_path: Path) -> None:
-    # Broken YAML *syntax* (not just a bad value) must surface as ConfigError,
-    # not an uncaught YAMLError that would crash callers like doctor().
-    store = _init_kb(tmp_path)
-    store.config_path.write_text("retrieval: {backend: [unterminated\n")
-    with pytest.raises(ConfigError):
-        _ = KBStore(tmp_path).config
-
-
-def test_store_config_raises_on_malformed(tmp_path: Path) -> None:
-    store = _init_kb(tmp_path)
-    _write_config(store, {"retrieval": {"default_limit": "ten"}})
-    with pytest.raises(ConfigError):
-        _ = KBStore(tmp_path).config
-
-
-def test_doctor_warns_on_unknown_key(tmp_path: Path) -> None:
-    from vouch.health import doctor
-
-    store = _init_kb(tmp_path)
-    _write_config(store, {**_starter_config(), "reveiw": {}})
-    report = doctor(KBStore(tmp_path))
-    codes = {(f.severity, f.code) for f in report.findings}
-    assert ("warning", "config_unknown_key") in codes
-    # An unknown key is only a warning — doctor stays ok.
-    assert report.ok is True
-
-
-def test_doctor_errors_on_invalid_config(tmp_path: Path) -> None:
-    from vouch.health import doctor
-
-    store = _init_kb(tmp_path)
-    _write_config(store, {"retrieval": {"default_limit": "ten"}})
-    report = doctor(KBStore(tmp_path))
-    codes = {(f.severity, f.code) for f in report.findings}
-    assert ("error", "config_invalid") in codes
-    assert report.ok is False
-
-
-def test_doctor_reports_malformed_yaml_without_crashing(tmp_path: Path) -> None:
-    from vouch.health import doctor
-
-    store = _init_kb(tmp_path)
-    store.config_path.write_text("retrieval: {backend: [unterminated\n")
-    report = doctor(KBStore(tmp_path))  # must not raise
-    codes = {(f.severity, f.code) for f in report.findings}
-    assert ("error", "config_invalid") in codes
-    assert report.ok is False
-
-
-def test_doctor_surfaces_nested_unknown_key(tmp_path: Path) -> None:
-    from vouch.health import doctor
-
-    store = _init_kb(tmp_path)
-    _write_config(store, {**_starter_config(), "review": {"expier_after": 1}})
-    report = doctor(KBStore(tmp_path))
-    warns = [f for f in report.findings if f.code == "config_unknown_key"]
-    assert any("review.expier_after" in f.message for f in warns)

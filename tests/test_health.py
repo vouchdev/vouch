@@ -8,7 +8,7 @@ import pytest
 
 from vouch import health, index_db
 from vouch.models import Claim, ClaimStatus, Proposal, ProposalKind, ProposalStatus
-from vouch.storage import KBStore, _yaml_dump
+from vouch.storage import KBStore, _starter_config, _yaml_dump
 
 
 @pytest.fixture
@@ -333,3 +333,40 @@ def test_fsck_without_state_db_reports_info(store: KBStore) -> None:
     assert "index_missing" in codes
     # info finding alone shouldn't fail the report.
     assert report.ok is True
+
+
+# --- config diagnostics (#243) --------------------------------------------
+
+
+def test_doctor_warns_on_unknown_config_key(store: KBStore) -> None:
+    store.config_path.write_text(_yaml_dump({**_starter_config(), "reveiw": {}}))
+    report = health.doctor(KBStore(store.root))
+    codes = {(f.severity, f.code) for f in report.findings}
+    assert ("warning", "config_unknown_key") in codes
+    # An unknown key is only a warning — doctor stays ok.
+    assert report.ok is True
+
+
+def test_doctor_errors_on_invalid_config_value(store: KBStore) -> None:
+    store.config_path.write_text(_yaml_dump({"retrieval": {"default_limit": "ten"}}))
+    report = health.doctor(KBStore(store.root))
+    codes = {(f.severity, f.code) for f in report.findings}
+    assert ("error", "config_invalid") in codes
+    assert report.ok is False
+
+
+def test_doctor_reports_malformed_yaml_without_crashing(store: KBStore) -> None:
+    store.config_path.write_text("retrieval: {backend: [unterminated\n")
+    report = health.doctor(KBStore(store.root))  # must not raise
+    codes = {(f.severity, f.code) for f in report.findings}
+    assert ("error", "config_invalid") in codes
+    assert report.ok is False
+
+
+def test_doctor_surfaces_nested_unknown_config_key(store: KBStore) -> None:
+    store.config_path.write_text(
+        _yaml_dump({**_starter_config(), "review": {"expier_after": 1}})
+    )
+    report = health.doctor(KBStore(store.root))
+    warns = [f for f in report.findings if f.code == "config_unknown_key"]
+    assert any("review.expier_after" in f.message for f in warns)
