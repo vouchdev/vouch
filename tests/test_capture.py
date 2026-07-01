@@ -208,3 +208,22 @@ def test_cli_banner_silent_when_none(store: KBStore) -> None:
     res = _run(store, ["capture", "banner"])
     assert res.exit_code == 0
     assert res.output.strip() == ""
+
+
+def test_adapter_settings_wires_capture_hooks() -> None:
+    root = Path(__file__).resolve().parents[1]
+    settings = _json.loads(
+        (root / "adapters/claude-code/.claude/settings.json").read_text()
+    )
+    hooks = settings["hooks"]
+
+    def commands(event: str) -> list[str]:
+        out: list[str] = []
+        for group in hooks.get(event, []):
+            for h in group.get("hooks", []):
+                out.append(h.get("command", ""))
+        return out
+
+    assert any("capture observe" in c for c in commands("PostToolUse"))
+    assert any("capture finalize" in c for c in commands("SessionEnd"))
+    assert any("capture banner" in c for c in commands("SessionStart"))

@@ -17,6 +17,15 @@ All notable changes to vouch are documented here. Format follows
   committed SVGs stay reproducible (#286).
 
 ### Added
+- auto-capture: claude code sessions are harvested via hooks and filed as a
+  single pending session-summary proposal for human approval. a `PostToolUse`
+  hook (`vouch capture observe`) appends compact tool-use observations to an
+  ephemeral, gitignored `.vouch/captures/<session>.jsonl` buffer; a
+  `SessionEnd` hook (`vouch capture finalize`) rolls the buffer plus a git-diff
+  backstop into one `session` page proposal — mechanical, no llm, and never
+  auto-approved. a `SessionStart` banner (`vouch capture banner`) nudges the
+  next session when captured summaries await review. opt out with
+  `capture.enabled: false` in `.vouch/config.yaml`.
 - GitHub PR auto-labeling: a pull-request metadata-only labeler workflow now
   applies vouch surface labels from `.github/labeler.yml`, keeps those labels
   in sync as files change, and adds OpenClaw-style `size: XS` through

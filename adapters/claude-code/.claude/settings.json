@@ -26,6 +26,32 @@
           {
             "type": "command",
             "command": "vouch status --json || true"
+          },
+          {
+            "type": "command",
+            "command": "vouch capture banner || true"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "vouch capture observe || true"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "vouch capture finalize || true"
           }
         ]
       }
