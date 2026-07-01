@@ -30,6 +30,10 @@
           {
             "type": "command",
             "command": "vouch capture banner || true"
+          },
+          {
+            "type": "command",
+            "command": "vouch recall || true"
           }
         ]
       }

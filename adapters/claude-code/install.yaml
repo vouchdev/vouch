@@ -4,9 +4,9 @@
 # T2 = CLAUDE.md fenced snippet (idempotent append, see install_adapter._install_fenced).
 # T3 = four custom slash commands (`/vouch-recall`, `/vouch-status`,
 #      `/vouch-resolve-issue`, `/vouch-propose-from-pr`).
-# T4 = `.claude/settings.json`: SessionStart (kb status + capture review banner),
-#      PostToolUse (capture observe), SessionEnd (capture finalize), plus
-#      read-only kb_* auto-allow.
+# T4 = `.claude/settings.json`: SessionStart (kb status + capture review banner +
+#      recall digest of approved knowledge), PostToolUse (capture observe),
+#      SessionEnd (capture finalize), plus read-only kb_* auto-allow.
 host: claude-code
 pretty: Claude Code
 fence:

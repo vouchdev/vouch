@@ -30,6 +30,7 @@ from . import metrics as metrics_mod
 from . import migrations as migrations_mod
 from . import pr_cache as prc_mod
 from . import provenance as prov_mod
+from . import recall as recall_mod
 from . import sessions as sess_mod
 from . import stats as stats_mod
 from . import sync as sync_mod
@@ -1401,6 +1402,20 @@ def capture_banner_cmd() -> None:
             f"🔔 {n} auto-captured session summary(ies) awaiting review — "
             f"run `vouch review`."
         )
+
+
+@cli.command(name="recall")
+def recall_cmd() -> None:
+    """Emit a digest of all approved knowledge for session-start injection."""
+    store = _capture_store()
+    if store is None:
+        return
+    cfg = recall_mod.load_config(store)
+    if not cfg.enabled:
+        return
+    digest = recall_mod.build_digest(store, max_chars=cfg.max_chars)
+    if digest.strip():
+        click.echo(digest)
 
 
 @cli.command()

@@ -84,6 +84,11 @@ def _starter_config() -> dict[str, Any]:
             "enabled": True,
             "min_observations": 3,
         },
+        "recall": {
+            # inject a digest of all approved knowledge at session start.
+            "enabled": True,
+            "max_chars": 12000,
+        },
         "retrieval": {
             # auto = embedding -> fts5 -> substring; or pin one of
             # embedding | fts5 | substring. See context._retrieve.
