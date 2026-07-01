@@ -266,6 +266,10 @@ class KBStore:
         return self.kb_dir / "pages" / f"{page_id}.md"
 
     def _source_dir(self, source_id: str) -> Path:
+        # Source.id is hex-sha256-locked on the model, but get_source /
+        # read_source_content / the evidence-ref existence checks route raw
+        # id strings through here, so guard this chokepoint too (#149).
+        _reject_unsafe_id(source_id)
         return self.kb_dir / "sources" / source_id
 
     def _entity_path(self, eid: str) -> Path:

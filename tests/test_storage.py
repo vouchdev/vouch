@@ -131,6 +131,15 @@ def test_source_hash_field_mirrors_id(store: KBStore) -> None:
     assert s.hash == s.id
 
 
+def test_get_source_rejects_traversal_id(store: KBStore) -> None:
+    # get_source / read_source_content take raw id strings; a crafted id must
+    # not resolve to <outside>/meta.yaml or <outside>/content (#149).
+    with pytest.raises(ValueError, match="artifact id"):
+        store.get_source("../../../etc/hostname")
+    with pytest.raises(ValueError, match="artifact id"):
+        store.read_source_content("../../outside")
+
+
 # --- claims ---------------------------------------------------------------
 
 
