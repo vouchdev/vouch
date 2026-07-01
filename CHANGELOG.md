@@ -42,6 +42,13 @@ All notable changes to vouch are documented here. Format follows
   in sync as files change, and adds OpenClaw-style `size: XS` through
   `size: XL` labels based on non-doc changed lines. Maintainers can also run
   it manually to backfill labels on already-open PRs.
+- `vouch detect-themes` — cross-session pattern detection via deterministic
+  entity co-occurrence scoring. `kb.detect_themes` is read-only (returns
+  ranked clusters); `kb.propose_theme` routes synthesis pages through the
+  review gate so they appear in `kb.list_pending`. Supports `--propose` for
+  one-shot propose-all and `--json` for machine-readable output. Configurable
+  via `themes.min_sessions`, `themes.min_claims`, `themes.top_k`, and
+  `themes.enabled` in `config.yaml` (#311).
 - `vouch dual-solve <issue-url>` — run claude + codex on one github issue in
   isolated git worktrees, compare the two diffs, keep the branch you pick, and
   propose the chosen solution's rationale into the KB. A sibling tool to

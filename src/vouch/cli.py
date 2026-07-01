@@ -1945,6 +1945,81 @@ def audit(tail: int, as_json: bool, project: str | None, agent: str | None) -> N
         )
 
 
+# --- cross-session themes -------------------------------------------------
+
+
+@cli.command(name="detect-themes")
+@click.option("--min-sessions", default=None, type=int, help="Minimum sessions for a cluster.")
+@click.option("--min-claims", default=None, type=int, help="Minimum claims for a cluster.")
+@click.option("--top-k", default=None, type=int, help="Max clusters to return.")
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON.")
+@click.option("--propose", is_flag=True, help="Propose theme pages for each cluster.")
+@click.option("--agent", default=None, help="Agent name for proposals.")
+def detect_themes_cmd(
+    min_sessions: int | None,
+    min_claims: int | None,
+    top_k: int | None,
+    as_json: bool,
+    propose: bool,
+    agent: str | None,
+) -> None:
+    """Detect recurring entity clusters across completed sessions."""
+    from . import themes
+
+    store = _load_store()
+    result = themes.detect_themes(
+        store,
+        min_sessions=min_sessions,
+        min_claims=min_claims,
+        top_k=top_k,
+    )
+    if as_json and not propose:
+        _emit_json({
+            "clusters": [
+                {
+                    "entities": c.entities,
+                    "claim_ids": c.claim_ids,
+                    "session_ids": c.session_ids,
+                    "score": c.score,
+                    "session_count": c.session_count,
+                    "claim_count": c.claim_count,
+                }
+                for c in result.clusters
+            ],
+            "config": result.config_used,
+        })
+        return
+    if not result.clusters:
+        click.echo("no themes detected")
+        return
+    if propose:
+        actor = agent or _whoami()
+        proposed: list[dict] = []
+        for cluster in result.clusters:
+            try:
+                p = themes.propose_theme(store, cluster, proposed_by=actor)
+                proposed.append(p)
+                if not as_json:
+                    click.echo(
+                        f"proposed: {p['theme_page_id']} "
+                        f"({p['claim_count']} claims, "
+                        f"{p['session_count']} sessions)"
+                    )
+            except Exception as e:
+                click.echo(
+                    f"skip: {', '.join(cluster.entities)} — {e}",
+                    err=True,
+                )
+        if as_json:
+            _emit_json({"proposed": proposed})
+        return
+    for i, c in enumerate(result.clusters, 1):
+        click.echo(
+            f"{i}. {', '.join(c.entities)}  "
+            f"score={c.score}  sessions={c.session_count}  claims={c.claim_count}"
+        )
+
+
 # --- export / import ------------------------------------------------------
 
 

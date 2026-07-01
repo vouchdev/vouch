@@ -135,6 +135,7 @@ class PageType(StrEnum):
     LOG = "log"
     REPORT = "report"
     SOURCE_SUMMARY = "source-summary"
+    THEME = "theme"
 
 
 class PageStatus(StrEnum):
