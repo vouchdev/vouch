@@ -231,6 +231,18 @@ class Claim(BaseModel):
                 "(README §'Object model'; CONTRIBUTING §'Things we won't merge')"
             )
         return v
+
+    @field_validator("text")
+    @classmethod
+    def _text_non_empty(cls, v: str) -> str:
+        # Same shape as _at_least_one_citation: the non-empty contract lived
+        # only in proposals.propose_claim, so store.put_claim,
+        # store.update_claim, and bundle.import_apply via _validate_content
+        # accepted text="" / whitespace and landed a claim carrying zero
+        # semantic content. Enforce on the model to close all paths at once.
+        if not v.strip():
+            raise ValueError("claim text must not be empty")
+        return v
     entities: list[str] = Field(default_factory=list)
     supersedes: list[str] = Field(default_factory=list)
     superseded_by: str | None = None
@@ -265,6 +277,15 @@ class Entity(BaseModel):
     page: str | None = Field(default=None, description="Optional page id for this entity")
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
+
+    @field_validator("name")
+    @classmethod
+    def _name_non_empty(cls, v: str) -> str:
+        # See Claim._text_non_empty — the propose_entity check alone left
+        # store.put_entity and bundle import accepting name="" / whitespace.
+        if not v.strip():
+            raise ValueError("entity name must not be empty")
+        return v
 
 
 class Relation(BaseModel):
@@ -313,6 +334,15 @@ class Page(BaseModel):
         if not isinstance(v, str) or not v.strip():
             raise ValueError("page type must be a non-empty string")
         return v.strip()
+
+    @field_validator("title")
+    @classmethod
+    def _title_non_empty(cls, v: str) -> str:
+        # See Claim._text_non_empty — the propose_page check alone left
+        # store.put_page and bundle import accepting title="" / whitespace.
+        if not v.strip():
+            raise ValueError("page title must not be empty")
+        return v
 
 
 # --- audit + sessions -----------------------------------------------------

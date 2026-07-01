@@ -196,6 +196,47 @@ def test_update_claim_rejects_empty_evidence(store: KBStore) -> None:
     assert (store.kb_dir / "claims" / "c1.yaml").read_text() == persisted_before
 
 
+@pytest.mark.parametrize("bad", ["", "   ", "\n\t "])
+def test_claim_model_rejects_empty_text(store: KBStore, bad: str) -> None:
+    """Regression for #155: same shape as the #81 evidence validator, on the
+    text field. Empty / whitespace-only text is rejected at the model layer so
+    direct construction, store.put_claim, and bundle import all inherit it."""
+    src = store.put_source(b"e")
+    with pytest.raises(ValidationError, match="text must not be empty"):
+        Claim(id="c1", text=bad, evidence=[src.id])
+
+
+def test_put_claim_rejects_empty_text(store: KBStore) -> None:
+    src = store.put_source(b"e")
+    with pytest.raises(ValidationError, match="text must not be empty"):
+        store.put_claim(Claim(id="c1", text="   ", evidence=[src.id]))
+    assert not (store.kb_dir / "claims" / "c1.yaml").exists()
+
+
+def test_update_claim_rejects_empty_text(store: KBStore) -> None:
+    """A previously-populated claim cannot be mutated down to blank text and
+    silently re-persisted — update_claim re-validates via model_validate."""
+    src = store.put_source(b"e")
+    store.put_claim(Claim(id="c1", text="cited", evidence=[src.id]))
+    persisted_before = (store.kb_dir / "claims" / "c1.yaml").read_text()
+
+    c = store.get_claim("c1")
+    c.text = "   "
+
+    with pytest.raises(ValidationError, match="text must not be empty"):
+        store.update_claim(c)
+    assert (store.kb_dir / "claims" / "c1.yaml").read_text() == persisted_before
+
+
+def test_claim_text_preserves_surrounding_whitespace_when_non_blank(
+    store: KBStore,
+) -> None:
+    """The validator gates on emptiness only — it must not strip content."""
+    src = store.put_source(b"e")
+    c = Claim(id="c1", text="  padded text  ", evidence=[src.id])
+    assert c.text == "  padded text  "
+
+
 # --- pages ----------------------------------------------------------------
 
 
@@ -217,6 +258,19 @@ def test_page_with_frontmatter_round_trip(store: KBStore) -> None:
     assert back.type == PageType.CONCEPT
 
 
+@pytest.mark.parametrize("bad", ["", "   ", "\n"])
+def test_page_model_rejects_empty_title(bad: str) -> None:
+    """Regression for #155 — empty / whitespace titles rejected on the model."""
+    with pytest.raises(ValidationError, match="title must not be empty"):
+        Page(id="p1", title=bad)
+
+
+def test_put_page_rejects_empty_title(store: KBStore) -> None:
+    with pytest.raises(ValidationError, match="title must not be empty"):
+        store.put_page(Page(id="p1", title="   "))
+    assert not (store.kb_dir / "pages" / "p1.md").exists()
+
+
 # --- entities + relations -------------------------------------------------
 
 
@@ -224,6 +278,19 @@ def test_entity_round_trip(store: KBStore) -> None:
     e = store.put_entity(Entity(id="proj-foo", name="Foo", type=EntityType.PROJECT))
     back = store.get_entity(e.id)
     assert back.name == "Foo"
+
+
+@pytest.mark.parametrize("bad", ["", "   ", "\t\n"])
+def test_entity_model_rejects_empty_name(bad: str) -> None:
+    """Regression for #155 — empty / whitespace names rejected on the model."""
+    with pytest.raises(ValidationError, match="name must not be empty"):
+        Entity(id="e1", name=bad, type=EntityType.CONCEPT)
+
+
+def test_put_entity_rejects_empty_name(store: KBStore) -> None:
+    with pytest.raises(ValidationError, match="name must not be empty"):
+        store.put_entity(Entity(id="e1", name="   ", type=EntityType.CONCEPT))
+    assert not (store.kb_dir / "entities" / "e1.yaml").exists()
 
 
 def test_relation_round_trip(store: KBStore) -> None:
