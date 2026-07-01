@@ -69,6 +69,8 @@ METHODS = [
     "kb.impact",
     "kb.graph_export",
     "kb.provenance_rebuild",
+    "kb.detect_themes",
+    "kb.propose_theme",
 ]
 
 
