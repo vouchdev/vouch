@@ -30,9 +30,10 @@ import re
 import sqlite3
 import stat
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 import yaml
+from pydantic import BaseModel, ValidationError
 
 from .models import (
     Claim,
@@ -78,6 +79,16 @@ def _starter_config() -> dict[str, Any]:
         "review": {
             "require_human_approval": True,
             "expire_pending_after_days": 90,
+        },
+        "capture": {
+            # auto-capture claude code sessions into pending summaries.
+            "enabled": True,
+            "min_observations": 3,
+        },
+        "recall": {
+            # inject a digest of all approved knowledge at session start.
+            "enabled": True,
+            "max_chars": 12000,
         },
         "retrieval": {
             # auto = embedding -> fts5 -> substring; or pin one of
@@ -142,6 +153,26 @@ def _yaml_dump(obj: Any) -> str:
 
 def _yaml_load(text: str) -> Any:
     return yaml.safe_load(text)
+
+
+_log = logging.getLogger("vouch.storage")
+
+_ModelT = TypeVar("_ModelT", bound=BaseModel)
+
+
+def _load_or_skip(path: Path, model: type[_ModelT], kind: str) -> _ModelT | None:
+    """Parse one durable artifact file into ``model``.
+
+    On a corrupt or unreadable file — e.g. a hand-edited yaml or mojibake
+    carrying a control character that pyyaml's loader rejects — log a warning
+    and return ``None`` instead of raising, so a single bad file cannot take
+    down a whole bulk listing (``vouch pending`` and friends).
+    """
+    try:
+        return model.model_validate(_yaml_load(path.read_text(encoding="utf-8")))
+    except (yaml.YAMLError, ValidationError, UnicodeDecodeError, OSError) as e:
+        _log.warning("skipping unreadable %s %s: %s", kind, path.name, e)
+        return None
 
 
 _FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---\n?(.*)$", re.DOTALL)
@@ -215,14 +246,14 @@ class KBStore:
         for sub in SUBDIRS:
             (kb.kb_dir / sub).mkdir(exist_ok=True)
         if not kb.config_path.exists():
-            kb.config_path.write_text(_yaml_dump(_starter_config()))
+            kb.config_path.write_text(_yaml_dump(_starter_config()), encoding="utf-8")
         schema_version_file = kb.kb_dir / SCHEMA_VERSION_FILENAME
         if not schema_version_file.exists():
-            schema_version_file.write_text(SCHEMA_VERSION + "\n")
+            schema_version_file.write_text(SCHEMA_VERSION + "\n", encoding="utf-8")
         gi = kb.kb_dir / ".gitignore"
         if not gi.exists():
             # state.db is derived; proposed/ is the agent's scratch space.
-            gi.write_text("proposed/\nstate.db\nstate.db-*\n")
+            gi.write_text("proposed/\ncaptures/\nstate.db\nstate.db-*\n", encoding="utf-8")
         return kb
 
     # --- paths -------------------------------------------------------------
@@ -283,7 +314,7 @@ class KBStore:
             content_path.write_bytes(content)
         meta_path = sdir / "meta.yaml"
         if meta_path.exists():
-            return Source.model_validate(_yaml_load(meta_path.read_text()))
+            return Source.model_validate(_yaml_load(meta_path.read_text(encoding="utf-8")))
         src = Source(
             id=sid,
             type=source_type,  # type: ignore[arg-type]
@@ -295,7 +326,7 @@ class KBStore:
             tags=tags or [],
             metadata=metadata or {},
         )
-        meta_path.write_text(_yaml_dump(src.model_dump(mode="json")))
+        meta_path.write_text(_yaml_dump(src.model_dump(mode="json")), encoding="utf-8")
         self._embed_and_store(kind="source", id=src.id, text=src.title or src.locator or "")
         return src
 
@@ -303,7 +334,7 @@ class KBStore:
         meta_path = self._source_dir(source_id) / "meta.yaml"
         if not meta_path.exists():
             raise ArtifactNotFoundError(f"source {source_id}")
-        return Source.model_validate(_yaml_load(meta_path.read_text()))
+        return Source.model_validate(_yaml_load(meta_path.read_text(encoding="utf-8")))
 
     def read_source_content(self, source_id: str) -> bytes:
         p = self._source_dir(source_id) / "content"
@@ -319,7 +350,9 @@ class KBStore:
         for sdir in sorted(sources_dir.iterdir()):
             meta = sdir / "meta.yaml"
             if meta.exists():
-                out.append(Source.model_validate(_yaml_load(meta.read_text())))
+                src = _load_or_skip(meta, Source, "source")
+                if src is not None:
+                    out.append(src)
         return out
 
     # --- graph-integrity helpers ------------------------------------------
@@ -400,7 +433,7 @@ class KBStore:
             )
         self._validate_claim_refs(claim)
         try:
-            with self._claim_path(claim.id).open("x") as f:
+            with self._claim_path(claim.id).open("x", encoding="utf-8") as f:
                 f.write(_yaml_dump(claim.model_dump(mode="json")))
         except FileExistsError as e:
             raise ValueError(
@@ -413,15 +446,16 @@ class KBStore:
         p = self._claim_path(claim_id)
         if not p.exists():
             raise ArtifactNotFoundError(f"claim {claim_id}")
-        return Claim.model_validate(_yaml_load(p.read_text()))
+        return Claim.model_validate(_yaml_load(p.read_text(encoding="utf-8")))
 
     def list_claims(self) -> list[Claim]:
         cdir = self.kb_dir / "claims"
         if not cdir.is_dir():
             return []
         return [
-            Claim.model_validate(_yaml_load(p.read_text()))
+            c
             for p in sorted(cdir.glob("*.yaml"))
+            if (c := _load_or_skip(p, Claim, "claim")) is not None
         ]
 
     def update_claim(self, claim: Claim) -> Claim:
@@ -438,7 +472,8 @@ class KBStore:
         # model validator can't catch (it has no KB access). Mirrors the
         # put_claim guard so the update path can't reintroduce the gap.
         self._validate_claim_refs(claim)
-        self._claim_path(claim.id).write_text(_yaml_dump(claim.model_dump(mode="json")))
+        self._claim_path(claim.id).write_text(
+            _yaml_dump(claim.model_dump(mode="json")), encoding="utf-8")
         self._embed_and_store(kind="claim", id=claim.id, text=claim.text)
         # Keep the FTS5 row in sync with the on-disk claim so lifecycle
         # mutations (archive, supersede, contradict, confirm) are reflected
@@ -523,7 +558,7 @@ class KBStore:
 
     def put_entity(self, entity: Entity) -> Entity:
         try:
-            with self._entity_path(entity.id).open("x") as f:
+            with self._entity_path(entity.id).open("x", encoding="utf-8") as f:
                 f.write(_yaml_dump(entity.model_dump(mode="json")))
         except FileExistsError as e:
             raise ValueError(
@@ -539,14 +574,14 @@ class KBStore:
         p = self._entity_path(eid)
         if not p.exists():
             raise ArtifactNotFoundError(f"entity {eid}")
-        return Entity.model_validate(_yaml_load(p.read_text()))
+        return Entity.model_validate(_yaml_load(p.read_text(encoding="utf-8")))
 
     def list_entities(self) -> list[Entity]:
         d = self.kb_dir / "entities"
         if not d.is_dir():
             return []
-        return [Entity.model_validate(_yaml_load(p.read_text()))
-                for p in sorted(d.glob("*.yaml"))]
+        return [e for p in sorted(d.glob("*.yaml"))
+                if (e := _load_or_skip(p, Entity, "entity")) is not None]
 
     # --- relations ---------------------------------------------------------
 
@@ -572,7 +607,7 @@ class KBStore:
     def put_relation(self, rel: Relation) -> Relation:
         self._validate_relation_refs(rel)
         try:
-            with self._relation_path(rel.id).open("x") as f:
+            with self._relation_path(rel.id).open("x", encoding="utf-8") as f:
                 f.write(_yaml_dump(rel.model_dump(mode="json")))
         except FileExistsError as e:
             raise ValueError(
@@ -605,7 +640,7 @@ class KBStore:
         # the linked claim was subsequently archived or retracted.
         self._validate_relation_refs(rel)
         try:
-            with path.open("x") as f:
+            with path.open("x", encoding="utf-8") as f:
                 f.write(_yaml_dump(rel.model_dump(mode="json")))
         except FileExistsError:
             self._embed_and_store(
@@ -623,14 +658,14 @@ class KBStore:
         p = self._relation_path(rid)
         if not p.exists():
             raise ArtifactNotFoundError(f"relation {rid}")
-        return Relation.model_validate(_yaml_load(p.read_text()))
+        return Relation.model_validate(_yaml_load(p.read_text(encoding="utf-8")))
 
     def list_relations(self) -> list[Relation]:
         d = self.kb_dir / "relations"
         if not d.is_dir():
             return []
-        return [Relation.model_validate(_yaml_load(p.read_text()))
-                for p in sorted(d.glob("*.yaml"))]
+        return [r for p in sorted(d.glob("*.yaml"))
+                if (r := _load_or_skip(p, Relation, "relation")) is not None]
 
     def relations_from(self, node_id: str) -> list[Relation]:
         return [r for r in self.list_relations() if r.source == node_id]
@@ -644,7 +679,7 @@ class KBStore:
         if not (self._source_dir(ev.source_id) / "meta.yaml").exists():
             raise ValueError(f"evidence {ev.id} cites unknown source {ev.source_id}")
         try:
-            with self._evidence_path(ev.id).open("x") as f:
+            with self._evidence_path(ev.id).open("x", encoding="utf-8") as f:
                 f.write(_yaml_dump(ev.model_dump(mode="json")))
         except FileExistsError as e:
             raise ValueError(
@@ -657,20 +692,20 @@ class KBStore:
         p = self._evidence_path(eid)
         if not p.exists():
             raise ArtifactNotFoundError(f"evidence {eid}")
-        return Evidence.model_validate(_yaml_load(p.read_text()))
+        return Evidence.model_validate(_yaml_load(p.read_text(encoding="utf-8")))
 
     def list_evidence(self) -> list[Evidence]:
         d = self.kb_dir / "evidence"
         if not d.is_dir():
             return []
-        return [Evidence.model_validate(_yaml_load(p.read_text()))
-                for p in sorted(d.glob("*.yaml"))]
+        return [ev for p in sorted(d.glob("*.yaml"))
+                if (ev := _load_or_skip(p, Evidence, "evidence")) is not None]
 
     # --- sessions ----------------------------------------------------------
 
     def put_session(self, sess: Session) -> Session:
         try:
-            with self._session_path(sess.id).open("x") as f:
+            with self._session_path(sess.id).open("x", encoding="utf-8") as f:
                 f.write(_yaml_dump(sess.model_dump(mode="json")))
         except FileExistsError as e:
             raise ValueError(
@@ -684,21 +719,22 @@ class KBStore:
         # guard against duplicate ids, so updates need a separate path.
         if not self._session_path(sess.id).exists():
             raise ArtifactNotFoundError(f"session {sess.id}")
-        self._session_path(sess.id).write_text(_yaml_dump(sess.model_dump(mode="json")))
+        self._session_path(sess.id).write_text(
+            _yaml_dump(sess.model_dump(mode="json")), encoding="utf-8")
         return sess
 
     def get_session(self, sid: str) -> Session:
         p = self._session_path(sid)
         if not p.exists():
             raise ArtifactNotFoundError(f"session {sid}")
-        return Session.model_validate(_yaml_load(p.read_text()))
+        return Session.model_validate(_yaml_load(p.read_text(encoding="utf-8")))
 
     def list_sessions(self) -> list[Session]:
         d = self.kb_dir / "sessions"
         if not d.is_dir():
             return []
-        return [Session.model_validate(_yaml_load(p.read_text()))
-                for p in sorted(d.glob("*.yaml"))]
+        return [s for p in sorted(d.glob("*.yaml"))
+                if (s := _load_or_skip(p, Session, "session")) is not None]
 
     # --- embedding hook ------------------------------------------------------
 
@@ -771,7 +807,7 @@ class KBStore:
 
     def put_proposal(self, proposal: Proposal) -> Proposal:
         try:
-            with self._proposal_path(proposal.id).open("x") as f:
+            with self._proposal_path(proposal.id).open("x", encoding="utf-8") as f:
                 f.write(_yaml_dump(proposal.model_dump(mode="json")))
         except FileExistsError as e:
             raise ValueError(
@@ -782,14 +818,16 @@ class KBStore:
     def get_proposal(self, proposal_id: str) -> Proposal:
         for path in (self._proposal_path(proposal_id), self._decided_path(proposal_id)):
             if path.exists():
-                return Proposal.model_validate(_yaml_load(path.read_text()))
+                return Proposal.model_validate(_yaml_load(path.read_text(encoding="utf-8")))
         raise ArtifactNotFoundError(f"proposal {proposal_id}")
 
     def list_proposals(self, status: ProposalStatus | None = None) -> list[Proposal]:
         out: list[Proposal] = []
         for sub in ("proposed", "decided"):
             for p in sorted((self.kb_dir / sub).glob("*.yaml")):
-                pr = Proposal.model_validate(_yaml_load(p.read_text()))
+                pr = _load_or_skip(p, Proposal, "proposal")
+                if pr is None:
+                    continue
                 if status is None or pr.status == status:
                     out.append(pr)
         return out
@@ -797,7 +835,7 @@ class KBStore:
     def move_proposal_to_decided(self, proposal: Proposal) -> None:
         src = self._proposal_path(proposal.id)
         dst = self._decided_path(proposal.id)
-        dst.write_text(_yaml_dump(proposal.model_dump(mode="json")))
+        dst.write_text(_yaml_dump(proposal.model_dump(mode="json")), encoding="utf-8")
         if src.exists():
             src.unlink()
 

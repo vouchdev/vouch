@@ -333,7 +333,7 @@ def _approval_block_reason(
     if approved_by == proposal.proposed_by:
         cfg: dict[str, Any] = {}
         try:
-            loaded = yaml.safe_load((store.kb_dir / "config.yaml").read_text())
+            loaded = yaml.safe_load((store.kb_dir / "config.yaml").read_text(encoding="utf-8"))
             if isinstance(loaded, dict):
                 cfg = loaded
         except Exception:
@@ -577,7 +577,7 @@ def expire_pending_after_days(store: KBStore, *, override: int | None = None) ->
     if override is not None:
         return override
     try:
-        loaded = yaml.safe_load(store.config_path.read_text())
+        loaded = yaml.safe_load(store.config_path.read_text(encoding="utf-8"))
     except Exception:
         return _DEFAULT_EXPIRE_PENDING_DAYS
     if not isinstance(loaded, dict):

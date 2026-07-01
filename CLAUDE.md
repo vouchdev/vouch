@@ -199,8 +199,15 @@ Four registration sites — `test_capabilities` will fail if you miss one:
 Plus a test under `tests/test_<feature>.py`.
 
 If the method *reads* the KB, consider whether it should attach the
-`_meta.vouch_hot_memory` sidebar from `src/vouch/hot_memory.py`. The
-sidebar is added per-tool — there's no global decorator.
+`_meta.vouch_salience` sidebar (built in `src/vouch/salience.py`,
+attached inline by `kb_context` — see `kb_context` in
+`src/vouch/server.py`). It's added per-tool — there's no global
+decorator. Don't confuse it with `_meta.vouch_hot_memory`, which is
+written only by the OpenClaw context engine's `assemble()`
+(`src/vouch/openclaw/context_engine.py`); `src/vouch/hot_memory.py` is
+the in-process session registry that *feeds* salience, not a response
+field. (`_meta.vouch_trust` is separate again — stamped on every
+dict-shaped result by a global wrapper, not per-tool.)
 
 ## Release flow
 

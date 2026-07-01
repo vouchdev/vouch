@@ -21,11 +21,46 @@
   "hooks": {
     "SessionStart": [
       {
+        "comment": "finalize old buffers from previous sessions; current session will be finalized here too on next session start (fallback: windowclose event not yet supported by claude-code extension)",
         "matcher": "*",
         "hooks": [
           {
             "type": "command",
+            "command": "vouch capture finalize-all || true"
+          },
+          {
+            "type": "command",
             "command": "vouch status --json || true"
+          },
+          {
+            "type": "command",
+            "command": "vouch capture banner || true"
+          },
+          {
+            "type": "command",
+            "command": "vouch recall || true"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "vouch capture observe || true"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "vouch capture finalize || true"
           }
         ]
       }

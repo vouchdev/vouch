@@ -99,7 +99,7 @@ def resolve_kb_root(*, workspace_dir: Path | None, kb_path: str | None) -> Path:
 
 def load_cfg(store: KBStore) -> dict[str, Any]:
     try:
-        loaded = yaml.safe_load(store.config_path.read_text())
+        loaded = yaml.safe_load(store.config_path.read_text(encoding="utf-8"))
     except Exception:
         return {}
     return loaded if isinstance(loaded, dict) else {}

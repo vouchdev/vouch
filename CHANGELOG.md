@@ -17,11 +17,38 @@ All notable changes to vouch are documented here. Format follows
   committed SVGs stay reproducible (#286).
 
 ### Added
+- auto-capture: claude code sessions are harvested via hooks and filed as a
+  single pending session-summary proposal for human approval. a `PostToolUse`
+  hook (`vouch capture observe`) appends compact tool-use observations to an
+  ephemeral, gitignored `.vouch/captures/<session>.jsonl` buffer; a
+  `SessionEnd` hook (`vouch capture finalize`) rolls the buffer plus a git-diff
+  backstop into one `session` page proposal — mechanical, no llm, and never
+  auto-approved. a `SessionStart` banner (`vouch capture banner`) nudges the
+  next session when captured summaries await review. opt out with
+  `capture.enabled: false` in `.vouch/config.yaml`.
+- session-start recall: a `SessionStart` hook (`vouch recall`) injects a digest
+  of every live approved claim (`[id] text`) plus approved page titles into a
+  new claude session's context, so it starts aware of the reviewed KB. only
+  approved knowledge is emitted; archived / superseded / redacted claims are
+  excluded; size-guarded by `recall.max_chars` with an explicit truncation
+  notice. opt out with `recall.enabled: false`.
+- `vouch install-mcp claude-code` now merges its hooks and read-only permission
+  allowlist into an existing `.claude/settings.json` (a `json_merge` install
+  strategy) instead of skipping it, so the capture / recall hooks land on
+  projects that already have a settings file. idempotent; user entries are
+  preserved.
 - GitHub PR auto-labeling: a pull-request metadata-only labeler workflow now
   applies vouch surface labels from `.github/labeler.yml`, keeps those labels
   in sync as files change, and adds OpenClaw-style `size: XS` through
   `size: XL` labels based on non-doc changed lines. Maintainers can also run
   it manually to backfill labels on already-open PRs.
+- `vouch detect-themes` — cross-session pattern detection via deterministic
+  entity co-occurrence scoring. `kb.detect_themes` is read-only (returns
+  ranked clusters); `kb.propose_theme` routes synthesis pages through the
+  review gate so they appear in `kb.list_pending`. Supports `--propose` for
+  one-shot propose-all and `--json` for machine-readable output. Configurable
+  via `themes.min_sessions`, `themes.min_claims`, `themes.top_k`, and
+  `themes.enabled` in `config.yaml` (#311).
 - `vouch dual-solve <issue-url>` — run claude + codex on one github issue in
   isolated git worktrees, compare the two diffs, keep the branch you pick, and
   propose the chosen solution's rationale into the KB. A sibling tool to
@@ -96,6 +123,12 @@ All notable changes to vouch are documented here. Format follows
   KB under `eval/fixture-kb/`, and an `eval` workflow gating retrieval changes
   (#226).
 ### Fixed
+- `vouch pending` (and every bulk `list_*` path) no longer crashes when a
+  single artifact file is unreadable — a corrupt or mojibake yaml is skipped
+  with a warning instead of aborting the whole listing.
+- all text-mode file i/o under `src/vouch/` now pins `encoding="utf-8"`, so a
+  non-utf-8 locale (e.g. latin-1) can no longer mangle non-ascii claim text
+  into raw control bytes that the yaml loader rejects, nor crash on write.
 - `parse_since` (the `--since` parser behind `vouch metrics`/`vouch audit`) now raises a clean `MetricsError` for a duration too large to represent (e.g. `--since 1000000000000d`), instead of letting an uncaught `OverflowError` traceback escape — restoring the documented "clean error, not a traceback" contract.
 - `sync_apply` now loads the sync source exactly once and passes the same `_SyncSource` instance into `sync_check`, closing a TOCTOU window where a bundle replaced on disk between the two `_load_source` calls could cause the validation and write phases to operate on different snapshots. Also eliminates redundant directory walks (KB sources) and triple tarball opens (bundle sources). Fixes #217.
 - `vault_to_kb` now passes `slug_hint=page_id` to `propose_page` so vault edit proposals target the existing page id from frontmatter instead of a slugified copy of the title (fixes #219).

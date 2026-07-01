@@ -14,6 +14,7 @@ import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import asdict
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -22,12 +23,14 @@ import yaml
 
 from . import __version__, bundle, health, volunteer_context
 from . import audit as audit_mod
+from . import capture as capture_mod
 from . import install_adapter as install_mod
 from . import lifecycle as life
 from . import metrics as metrics_mod
 from . import migrations as migrations_mod
 from . import pr_cache as prc_mod
 from . import provenance as prov_mod
+from . import recall as recall_mod
 from . import sessions as sess_mod
 from . import stats as stats_mod
 from . import sync as sync_mod
@@ -1311,6 +1314,133 @@ def session_end_cmd(session_id: str, note: str | None) -> None:
     _emit_json({"session": sess.id, "proposals": sess.proposal_ids})
 
 
+@cli.group()
+def capture() -> None:
+    """Automatic session capture (driven by claude code hooks)."""
+
+
+def _capture_store() -> KBStore | None:
+    """Locate the KB without the sys.exit(2) that _load_store does — hooks
+    must never abort the host."""
+    try:
+        return KBStore(discover_root())
+    except KBNotFoundError:
+        return None
+
+
+@capture.command("observe")
+def capture_observe_cmd() -> None:
+    """Append one observation from a PostToolUse hook payload (stdin JSON)."""
+    if sys.stdin.isatty():
+        return
+    try:
+        raw = sys.stdin.read()
+        payload = json.loads(raw) if raw.strip() else {}
+        if not isinstance(payload, dict):
+            return
+        session_id = str(payload.get("session_id") or "")
+        if not session_id:
+            return
+        tool_input = payload.get("tool_input")
+        obs = capture_mod.summarize_tool(
+            payload.get("tool_name"),
+            tool_input if isinstance(tool_input, dict) else {},
+            payload.get("tool_response"),
+        )
+        if obs is None:
+            return
+        store = _capture_store()
+        if store is None:
+            return
+        capture_mod.observe(
+            store, session_id,
+            tool=obs["tool"], summary=obs["summary"],
+            files=obs.get("files"), cmd=obs.get("cmd"),
+        )
+    except Exception:
+        # a capture failure must never break the user's tool call.
+        return
+
+
+@capture.command("finalize")
+@click.option("--session-id", default=None, help="Session id (else read from stdin payload).")
+def capture_finalize_cmd(session_id: str | None) -> None:
+    """Roll a session buffer into a PENDING summary (SessionEnd hook payload on stdin)."""
+    payload: dict[str, Any] = {}
+    if not sys.stdin.isatty():
+        raw = sys.stdin.read()
+        if raw.strip():
+            try:
+                loaded = json.loads(raw)
+                if isinstance(loaded, dict):
+                    payload = loaded
+            except json.JSONDecodeError:
+                payload = {}
+    sid = session_id or str(payload.get("session_id") or "")
+    if not sid:
+        return
+    store = _capture_store()
+    if store is None:
+        return
+    cwd = Path(str(payload.get("cwd") or ".")).resolve()
+    result = capture_mod.finalize(
+        store, sid, cwd=cwd, project=cwd.name,
+        generated_at=datetime.now(UTC).isoformat(),
+    )
+    _emit_json(result)
+
+
+@capture.command("finalize-all")
+@click.option("--session-id", default=None, help="Current session id (else env VOUCH_SESSION_ID).")
+@click.option("--max-age-seconds", type=float, default=3600.0, help="Max age in seconds.")
+def capture_finalize_all_cmd(session_id: str | None, max_age_seconds: float) -> None:
+    """Finalize all capture buffers except current session (SessionStart cleanup)."""
+    sid = session_id or os.environ.get("VOUCH_SESSION_ID") or ""
+    if not sid:
+        # No session ID provided; silently succeed
+        _emit_json({"finalized": [], "skipped_recent": [], "skipped_current": []})
+        return
+
+    store = _capture_store()
+    if store is None:
+        # No KB; silently succeed
+        _emit_json({"finalized": [], "skipped_recent": [], "skipped_current": []})
+        return
+
+    result = capture_mod.finalize_all_except(
+        store, sid, max_age_seconds=max_age_seconds,
+    )
+    _emit_json(result)
+
+
+@capture.command("banner")
+def capture_banner_cmd() -> None:
+    """Emit a SessionStart nudge if captured summaries await review."""
+    store = _capture_store()
+    if store is None:
+        return
+    n = capture_mod.pending_count(store)
+    if n:
+        click.echo(
+            f"🔔 {n} auto-captured session summary(ies) awaiting review — "
+            f"run `vouch review`."
+        )
+
+
+@cli.command(name="recall")
+def recall_cmd() -> None:
+    """Emit a digest of all approved knowledge for session-start injection."""
+    store = _capture_store()
+    if store is None:
+        return
+    cfg = recall_mod.load_config(store)
+    if not cfg.enabled:
+        return
+    digest = recall_mod.build_digest(store, max_chars=cfg.max_chars)
+    if digest.strip():
+        click.echo(digest)
+
+
 @cli.command()
 @click.argument("session_id")
 @click.option("--no-page", is_flag=True, help="Skip the session-summary page.")
@@ -1812,6 +1942,81 @@ def audit(tail: int, as_json: bool, project: str | None, agent: str | None) -> N
     for e in events:
         click.echo(
             f"{e.created_at.isoformat()}  {e.event:30s}  by {e.actor}  objects={e.object_ids}"
+        )
+
+
+# --- cross-session themes -------------------------------------------------
+
+
+@cli.command(name="detect-themes")
+@click.option("--min-sessions", default=None, type=int, help="Minimum sessions for a cluster.")
+@click.option("--min-claims", default=None, type=int, help="Minimum claims for a cluster.")
+@click.option("--top-k", default=None, type=int, help="Max clusters to return.")
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON.")
+@click.option("--propose", is_flag=True, help="Propose theme pages for each cluster.")
+@click.option("--agent", default=None, help="Agent name for proposals.")
+def detect_themes_cmd(
+    min_sessions: int | None,
+    min_claims: int | None,
+    top_k: int | None,
+    as_json: bool,
+    propose: bool,
+    agent: str | None,
+) -> None:
+    """Detect recurring entity clusters across completed sessions."""
+    from . import themes
+
+    store = _load_store()
+    result = themes.detect_themes(
+        store,
+        min_sessions=min_sessions,
+        min_claims=min_claims,
+        top_k=top_k,
+    )
+    if as_json and not propose:
+        _emit_json({
+            "clusters": [
+                {
+                    "entities": c.entities,
+                    "claim_ids": c.claim_ids,
+                    "session_ids": c.session_ids,
+                    "score": c.score,
+                    "session_count": c.session_count,
+                    "claim_count": c.claim_count,
+                }
+                for c in result.clusters
+            ],
+            "config": result.config_used,
+        })
+        return
+    if not result.clusters:
+        click.echo("no themes detected")
+        return
+    if propose:
+        actor = agent or _whoami()
+        proposed: list[dict] = []
+        for cluster in result.clusters:
+            try:
+                p = themes.propose_theme(store, cluster, proposed_by=actor)
+                proposed.append(p)
+                if not as_json:
+                    click.echo(
+                        f"proposed: {p['theme_page_id']} "
+                        f"({p['claim_count']} claims, "
+                        f"{p['session_count']} sessions)"
+                    )
+            except Exception as e:
+                click.echo(
+                    f"skip: {', '.join(cluster.entities)} — {e}",
+                    err=True,
+                )
+        if as_json:
+            _emit_json({"proposed": proposed})
+        return
+    for i, c in enumerate(result.clusters, 1):
+        click.echo(
+            f"{i}. {', '.join(c.entities)}  "
+            f"score={c.score}  sessions={c.session_count}  claims={c.claim_count}"
         )
 
 
@@ -2536,11 +2741,14 @@ def install_mcp(
         click.echo(f"  + {f}")
     for f in result.appended:
         click.echo(f"  ~ {f}  (appended fenced block)")
+    for f in result.merged:
+        click.echo(f"  ~ {f}  (merged into existing)")
     for f in result.skipped:
         click.echo(f"  · {f}  (already present)")
     click.echo(
         f"Done — {len(result.written)} written, "
-        f"{len(result.appended)} appended, {len(result.skipped)} skipped "
+        f"{len(result.appended)} appended, {len(result.merged)} merged, "
+        f"{len(result.skipped)} skipped "
         f"under {target}"
     )
 
@@ -2797,7 +3005,7 @@ def review_ui(
     auth_note = " (Bearer auth on)" if token else ""
     if open_browser and is_loopback:
         # Lazy-import webbrowser; some CI envs (headless) don't have a default
-        # browser configured and webbrowser.open() returns False rather than
+        # browser configured and webbrowser.open(encoding="utf-8") returns False rather than
         # raising — that's fine, the URL is also printed to stdout. When auth
         # is on, hand the browser the token once via ?token= so it can stash it.
         import threading
