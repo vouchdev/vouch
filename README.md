@@ -21,7 +21,7 @@ It also captures your Claude Code sessions automatically — each session's work
 
 Still alpha — surface is small on purpose; expect breaking changes pre-1.0.
 
-> **Built for Gittensor (SN74) miners.** Mining subnet 74 means landing merged PRs across a whitelist of repos that keeps shuffling — which means re-investigating each repo's codebase and merge bar every session your agent opens. vouch auto-captures what a session works out, you approve what's worth keeping, and the next session recalls it: less re-discovery, more merged PRs. `vouch init --template gittensor` seeds the cited baseline of how SN74 scores today. → **[docs/gittensor.md](docs/gittensor.md)**
+> **Built for Gittensor (SN74) miners.** Mining subnet 74 means landing merged PRs across a whitelist of repos that keeps shuffling — which means re-investigating each repo's codebase and merge bar every session your agent opens. vouch auto-captures what a session works out, you approve what's worth keeping, and the next session recalls it: less re-discovery, more merged PRs. → **[docs/gittensor.md](docs/gittensor.md)**
 
 ## Why this exists
 
@@ -156,22 +156,22 @@ The tax on that is re-investigation. Every target repo means (re)learning its ar
 
 ```bash
 cd acme-httpkit                   # a whitelisted target repo — Go, healthy allocation
-vouch init --template gittensor   # seeds a cited baseline of how SN74 scores today
+vouch init                        # review-gated KB at .vouch/
 vouch install-mcp claude-code     # wires the capture + recall hooks
 
-# session 1 (mon): the agent maps the repo and attempts issue #212 (a pool leak).
-#   the claude-code hooks auto-capture the work. you approve the durable summary
-#   and file two cited claims: httpkit's merge bar, and why the first PR bounced.
+# session 1: the agent maps the repo and works issue #212 (a pool leak).
+#   the claude-code hooks auto-capture the work. you approve the durable
+#   summary and file one cited claim: httpkit's merge bar.
 vouch pending
-vouch approve <id> --reason "merge bar + rejected approach — worth keeping"
+vouch approve <id> --reason "accurate session summary"
 
-# session 2 (wed): opens with `vouch recall`. the agent already knows the layout,
-#   that merges need `make test` green + a changelog entry, and that #212's first
-#   attempt was rejected for a missing regression test. it skips re-discovery and
-#   lands the fixed PR.
+# session 2: opens with `vouch recall`. the agent already knows the layout,
+#   that merges need `make test` green + a changelog entry, and where #212's
+#   fix and regression test landed. it skips re-discovery and takes the PR
+#   to merge.
 ```
 
-When the whitelist shuffles and httpkit's allocation drops, `vouch supersede` the claim that said it was worth targeting — your agent re-prioritizes toward a higher-allocation repo, and the decision stays cited and reviewed instead of lost in a Discord thread. The `--template gittensor` seed is the cold-start: 7 cited, approved claims about how merged-PR scoring, the repo allow-list, and the emission split work today; everything after that is capture, and each session you approve makes the next one start further ahead.
+The KB compounds session over session: merge bars, rejected approaches, targeting notes. When the whitelist shuffles and httpkit's allocation drops, `vouch supersede` the claim that said it was worth targeting — your agent re-prioritizes toward a higher-allocation repo, and the decision stays cited and reviewed instead of lost in a Discord thread. Each session you approve makes the next one start further ahead; the walkthrough in [docs/gittensor.md](docs/gittensor.md) runs the loop with real output.
 
 vouch reads **no** live signals — it never checks on-chain scores, verifies PATs, or submits weights (that's the `gitt` miner client). It's the reviewed record of what your agent already worked out, so it never works it out twice. Full miner walkthrough: **[docs/gittensor.md](docs/gittensor.md)**.
 

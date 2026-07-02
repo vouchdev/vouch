@@ -42,37 +42,30 @@ pipx install vouch-kb        # the installed command is `vouch`
 vouch --version
 ```
 
-## 2. Seed the scoring baseline
+## 2. Initialise the KB
 
-From the root of a target repo, seed a cited, approved starter pack describing
-how SN74 scoring works today — so your agent knows what earns before it writes
-a line:
+From the root of a target repo:
 
-```bash
-vouch init --template gittensor
+```console
+$ vouch init
+Initialised KB at ~/mining/acme-httpkit/.vouch
+Seeded starter claim: vouch-starter-reviewed-knowledge
+Next steps:
+  vouch status
+  vouch search agent
+  vouch serve
 ```
 
-This creates `.vouch/` and seeds **1 source, 1 entity, 7 claims** (merged-PR
-rewards, PAT verification, the scoring factors, sybil-resistance, the repo
-allow-list policy, the issue-solving multiplier, and the emission split):
+Commit it so the KB travels with the repo:
 
 ```bash
-vouch status
-#   durable: 7 claims  •  1 source  •  1 entity  •  …
-vouch search "scoring factors"
-#   claim/gittensor-scoring-factors   …code quality, repository allocation, language…
+git add .vouch && git commit -m "chore: add vouch KB"
 ```
 
-Commit it so the baseline travels with the repo:
-
-```bash
-git add .vouch && git commit -m "chore: add vouch KB with gittensor baseline"
-```
-
-> **The seeded claims are starter-grade** — they summarize the model as
-> understood when the template was authored. `vouch show <claim-id>` one and
-> `vouch supersede` it with the real spec/PR once you confirm the live rule
-> (see §5).
+`.vouch/.gitignore` keeps drafts (`proposed/`, `captures/`) and the derived
+index (`state.db`) out of history automatically. Past the example claim `init`
+seeds, everything durable arrives the same way: captured or proposed, then
+reviewed — that is the loop §4 walks through, with real output.
 
 ## 3. Wire capture + recall into Claude Code
 
@@ -93,37 +86,114 @@ cited answers) **and** `.claude/settings.json`, which registers:
 - a `SessionStart` hook that runs `vouch recall` (injecting approved knowledge)
   and nudges any pending summaries.
 
-## 4. Mine one repo — the loop
+## 4. Mine one repo — a real session, captured
 
-A concrete run against a whitelisted Go repo, `acme-httpkit`:
+A real run against a whitelisted Go repo, `acme-httpkit`. Every snippet below
+is actual `vouch` output (paths shortened; trimmed where marked `…`).
 
-**Session 1 (Monday).** The agent maps the codebase, reads `CONTRIBUTING.md`,
-runs the tests, and attempts issue #212 (a connection-pool leak). Its first PR
-is rejected for lacking a regression test. Everything it did is auto-captured.
-At session end you have a pending summary; approve it, and file the two facts
-worth citing:
+**Session 1.** A Claude Code session maps the codebase, reads
+`CONTRIBUTING.md`, and works issue #212 (a connection-pool leak): a test run
+fails along the way, the fix and the regression test the merge bar demands
+land, and the changelog gets its entry. The `PostToolUse` hook harvests each
+of those tool calls as they happen; at session end the `SessionEnd` hook rolls
+them into one pending page:
 
-```bash
-vouch pending
-vouch approve <summary-id> --reason "accurate session summary"
-
-# the durable, cited facts this run established:
-vouch source add https://github.com/acme/httpkit/blob/main/CONTRIBUTING.md
-vouch propose-claim \
-  --text "acme-httpkit merges require 'make test' green and a CHANGELOG entry; PRs without a regression test are rejected." \
-  --source <SRC> --type fact --tag gittensor --tag merge-bar
-vouch propose-claim \
-  --text "acme-httpkit carries a healthy SN74 allocation and is weighted toward Go — high value per merged PR." \
-  --source <SRC> --type observation --tag gittensor --tag targeting
-
-vouch pending            # a teammate (not you) approves — the gate holds
+```console
+$ vouch pending
+• 20260702-065648-dd727615  [page]  by vouch-capture
+    session summary: acme-httpkit (9f4c2d1e-7a53-4b08-b6d2-3c1e5a90f7ab)
 ```
 
-**Session 2 (Wednesday).** It opens with `vouch recall`, so the agent already
-knows the layout, the merge bar (`make test` + a changelog entry), that #212's
-first attempt was rejected for a missing regression test, and that httpkit is a
-high-value Go target. It skips re-discovery, adds the regression test, and lands
-the merged PR.
+The rollup is mechanical — files touched, a `git diff` backstop, the command
+trail with the failure preserved — and it is pending, not durable (page body
+unescaped here for readability):
+
+```console
+$ vouch show 20260702-065648-dd727615
+id: 20260702-065648-dd727615
+kind: page
+proposed_by: vouch-capture
+session_id: 9f4c2d1e-7a53-4b08-b6d2-3c1e5a90f7ab
+…
+  ## git changes
+  CHANGELOG.md      | 1 +
+  transport/pool.go | 3 +++
+  2 files changed, 4 insertions(+)
+…
+  ## observations
+  - Read CONTRIBUTING.md
+  - Grep idle
+  - Read pool.go
+  - Edited pool.go
+  - Command failed: go test ./transport/ -run TestPoolReuse -v
+  - Edited pool_test.go
+  - Ran: go test ./transport/...
+  - Edited CHANGELOG.md
+…
+status: pending
+…
+```
+
+(The regression test is a new, untracked file, so it appears in the
+observations but not in the `git diff` backstop.)
+
+Approve the summary, then file the durable fact this run established — the
+merge bar — citing the file it came from:
+
+```console
+$ vouch approve 20260702-065648-dd727615 --reason "accurate session summary"
+Approved → page/session-summary-acme-httpkit-9f4c2d1e-7a53-4b08-b6d2-3c1e5a9
+
+$ vouch source add CONTRIBUTING.md --title "acme-httpkit CONTRIBUTING.md"
+3d99feccda605376e83524e9d8fcf7f40e5beb0b7d6ef9c472ad001c52d8cad0
+
+$ vouch propose-claim \
+    --text "acme-httpkit merges require 'make test' green and a CHANGELOG entry; PRs without a regression test are rejected." \
+    --source 3d99feccda605376e83524e9d8fcf7f40e5beb0b7d6ef9c472ad001c52d8cad0 \
+    --type fact --tag gittensor --tag merge-bar
+20260702-065718-607dc50c
+```
+
+You proposed that claim, so you cannot also approve it:
+
+```console
+$ vouch approve 20260702-065718-607dc50c
+✗ 20260702-065718-607dc50c: forbidden_self_approval: alice-example cannot approve their own proposal (set review.approver_role: trusted-agent in config.yaml to opt out)
+Error: refusing to approve: 1 of 1 not approvable — nothing was approved (use --keep-going for best-effort)
+```
+
+A second reviewer — any identity but the proposer's — approves instead; vouch
+takes the OS user (or `VOUCH_USER`) as the actor, so here the teammate reviews
+from their own shell:
+
+```console
+$ VOUCH_USER=blake-example vouch approve 20260702-065718-607dc50c --reason "matches CONTRIBUTING.md"
+Approved → claim/acme-httpkit-merges-require-make-test-green-and-a-changelog-
+```
+
+**Session 2.** The next session opens with the `SessionStart` hook running
+`vouch recall`, which injects everything approved so far — the summary and
+merge-bar claim the first session earned, plus the starter claim and page
+`init` seeded (the page is elided below):
+
+```console
+$ vouch recall
+<vouch-approved-knowledge>
+# approved KB knowledge for this repo — 2 claim(s), 2 page(s). reviewed, cited, durable. …
+
+## claims
+- [acme-httpkit-merges-require-make-test-green-and-a-changelog-] acme-httpkit merges require 'make test' green and a CHANGELOG entry; PRs without a regression test are rejected.
+- [vouch-starter-reviewed-knowledge] Vouch stores reviewed, cited knowledge in the repository so future agent sessions can retrieve agreed project context.
+
+## pages
+…
+- [session-summary-acme-httpkit-9f4c2d1e-7a53-4b08-b6d2-3c1e5a9] session summary: acme-httpkit (9f4c2d1e-7a53-4b08-b6d2-3c1e5a90f7ab)
+</vouch-approved-knowledge>
+```
+
+The agent already knows the layout, the merge bar (`make test` + a changelog
+entry), and what #212's fix looked like — including the failing test run
+captured along the way. It skips re-discovery and takes the PR to merge.
 
 That is the whole point: the investigation into httpkit happened **once**.
 
@@ -134,9 +204,9 @@ human approves them, and you cannot approve your own proposal
 (`forbidden_self_approval`). That is a feature: it stops your agent from writing
 its own history, so recalled memory is memory you vouched for.
 
-**When the whitelist shuffles, supersede — don't overwrite.** If httpkit's
-allocation drops, propose and approve the replacement claim, then link the old
-one to it:
+**When the whitelist shuffles, supersede — don't overwrite.** Say you've filed
+a targeting claim — httpkit is a high-value Go target — and its allocation
+drops. Propose and approve the replacement claim, then link the old one to it:
 
 ```bash
 vouch supersede <OLD_CLAIM_ID> <NEW_CLAIM_ID>
