@@ -17,7 +17,7 @@ from pydantic import ValidationError
 
 from . import index_db
 from .audit import count_events, verify_chain
-from .models import Claim, ClaimStatus, Entity, Page, ProposalKind, ProposalStatus
+from .models import Claim, ClaimStatus, Entity, Page, ProposalKind, ProposalStatus, Source
 from .storage import KBStore, _yaml_load, sha256_hex
 from .verify import verify_all
 
@@ -121,9 +121,48 @@ def _load_claims_for_lint(store: KBStore) -> tuple[list[Claim], list[Finding]]:
     return valid, findings
 
 
+def _collect_sources_for_lint(store: KBStore) -> tuple[set[str], list[Finding]]:
+    """Source ids for citation checks, with unreadable metas surfaced.
+
+    `storage.list_sources()` deliberately skips files `_load_or_skip`
+    can't parse so bulk listings survive one bad artifact; for lint that
+    silence is the bug — a corrupt meta.yaml (e.g. a mojibake title
+    carrying a raw control character that pyyaml rejects) must become an
+    `unreadable_source` finding. The source id is its directory name, so
+    it still counts as present for citation checks: the claim's citation
+    isn't broken, the meta is, and reporting `broken_citation` on top
+    would point the repair at the wrong file."""
+    present: set[str] = set()
+    findings: list[Finding] = []
+    sources_dir = store.kb_dir / "sources"
+    if not sources_dir.is_dir():
+        return present, findings
+    for sdir in sorted(sources_dir.iterdir()):
+        meta = sdir / "meta.yaml"
+        if not meta.exists():
+            continue
+        sid = sdir.name
+        present.add(sid)
+        try:
+            Source.model_validate(_yaml_load(meta.read_text(encoding="utf-8")))
+        except Exception as e:
+            findings.append(
+                Finding(
+                    "error",
+                    "unreadable_source",
+                    f"source {sid} ({meta}) could not be loaded: {e} — "
+                    "fix the meta.yaml by hand, or delete the source "
+                    "directory and re-register it",
+                    [sid],
+                )
+            )
+    return present, findings
+
+
 def lint(store: KBStore, *, stale_after_days: int = 180) -> HealthReport:
     claims, findings = _load_claims_for_lint(store)
-    sources_present = {s.id for s in store.list_sources()}
+    sources_present, source_findings = _collect_sources_for_lint(store)
+    findings.extend(source_findings)
     evidence_present = {e.id for e in store.list_evidence()}
 
     for c in claims:
