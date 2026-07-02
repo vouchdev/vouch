@@ -177,7 +177,7 @@ def kb_search(
 
 def _load_cfg(store: KBStore) -> dict[str, Any]:
     try:
-        loaded = yaml.safe_load((store.kb_dir / "config.yaml").read_text())
+        loaded = yaml.safe_load((store.kb_dir / "config.yaml").read_text(encoding="utf-8"))
     except Exception:
         return {}
     return loaded if isinstance(loaded, dict) else {}
@@ -855,6 +855,77 @@ def kb_provenance_rebuild() -> dict[str, Any]:
     """Rebuild the prov_edges cache from durable files; returns edge count."""
     from . import provenance as prov
     return {"edges": prov.rebuild_prov_edges(_store())}
+
+
+# === cross-session themes =================================================
+
+
+@mcp.tool()
+def kb_detect_themes(
+    *,
+    min_sessions: int | None = None,
+    min_claims: int | None = None,
+    top_k: int | None = None,
+) -> dict[str, Any]:
+    """Detect recurring entity clusters across completed sessions.
+
+    Read-only — returns ranked clusters without persisting anything.
+    Scoring is deterministic (entity co-occurrence, no LLM).
+
+    min_sessions: minimum sessions an entity pair must span (default from config or 2).
+    min_claims: minimum claims supporting the cluster (default from config or 3).
+    top_k: maximum clusters to return (default from config or 10).
+    """
+    from . import themes
+    store = _store()
+    result = themes.detect_themes(
+        store,
+        min_sessions=min_sessions,
+        min_claims=min_claims,
+        top_k=top_k,
+    )
+    return {
+        "clusters": [
+            {
+                "entities": c.entities,
+                "claim_ids": c.claim_ids,
+                "session_ids": c.session_ids,
+                "score": c.score,
+                "session_count": c.session_count,
+                "claim_count": c.claim_count,
+            }
+            for c in result.clusters
+        ],
+        "config": result.config_used,
+    }
+
+
+@mcp.tool()
+def kb_propose_theme(
+    *,
+    entities: list[str],
+    claim_ids: list[str],
+    session_ids: list[str],
+    score: float = 0.0,
+    agent: str | None = None,
+) -> dict[str, Any]:
+    """Propose a theme synthesis page from a detected cluster.
+
+    Routes through the review gate — appears in kb.list_pending.
+    Pass a cluster from kb.detect_themes directly.
+    """
+    from . import themes
+    store = _store()
+    actor = agent or os.environ.get("VOUCH_AGENT", "unknown-agent")
+    cluster = themes.ThemeCluster(
+        entities=entities,
+        claim_ids=claim_ids,
+        session_ids=session_ids,
+        score=score,
+        session_count=len(session_ids),
+        claim_count=len(claim_ids),
+    )
+    return themes.propose_theme(store, cluster, proposed_by=actor)
 
 
 def _current_model_name() -> str:

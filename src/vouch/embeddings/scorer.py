@@ -57,7 +57,7 @@ def evaluate(
         raise ValueError(f"unknown metric(s): {sorted(unknown)}; known: {sorted(known)}")
     totals = {m: 0.0 for m in metrics}
     n = 0
-    with queries_file.open() as f:
+    with queries_file.open(encoding="utf-8") as f:
         for line in f:
             if not line.strip():
                 continue
@@ -78,4 +78,4 @@ def evaluate(
 
 
 def write_report(out: dict[str, float], path: Path) -> None:
-    path.write_text(json.dumps(out, indent=2))
+    path.write_text(json.dumps(out, indent=2), encoding="utf-8")

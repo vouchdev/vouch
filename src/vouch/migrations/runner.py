@@ -88,7 +88,7 @@ def _changed_files(store: KBStore, manifest: Manifest) -> list[tuple[Path, str, 
     """Files whose content the manifest would actually change: (path, old, new)."""
     out: list[tuple[Path, str, str]] = []
     for path in artifact_files(store.kb_dir, manifest.artifact):
-        old = path.read_text()
+        old = path.read_text(encoding="utf-8")
         new = transform_text(old, manifest.artifact, manifest.transforms)
         if new != old:
             out.append((path, old, new))
@@ -311,13 +311,13 @@ def verify(store: KBStore) -> dict[str, Any]:
         for path in artifact_files(store.kb_dir, kind):
             checked += 1
             try:
-                model.model_validate(_yaml_load(path.read_text()))
+                model.model_validate(_yaml_load(path.read_text(encoding="utf-8")))
             except Exception as e:
                 errors.append({"path": str(path.relative_to(store.kb_dir)), "error": str(e)})
     for path in artifact_files(store.kb_dir, "pages"):
         checked += 1
         try:
-            match = _FRONTMATTER_RE.match(path.read_text())
+            match = _FRONTMATTER_RE.match(path.read_text(encoding="utf-8"))
             front = _yaml_load(match.group(1)) if match else {}
             Page.model_validate({**(front or {}), "body": match.group(2) if match else ""})
         except Exception as e:
@@ -325,7 +325,7 @@ def verify(store: KBStore) -> dict[str, Any]:
     for meta in sorted((store.kb_dir / "sources").glob("*/meta.yaml")):
         checked += 1
         try:
-            Source.model_validate(_yaml_load(meta.read_text()))
+            Source.model_validate(_yaml_load(meta.read_text(encoding="utf-8")))
         except Exception as e:
             errors.append({"path": str(meta.relative_to(store.kb_dir)), "error": str(e)})
     return {

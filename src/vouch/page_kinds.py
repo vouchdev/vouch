@@ -224,7 +224,7 @@ def _read_page_kinds(store: KBStore) -> dict[str, Any]:
     if not path.exists():
         return {}
     try:
-        loaded = yaml.safe_load(path.read_text())
+        loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
     except yaml.YAMLError:
         return {}
     if not isinstance(loaded, dict):

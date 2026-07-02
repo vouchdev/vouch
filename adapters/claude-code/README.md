@@ -57,6 +57,49 @@ In a fresh session, ask Claude:
 It should enumerate `kb_search`, `kb_propose_claim`, etc. If not, run
 `claude --debug-mcp` to see why the server isn't loading.
 
+## Session Capture & Auto-Proposal
+
+When you work in a Claude Code session, vouch automatically captures your
+tool use (file reads, edits, commands, etc.). When you close the session
+window, vouch proposes the captured knowledge to the KB for review.
+
+### How it works
+
+1. **Capture**: Each tool call (Read, Edit, Bash, etc.) is logged to
+   `.vouch/captures/<session-id>.jsonl` (gitignored).
+
+2. **Cleanup on session start**: When you start a new session, any
+   unfinalized buffers from previous sessions (>1 hour old) are
+   automatically finalized and proposed.
+
+3. **Finalize on window close**: When the VS Code window closes, the
+   current session is finalized and proposed.
+
+### Configuration
+
+Disable capture in `.vouch/config.yaml`:
+
+```yaml
+capture:
+  enabled: false
+```
+
+Adjust the stale buffer age (default: 1 hour):
+
+```yaml
+capture:
+  max_age_seconds: 7200  # finalize buffers >2 hours old
+```
+
+### Fallback behavior
+
+If the "window close" event is not yet supported by your version of the
+Claude Code extension, the current session will be finalized on the *next*
+session start instead. The behavior is the same; proposals just appear in
+the next session rather than immediately.
+
+To upgrade or check your extension version, see [Claude Code releases](https://github.com/anthropics/claude-code-releases).
+
 ## Notes
 
 - `VOUCH_AGENT=claude-code` shows up as the actor in `audit.log.jsonl`

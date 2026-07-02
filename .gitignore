@@ -7,6 +7,8 @@ __pycache__/
 .ruff_cache/
 .coverage
 htmlcov/
+bench.json
+.benchmarks/
 dist/
 build/
 *.swp

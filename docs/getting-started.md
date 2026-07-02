@@ -101,7 +101,20 @@ git add .vouch && git commit -m "kb: approve auth-uses-jwt"
 
 ## 6. Wire an agent
 
-Drop this into `.mcp.json` at the project root:
+`vouch serve` is a stdio MCP server, so the agent's native registration is all
+you need:
+
+```bash
+claude mcp add vouch -- vouch serve    # or: codex mcp add vouch -- vouch serve
+```
+
+Add `-e VOUCH_AGENT=claude-code` to attribute the agent's proposals to it
+rather than your shell user. Confirm with `claude mcp list` (look for
+`vouch … ✓ Connected`).
+
+Prefer a config file, or want the brain-first `CLAUDE.md`, slash commands, and
+hooks too? Run `vouch install-mcp claude-code` — or drop this into `.mcp.json`
+at the project root by hand:
 
 ```json
 {

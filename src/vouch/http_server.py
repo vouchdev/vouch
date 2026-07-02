@@ -122,7 +122,7 @@ def load_serve_config(path: Path) -> ServeConfig:
     if not path.exists():
         return ServeConfig()
     try:
-        raw = yaml.safe_load(path.read_text()) or {}
+        raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     except yaml.YAMLError as e:
         raise ServeConfigError(f"could not parse {path}: {e}") from e
     if not isinstance(raw, dict):

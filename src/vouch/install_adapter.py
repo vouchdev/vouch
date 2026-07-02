@@ -27,6 +27,7 @@ adapter will do (``cat adapters/<name>/install.yaml``).
 
 from __future__ import annotations
 
+import json
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -62,6 +63,7 @@ class InstallResult:
     written: list[str] = field(default_factory=list)
     appended: list[str] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)
+    merged: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -69,6 +71,7 @@ class _FileEntry:
     src: str           # path relative to the adapter directory
     dst: str           # path relative to the target directory
     fenced_append: bool = False  # CLAUDE.md-style: append inside our fence
+    json_merge: bool = False  # settings.json-style: deep-merge into existing
 
 
 @dataclass(frozen=True)
@@ -130,7 +133,10 @@ def _load_manifest(host: str) -> _Manifest:
                     f"{host}: install.yaml tier {tier_name}: every entry needs a non-empty `dst`"
                 )
             fenced = bool(raw.get("fenced_append", False))
-            parsed_entries.append(_FileEntry(src=src, dst=dst, fenced_append=fenced))
+            json_merge = bool(raw.get("json_merge", False))
+            parsed_entries.append(
+                _FileEntry(src=src, dst=dst, fenced_append=fenced, json_merge=json_merge)
+            )
         if parsed_entries:
             parsed[tier_name] = parsed_entries
 
@@ -211,6 +217,10 @@ def install(adapter: str, *, target: Path, tier: str = "T4") -> InstallResult:
                 _install_fenced(src, dst, manifest, result, entry.dst)
                 continue
 
+            if entry.json_merge:
+                _install_json_merge(src, dst, result, entry.dst)
+                continue
+
             if dst.exists():
                 result.skipped.append(entry.dst)
                 continue
@@ -257,3 +267,122 @@ def _install_fenced(
     new_content = existing.rstrip() + "\n" + fenced_block
     dst.write_text(new_content, encoding="utf-8")
     result.appended.append(rel_dst)
+
+
+def _event_commands(groups: Any) -> set[str]:
+    """Every hook ``command`` string already present under one hooks-event."""
+    cmds: set[str] = set()
+    for group in groups or []:
+        if not isinstance(group, dict):
+            continue
+        for hook in group.get("hooks", []) or []:
+            if isinstance(hook, dict) and isinstance(hook.get("command"), str):
+                cmds.add(hook["command"])
+    return cmds
+
+
+def _merge_settings(src: dict[str, Any], dst: dict[str, Any]) -> bool:
+    """Merge our ``permissions.allow`` + ``hooks`` into an existing settings
+    dict in place. Returns True if ``dst`` changed. Idempotent: re-merging the
+    same ``src`` is a no-op because every command / permission is deduped.
+    """
+    changed = False
+
+    # permissions.allow — union, preserving the user's order.
+    src_perms = src.get("permissions")
+    if isinstance(src_perms, dict) and isinstance(src_perms.get("allow"), list):
+        dst_perms = dst.get("permissions")
+        if not isinstance(dst_perms, dict):
+            dst_perms = {}
+            dst["permissions"] = dst_perms
+        dst_allow = dst_perms.get("allow")
+        if not isinstance(dst_allow, list):
+            dst_allow = []
+            dst_perms["allow"] = dst_allow
+        seen = set(dst_allow)
+        for item in src_perms["allow"]:
+            if item not in seen:
+                dst_allow.append(item)
+                seen.add(item)
+                changed = True
+
+    # hooks — per event, add only commands not already present. Prefer folding
+    # into an existing group with the same matcher so we don't fan out groups.
+    src_hooks = src.get("hooks")
+    if isinstance(src_hooks, dict):
+        dst_hooks = dst.get("hooks")
+        if not isinstance(dst_hooks, dict):
+            dst_hooks = {}
+            dst["hooks"] = dst_hooks
+        for event, src_groups in src_hooks.items():
+            if not isinstance(src_groups, list):
+                continue
+            dst_groups = dst_hooks.get(event)
+            if not isinstance(dst_groups, list):
+                dst_groups = []
+                dst_hooks[event] = dst_groups
+            present = _event_commands(dst_groups)
+            for group in src_groups:
+                if not isinstance(group, dict):
+                    continue
+                fresh = [
+                    hook for hook in group.get("hooks", []) or []
+                    if isinstance(hook, dict) and hook.get("command") not in present
+                ]
+                if not fresh:
+                    continue
+                matcher = group.get("matcher")
+                target_group = next(
+                    (g for g in dst_groups
+                     if isinstance(g, dict) and g.get("matcher") == matcher),
+                    None,
+                )
+                if target_group is not None:
+                    target_group.setdefault("hooks", []).extend(fresh)
+                else:
+                    new_group = {k: v for k, v in group.items() if k != "hooks"}
+                    new_group["hooks"] = fresh
+                    dst_groups.append(new_group)
+                present.update(
+                    h["command"] for h in fresh if isinstance(h.get("command"), str)
+                )
+                changed = True
+
+    return changed
+
+
+def _install_json_merge(
+    src: Path, dst: Path, result: InstallResult, rel_dst: str
+) -> None:
+    """settings.json-style: deep-merge our hooks + permissions into a
+    pre-existing JSON file instead of skipping it.
+
+    States:
+
+    * dst missing                 -> copy fresh (``written``)
+    * dst exists, merge adds keys -> merge + rewrite (``merged``)
+    * dst exists, nothing to add  -> skip (``skipped``); already installed
+    * dst exists, unparseable     -> skip (``skipped``); never clobber the user
+    """
+    if not dst.exists():
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+        result.written.append(rel_dst)
+        return
+
+    try:
+        dst_data = json.loads(dst.read_text(encoding="utf-8"))
+        src_data = json.loads(src.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        # Malformed or unreadable user file — leave it untouched.
+        result.skipped.append(rel_dst)
+        return
+    if not isinstance(dst_data, dict) or not isinstance(src_data, dict):
+        result.skipped.append(rel_dst)
+        return
+
+    if _merge_settings(src_data, dst_data):
+        dst.write_text(json.dumps(dst_data, indent=2) + "\n", encoding="utf-8")
+        result.merged.append(rel_dst)
+    else:
+        result.skipped.append(rel_dst)

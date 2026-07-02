@@ -40,13 +40,20 @@ KB_PLACEHOLDER = "/your/project"
 
 
 def _vouch_bin() -> str:
-    """Resolve the `vouch` console script — the same entry point a user runs."""
-    found = shutil.which("vouch")
-    if found:
-        return found
+    """Resolve the `vouch` console script that matches the running interpreter.
+
+    Prefer the `vouch` installed alongside this Python (the venv carrying the
+    repo's editable build) over whatever is first on PATH. A stale global
+    `vouch` shadowing the venv would otherwise render against the wrong build —
+    silently overwriting the committed images with output from a different CLI.
+    Fall back to PATH only when no interpreter-local script exists.
+    """
     candidate = Path(sys.executable).parent / "vouch"
     if candidate.exists():
         return str(candidate)
+    found = shutil.which("vouch")
+    if found:
+        return found
     raise SystemExit("`vouch` console script not found; pip install -e '.[dev]' first")
 
 

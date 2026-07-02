@@ -3,7 +3,7 @@
 **Git-native, review-gated knowledge base for LLM agents. MCP server + JSONL tool server + CLI.**
 
 <p align="center">
-  <img src="docs/banner.svg" alt="vouch — propose → review → commit → retrieve" width="100%"/>
+  <img src="docs/banner.svg" alt="vouch — sessions auto-capture into a review-gated knowledge base: propose or capture → review → commit → retrieve" width="100%"/>
 </p>
 
 <p align="center">
@@ -17,25 +17,28 @@
 
 `vouch` is a knowledge base for LLM agents with an explicit **review gate**: agents *propose* writes; humans *approve* them with `vouch approve`. Approved artifacts are plain files on disk — YAML for claims, markdown for pages — so the KB lives in your repo, is reviewed in PRs, diffs cleanly, and can be exported as a portable bundle.
 
+It also captures your Claude Code sessions automatically — each session's work is harvested and rolled up into a summary. But where the persistent-memory tools compress with an LLM and inject straight back, vouch's rollup is **mechanical (no LLM)** and the summary lands in the **same review gate**: nothing becomes durable memory until you approve it.
+
 Still alpha — surface is small on purpose; expect breaking changes pre-1.0.
 
-> **Featured for Gittensor (SN74).** vouch ships a one-command starter pack for **Gittensor** — Bittensor subnet 74. `vouch init --template gittensor` seeds a cited, already-approved decision-memory of SN74's scoring model: merged-PR rewards, PAT verification, sybil-resistance, the repo allow-list, the issue multiplier, and the emission split. It's the durable *why* behind each rule — reviewed, cited, and committed alongside your code. → **[docs/gittensor.md](docs/gittensor.md)**
+> **Built for Gittensor (SN74) miners.** Mining subnet 74 means landing merged PRs across a whitelist of repos that keeps shuffling — which means re-investigating each repo's codebase and merge bar every session your agent opens. vouch auto-captures what a session works out, you approve what's worth keeping, and the next session recalls it: less re-discovery, more merged PRs. `vouch init --template gittensor` seeds the cited baseline of how SN74 scores today. → **[docs/gittensor.md](docs/gittensor.md)**
 
 ## Why this exists
 
-Three opinionated choices distinguish vouch from the neighbours:
+Four opinionated choices distinguish vouch from the neighbours:
 
 1. **The KB is a folder in your repo.** Git is your audit log, your backup, and your sync mechanism. PRs are your review UI.
 2. **Writes require approval.** Agents file *proposals*; a human (or trusted approving agent) explicitly accepts them. `proposed/` is gitignored, so rejected drafts never pollute history.
 3. **Claims must cite sources.** A claim without at least one Source / Evidence id is a validation error, not a warning. Sources are content-hashed; the same evidence registered twice de-duplicates.
+4. **Sessions capture themselves — but stay gated.** With the Claude Code hooks installed, a `PostToolUse` hook harvests each tool call into a gitignored scratch buffer and a `SessionEnd` hook rolls it into one *pending* session-summary page. The harvest is automatic and the rollup is mechanical (no LLM) — but the commit still waits for your `approve`, and the next session starts from approved summaries via `vouch recall`.
 
 ## When to use vouch
 
 Worth it when:
 
-- **You run or contribute to a Gittensor (SN74) repo.** Scoring weights, the repo allow-list, anti-sybil thresholds, and emission splits get debated across PRs, Discord, and validator changes — then settle into nobody's notes. `vouch init --template gittensor` gives you a cited, reviewed record of *why* each rule exists and what it superseded. See [docs/gittensor.md](docs/gittensor.md).
+- **You mine Gittensor (SN74).** Emissions come from merged PRs across a whitelist that keeps shuffling, so your agent burns each session re-learning the same codebases and merge bars. vouch captures each session's findings for approval and recalls them next time — it stops re-deriving what it already knew and keeps targeting the repos that pay. See [docs/gittensor.md](docs/gittensor.md).
 - **Multiple agents share a repo** (Claude Code + Cursor + a CI bot). Per-agent attribution in the audit log makes "which agent claimed what" answerable.
-- **Sessions keep re-explaining the same context.** Curated, cited claims let new sessions start from your team's agreed answer instead of re-grepping.
+- **Sessions keep re-explaining the same context.** Curated, cited claims let new sessions start from your team's agreed answer instead of re-grepping — and vouch auto-captures each Claude Code session into a summary you can approve, so memory accrues without letting the agent write its own history.
 - **You want decision records without the ADR ceremony.** `vouch crystallize` promotes a session's durable parts into proposals; one approve and they're permanent.
 - **You'd review agent-stated facts the way you review agent-written code.** Vouch is a PR queue for claimed knowledge.
 - **Compliance / audit trails matter.** Required citations + append-only audit log give you "who decided X, citing what, when" for free.
@@ -63,6 +66,33 @@ The one-liner is POSIX `sh`, never needs `sudo`, and detects an existing
 Claude Code install to point you at the next step (`vouch install-mcp
 claude-code`). Inspect it first if you'd like — it's [`install.sh`](install.sh)
 at the repo root.
+
+## Running the tests
+
+From a clone with the dev extras installed (`pip install -e '.[dev]'`):
+
+```bash
+# the full CI gate — lint + types + unit tests (exactly what CI runs)
+make check                       # == ruff check + mypy src + pytest
+
+# just the unit tests
+python -m pytest tests/ -q --ignore=tests/embeddings
+
+# a single module or test
+python -m pytest tests/test_capture.py -q
+python -m pytest tests/test_recall.py::test_digest_includes_approved_claim_and_page -q
+
+# with coverage
+make test-cov                    # term-missing + coverage.xml
+
+# end-to-end smoke checks for the claude-code session hooks
+make smoke-capture               # capture: observe → finalize → pending summary
+make smoke-recall                # recall: approved knowledge injected at session start
+```
+
+The embedding-heavy tests live under `tests/embeddings/` and need the extra
+`pip install -e '.[embeddings]'` (they run as a separate CI job); drop the
+`--ignore` flag once installed.
 
 ## Quick start
 
@@ -102,27 +132,48 @@ vouch cite vouch-starter-reviewed-knowledge
 The starter claim is already durable and cites the starter source. Replace it
 with your project's first real source and claim when you are ready.
 
-![vouch end-to-end demo](docs/demo.gif)
+### Automatic session capture
 
-The full captured walkthrough lives at [docs/example-session.md](docs/example-session.md); re-render the GIF from [docs/demo.tape](docs/demo.tape) with `vhs docs/demo.tape`.
+Once vouch's Claude Code hooks are installed, sessions capture *themselves* —
+this is the loop the demo shows. A `PostToolUse` hook harvests each tool call
+into a gitignored scratch buffer; at session end a `SessionEnd` hook rolls the
+buffer plus a `git diff` backstop into **one pending "session summary" page** —
+mechanically, no LLM, never auto-approved. You review and `vouch approve` it
+like any other write, and the next session starts with it injected via `vouch
+recall`. Passive harvest, human-gated commit, no re-explaining:
+
+![vouch auto-capture demo](docs/demo.gif)
+
+The full walkthrough with real output lives at [docs/example-session.md](docs/example-session.md); re-render the GIF from [docs/demo.tape](docs/demo.tape) with `vhs docs/demo.tape`.
+
+Prefer reading to running? The [examples/](examples/) directory ships sample KBs as committed files, each with rendered screenshots of `vouch status`, `search`, `show`, `audit`, and `diff` against the fixture — see what the CLI returns before installing anything.
 
 ## Gittensor (SN74)
 
-vouch's first domain template targets **Gittensor** — Bittensor subnet 74, which rewards open-source contribution by rule. Its scoring model evolves across PRs, Discord, and validator changes, and the rationale usually lives in people's heads. vouch is the durable, cited memory for it:
+**Gittensor** — Bittensor subnet 74 — pays miners in TAO for landing *merged* pull requests into whitelisted open-source repos. Contributions are scored by code quality, each repo's allocation, and programming-language factors, and the whitelist itself shuffles as the subnet matures. So mining well means pointing a coding agent at a rotating set of target repos and landing mergeable PRs in the ones that pay.
+
+The tax on that is re-investigation. Every target repo means (re)learning its architecture, its CI, its `CONTRIBUTING.md`, the maintainer's merge bar, and which past attempts got rejected and why. Across a dozen repos and a dozen sessions, your agent re-derives all of it from cold each time — time not spent landing PRs. vouch turns each session's findings into reviewed memory the next session recalls, so the investigation happens once:
 
 ```bash
-cd your-gittensor-repo
-vouch init --template gittensor   # seeds 1 source, 1 entity, 7 cited claims about SN74 scoring
-vouch status                      #   durable: 7 claims · 1 source · 1 entity
-vouch search "emission split"
-git add .vouch && git commit -m "chore: add vouch decision-memory KB"
+cd acme-httpkit                   # a whitelisted target repo — Go, healthy allocation
+vouch init --template gittensor   # seeds a cited baseline of how SN74 scores today
+vouch install-mcp claude-code     # wires the capture + recall hooks
+
+# session 1 (mon): the agent maps the repo and attempts issue #212 (a pool leak).
+#   the claude-code hooks auto-capture the work. you approve the durable summary
+#   and file two cited claims: httpkit's merge bar, and why the first PR bounced.
+vouch pending
+vouch approve <id> --reason "merge bar + rejected approach — worth keeping"
+
+# session 2 (wed): opens with `vouch recall`. the agent already knows the layout,
+#   that merges need `make test` green + a changelog entry, and that #212's first
+#   attempt was rejected for a missing regression test. it skips re-discovery and
+#   lands the fixed PR.
 ```
 
-The seeded pack covers merged-PR rewards, PAT verification, scoring factors, sybil-resistance, the repo allow-list, the issue-solving multiplier, and the emission split — each a cited, approved, supersede-able claim. When a rule changes, `vouch supersede` the old claim with the new one so the history of *what changed* stays queryable.
+When the whitelist shuffles and httpkit's allocation drops, `vouch supersede` the claim that said it was worth targeting — your agent re-prioritizes toward a higher-allocation repo, and the decision stays cited and reviewed instead of lost in a Discord thread. The `--template gittensor` seed is the cold-start: 7 cited, approved claims about how merged-PR scoring, the repo allow-list, and the emission split work today; everything after that is capture, and each session you approve makes the next one start further ahead.
 
-vouch stores **no** live signals — it is not a validator or miner client and never reads on-chain scores. It is the institutional memory that sits beside the live layer (Gittensory). The seeded claims are starter-grade; `vouch supersede` them with the real spec or PR once you confirm the live rule.
-
-Full adoption guide — install, seed, wire the MCP server, capture decisions as cited claims: **[docs/gittensor.md](docs/gittensor.md)**.
+vouch reads **no** live signals — it never checks on-chain scores, verifies PATs, or submits weights (that's the `gitt` miner client). It's the reviewed record of what your agent already worked out, so it never works it out twice. Full miner walkthrough: **[docs/gittensor.md](docs/gittensor.md)**.
 
 ## Object model
 
@@ -174,6 +225,7 @@ The files are the source of truth; `state.db` is a derivable cache (`vouch index
 
 ```
 vouch init                                  # set up .vouch/ at PATH
+vouch install-mcp HOST [--tier T1-T4]       # wire MCP + capture/recall hooks into a host
 vouch discover [--path P]                   # find the nearest .vouch/ root
 vouch capabilities                          # emit the JSON capabilities descriptor
 vouch status [--json]                       # KB counts + pending proposals
@@ -207,6 +259,9 @@ vouch cite CLAIM_ID
 vouch session start [--task ...] [--note ...]
 vouch session end SESSION_ID
 vouch crystallize SESSION_ID [--no-page]
+
+vouch recall                                # digest of approved knowledge for session-start injection
+vouch capture observe|finalize|finalize-all|banner   # hook-driven session capture (claude code)
 
 vouch search QUERY [--limit N]
 vouch context TASK [--max-chars N] [--min-items N] [--require-citations]
@@ -256,6 +311,14 @@ In your project's `.mcp.json`:
 ```
 
 `VOUCH_AGENT` is recorded as `proposed_by` and as the actor on every audit event, so multi-agent setups can attribute writes correctly.
+
+The `.mcp.json` above wires the MCP server only. To also turn on **automatic session capture** and start-of-session **recall**, install the Claude Code hooks:
+
+```bash
+vouch install-mcp claude-code
+```
+
+Its `.claude/settings.json` (tier T4) registers a `PostToolUse` hook (`vouch capture observe`), a `SessionEnd` hook (`vouch capture finalize`), and a `SessionStart` hook that runs `vouch recall` and nudges any pending captured summaries. Capture only ever files *pending* proposals — the review gate holds. The full loop is walked in [docs/example-session.md](docs/example-session.md).
 
 ## Running vouch as an OpenClaw plugin
 
@@ -341,6 +404,8 @@ vouch import-apply kb.tar.gz --on-conflict skip  # apply (default skip; never de
 |---|---|---|---|
 | Knowledge lives in | a service | filesystem | your **repo** |
 | Review of writes | none | none | **explicit `approve`** |
+| Session auto-capture | via LLM extraction | no | **yes — gated** |
+| Summaries need an LLM | yes | — | **no (mechanical)** |
 | Evidence required | no | optional | **enforced** |
 | Per-agent attribution | partial | none | **yes** (audit log) |
 | Graph (entities + relations) | no | no | **yes** |
@@ -353,10 +418,11 @@ vouch import-apply kb.tar.gz --on-conflict skip  # apply (default skip; never de
 | Area | Current support |
 |------|-----------------|
 | Knowledge base | `.vouch/` folder, YAML claims/entities/relations/evidence/sessions, markdown pages with frontmatter, JSONL audit log, content-addressed sources |
-| CLI | `init`, `discover`, `capabilities`, `status`, `lint`, `doctor`, `fsck`, `pending`, `show`, `approve`, `reject`, `propose-{claim,page,entity,relation}`, `source add`, `source verify`, `supersede`, `contradict`, `archive`, `confirm`, `cite`, `session {start,end}`, `crystallize`, `search`, `context`, `index`, `audit`, `export`, `export-check`, `import-check`, `import-apply`, `serve` |
+| CLI | `init`, `install-mcp`, `discover`, `capabilities`, `status`, `lint`, `doctor`, `fsck`, `pending`, `show`, `approve`, `reject`, `propose-{claim,page,entity,relation}`, `source add`, `source verify`, `supersede`, `contradict`, `archive`, `confirm`, `cite`, `session {start,end}`, `crystallize`, `capture {observe,finalize,finalize-all,banner}`, `recall`, `search`, `context`, `index`, `audit`, `export`, `export-check`, `import-check`, `import-apply`, `serve` |
 | Tool servers | MCP over stdio + JSONL over stdin/stdout, same `kb.*` surface across both transports, capabilities + knowledge-capability descriptor |
 | Schemas | 13 JSON Schemas (Draft 2020-12) generated from pydantic in [schemas/](schemas/), plus hand-maintained `bundle.manifest` and `jsonl-envelope` schemas |
 | Write safety | review-gated writes via [proposed/](spec/review-gate.md), `dry_run:true` previews, host trust required for `approve`/`reject`, atomic exclusive-create storage, path-traversal blocked on source intake and bundle import |
+| Session capture | Claude Code hooks harvest each session (`PostToolUse` → `vouch capture observe`) into a gitignored scratch buffer; `SessionEnd` rolls it up mechanically (no LLM) into one review-gated session-summary page; `SessionStart` injects approved knowledge via `vouch recall` and nudges pending summaries. Never auto-approves |
 | Retrieval | `retrieval.backend` in `config.yaml` selects the path: `auto` (default — embedding → FTS5 → substring), `embedding`, `fts5`, or `substring`. Semantic backends (`all-mpnet-base-v2`, `MiniLM-L6`, fastembed-BGE) ship behind install extras; `auto` degrades to FTS5 when they aren't installed. Context packs with citations + quality gate |
 | Lifecycle | `supersede`, `contradict`, `archive`, `confirm`, `cite` — direct mutations, all audited |
 | Portability | tar.gz bundles with per-file sha256 `manifest.json`, `export-check`, `import-check`, `import-apply` with skip/overwrite/fail conflict modes |

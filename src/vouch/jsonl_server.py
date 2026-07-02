@@ -164,7 +164,7 @@ def _h_search(p: dict) -> dict:
 
 def _load_cfg(store: KBStore) -> dict:
     try:
-        loaded = yaml.safe_load((store.kb_dir / "config.yaml").read_text())
+        loaded = yaml.safe_load((store.kb_dir / "config.yaml").read_text(encoding="utf-8"))
     except Exception:
         return {}
     return loaded if isinstance(loaded, dict) else {}
@@ -632,6 +632,47 @@ def _h_provenance_rebuild(_: dict) -> dict:
     return {"edges": prov.rebuild_prov_edges(_store())}
 
 
+def _h_detect_themes(p: dict) -> dict:
+    from . import themes
+
+    result = themes.detect_themes(
+        _store(),
+        min_sessions=p.get("min_sessions"),
+        min_claims=p.get("min_claims"),
+        top_k=p.get("top_k"),
+    )
+    return {
+        "clusters": [
+            {
+                "entities": c.entities,
+                "claim_ids": c.claim_ids,
+                "session_ids": c.session_ids,
+                "score": c.score,
+                "session_count": c.session_count,
+                "claim_count": c.claim_count,
+            }
+            for c in result.clusters
+        ],
+        "config": result.config_used,
+    }
+
+
+def _h_propose_theme(p: dict) -> dict:
+    from . import themes
+
+    store = _store()
+    actor = p.get("agent") or os.environ.get("VOUCH_AGENT", "unknown-agent")
+    cluster = themes.ThemeCluster(
+        entities=p["entities"],
+        claim_ids=p["claim_ids"],
+        session_ids=p.get("session_ids", []),
+        score=float(p.get("score", 0.0)),
+        session_count=len(p.get("session_ids", [])),
+        claim_count=len(p["claim_ids"]),
+    )
+    return themes.propose_theme(store, cluster, proposed_by=actor)
+
+
 HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.capabilities": _h_capabilities,
     "kb.status": _h_status,
@@ -687,6 +728,8 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.impact": _h_impact,
     "kb.graph_export": _h_graph_export,
     "kb.provenance_rebuild": _h_provenance_rebuild,
+    "kb.detect_themes": _h_detect_themes,
+    "kb.propose_theme": _h_propose_theme,
 }
 
 

@@ -23,7 +23,7 @@ _SNIPPET_LEN = 120
 def similarity_threshold(store: KBStore) -> float:
     """Resolve `review.similarity_threshold` from config, else dedup default."""
     try:
-        loaded = yaml.safe_load(store.config_path.read_text())
+        loaded = yaml.safe_load(store.config_path.read_text(encoding="utf-8"))
         if isinstance(loaded, dict):
             review = loaded.get("review")
             if isinstance(review, dict) and review.get("similarity_threshold") is not None:

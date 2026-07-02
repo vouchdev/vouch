@@ -282,7 +282,7 @@ def _write_conflict_report(
     report_path = report_dir / f"{check.source_id}.json"
     report = asdict(check)
     report["on_conflict"] = on_conflict
-    report_path.write_text(json.dumps(report, indent=2, sort_keys=True))
+    report_path.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
     return str(report_path.relative_to(kb_dir))
 
 
