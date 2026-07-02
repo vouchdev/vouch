@@ -96,6 +96,29 @@ All notable changes to vouch are documented here. Format follows
   KB under `eval/fixture-kb/`, and an `eval` workflow gating retrieval changes
   (#226).
 ### Fixed
+- the OpenClaw plugin packaging now targets the current (2026.6) plugin
+  loader, verified against a real `openclaw plugins install --link` of the
+  repo: `openclaw.plugin.json` moved to the `id` + JSON-Schema `configSchema`
+  dialect (`kind: context-engine`, `skills` as SKILL.md directories under
+  `adapters/openclaw/skills/`), a root `package.json` now carries the
+  loader-facing `openclaw.extensions` entry-module pointer and the
+  `openclaw.compat.pluginApi` floor, and the engine id was renamed
+  `vouch-context` → `vouch` so it matches the plugin id — OpenClaw's
+  installer auto-binds the contextEngine slot to the *plugin* id and
+  resolves it by *engine* id, so distinct ids silently quarantined the
+  engine in favour of the legacy engine. The old dialect's `mcpServers`,
+  `contracts`, `family`, `shared_deps`, and `openclaw.*` fields were
+  silently ignored by current loaders and are gone; the kb.* MCP server is
+  deployment config (`openclaw mcp add vouch -- vouch serve`). A Tier-2
+  e2e suite (`tests/test_openclaw_plugin_load_real.py`, skipped when the
+  `openclaw` CLI is absent) now links the repo into an isolated profile and
+  asserts import, engine registration, slot auto-bind, skill publication,
+  and a clean plugins doctor.
+- `vouch openclaw-rpc` no longer crashes serializing `assemble` responses:
+  `contextPack.generated_at` is a `datetime`, which `json.dumps` rejected on
+  any turn that found a KB — OpenClaw quarantined the engine for the process
+  and silently fell back to its legacy engine. Found by running a real
+  OpenClaw agent turn against the linked plugin.
 - `parse_since` (the `--since` parser behind `vouch metrics`/`vouch audit`) now raises a clean `MetricsError` for a duration too large to represent (e.g. `--since 1000000000000d`), instead of letting an uncaught `OverflowError` traceback escape — restoring the documented "clean error, not a traceback" contract.
 - `sync_apply` now loads the sync source exactly once and passes the same `_SyncSource` instance into `sync_check`, closing a TOCTOU window where a bundle replaced on disk between the two `_load_source` calls could cause the validation and write phases to operate on different snapshots. Also eliminates redundant directory walks (KB sources) and triple tarball opens (bundle sources). Fixes #217.
 - `vault_to_kb` now passes `slug_hint=page_id` to `propose_page` so vault edit proposals target the existing page id from frontmatter instead of a slugified copy of the title (fixes #219).
