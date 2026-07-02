@@ -6,6 +6,9 @@ All notable changes to vouch are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+- `hybrid` retrieval backend: RRF fusion of embedding and FTS5 results via `rrf_fuse`. Set `retrieval.backend: hybrid` in `.vouch/config.yaml` to activate. Degrades gracefully to FTS5-only when no embedding index is present, and to substring when both indexes are unavailable. Exposed in `kb.capabilities.retrieval` when an embedder is registered. Fixes #316.
+
 ### Docs
 - example KBs now carry their own screenshots: `examples/README.md` and the
   `tiny/` + `decision-log/` READMEs embed terminal renders of `vouch status`,

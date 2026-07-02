@@ -158,3 +158,97 @@ def test_build_context_pack_explain_flag_returns_score_breakdown(
     pack = build_context_pack(store, query="hello", limit=5, explain=True)
     assert "explain" in pack
     assert any("backend" in row for row in pack["explain"])
+
+
+# --- hybrid RRF backend (#316) -------------------------------------------
+
+
+def test_hybrid_backend_returns_fused_results(tmp_path: Path) -> None:
+    """hybrid backend must return results with backend tag "hybrid" and
+    surface hits from both embedding and FTS5 indexes via RRF fusion."""
+    from tests.embeddings._fakes import MockEmbedder
+    from vouch.context import build_context_pack
+    from vouch.embeddings import register
+    from vouch.embeddings.base import DEFAULT_MODEL_NAME
+    from vouch.storage import KBStore
+
+    register(DEFAULT_MODEL_NAME, lambda: MockEmbedder(dim=8))
+    store = KBStore.init(tmp_path)
+    src = store.put_source(b"evidence")
+    store.put_claim(Claim(id="c1", text="redis caching with expiry", evidence=[src.id]))
+    store.put_claim(Claim(id="c2", text="postgres query optimization", evidence=[src.id]))
+    health.rebuild_index(store)
+
+    # Write hybrid backend into config
+    import yaml
+    cfg = yaml.safe_load(store.config_path.read_text())
+    cfg.setdefault("retrieval", {})["backend"] = "hybrid"
+    store.config_path.write_text(yaml.safe_dump(cfg))
+
+    pack = build_context_pack(store, query="redis", limit=5)
+    assert pack["backend"] == "hybrid"
+    assert any(it["id"] == "c1" for it in pack["items"])
+
+
+def test_hybrid_backend_degrades_to_substring_when_no_indexes(tmp_path: Path) -> None:
+    """When neither embedding nor FTS5 index is available, hybrid must
+    fall back to substring search rather than returning empty results."""
+    from vouch.context import build_context_pack
+    from vouch.storage import KBStore
+
+    store = KBStore.init(tmp_path)
+    src = store.put_source(b"evidence")
+    store.put_claim(Claim(id="c1", text="unique-term-xyzzy for substring", evidence=[src.id]))
+    # No index built — state.db absent, no embeddings registered.
+
+    import yaml
+    cfg = yaml.safe_load(store.config_path.read_text())
+    cfg.setdefault("retrieval", {})["backend"] = "hybrid"
+    store.config_path.write_text(yaml.safe_dump(cfg))
+
+    pack = build_context_pack(store, query="unique-term-xyzzy", limit=5)
+    # Falls back to substring — item must still be found
+    assert any(it["id"] == "c1" for it in pack["items"])
+
+
+def test_hybrid_backend_deduplicates_items_appearing_in_both_lists(
+    tmp_path: Path,
+) -> None:
+    """An item ranking in both the embedding and FTS5 lists must appear
+    exactly once in the fused output, not twice."""
+    from tests.embeddings._fakes import MockEmbedder
+    from vouch.context import build_context_pack
+    from vouch.embeddings import register
+    from vouch.embeddings.base import DEFAULT_MODEL_NAME
+    from vouch.storage import KBStore
+
+    register(DEFAULT_MODEL_NAME, lambda: MockEmbedder(dim=8))
+    store = KBStore.init(tmp_path)
+    src = store.put_source(b"evidence")
+    store.put_claim(Claim(id="c1", text="jwt authentication token", evidence=[src.id]))
+    health.rebuild_index(store)
+
+    import yaml
+    cfg = yaml.safe_load(store.config_path.read_text())
+    cfg.setdefault("retrieval", {})["backend"] = "hybrid"
+    store.config_path.write_text(yaml.safe_dump(cfg))
+
+    pack = build_context_pack(store, query="jwt authentication", limit=10)
+    ids = [it["id"] for it in pack["items"]]
+    assert ids.count("c1") == 1, f"c1 appeared {ids.count('c1')} times in hybrid results"
+
+
+def test_hybrid_config_backend_accepted_by_configured_backend(tmp_path: Path) -> None:
+    """hybrid must be accepted as a valid value for retrieval.backend
+    in config.yaml without falling back to auto."""
+    import yaml
+
+    from vouch.context import _configured_backend
+    from vouch.storage import KBStore
+
+    store = KBStore.init(tmp_path)
+    cfg = yaml.safe_load(store.config_path.read_text())
+    cfg.setdefault("retrieval", {})["backend"] = "hybrid"
+    store.config_path.write_text(yaml.safe_dump(cfg))
+
+    assert _configured_backend(store) == "hybrid"

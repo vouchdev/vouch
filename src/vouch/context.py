@@ -13,12 +13,14 @@ This implementation:
 
 from __future__ import annotations
 
+import contextlib
 import sqlite3
 from typing import Any, Literal, cast
 
 import yaml
 
 from . import graph, index_db
+from .embeddings.fusion import rrf_fuse
 from .models import ClaimStatus, ContextItem, ContextPack, ContextQuality
 from .scoping import (
     ViewerContext,
@@ -42,7 +44,7 @@ _RETRACTED_CLAIM_STATUSES = frozenset({
 
 ContextItemKind = Literal["claim", "page", "entity", "relation", "source"]
 
-_VALID_BACKENDS = ("auto", "embedding", "fts5", "substring")
+_VALID_BACKENDS = ("auto", "embedding", "fts5", "substring", "hybrid")
 
 
 def _configured_backend(store: KBStore) -> str:
@@ -86,9 +88,32 @@ def _retrieve(
       - "embedding": semantic search only
       - "fts5": lexical FTS5 only
       - "substring": substring scan only
+      - "hybrid": RRF fusion of embedding + FTS5 results (#316)
     """
     backend = _configured_backend(store)
     fetch_limit = scoped_fetch_limit(limit, viewer)
+
+    if backend == "hybrid":
+        # Reciprocal Rank Fusion of embedding and FTS5 results (#316).
+        # Both lists are fetched at fetch_limit so the fusion has enough
+        # candidates to fill the requested limit after dedup and filtering.
+        # Falls back to FTS5-only when no embedding index is present, and
+        # to substring when FTS5 is also unavailable — matching the same
+        # graceful degradation policy as "auto".
+        sem: list[tuple[str, str, str, float]] = []
+        with contextlib.suppress(Exception):
+            sem = index_db.search_semantic(store.kb_dir, query, limit=fetch_limit) or []
+        lex: list[tuple[str, str, str, float]] = []
+        with contextlib.suppress(sqlite3.Error):
+            lex = index_db.search(store.kb_dir, query, limit=fetch_limit) or []
+        if sem or lex:
+            fused = rrf_fuse(sem, lex, limit=fetch_limit)
+            filtered = filter_hits(store, fused, viewer, limit=limit)
+            return [(k, i, s, sc, "hybrid") for k, i, s, sc in filtered]
+        # Both indexes unavailable — fall through to substring.
+        substring_hits = store.search_substring(query, limit=fetch_limit)
+        filtered = filter_hits(store, substring_hits, viewer, limit=limit)
+        return [(k, i, s, sc, "substring") for k, i, s, sc in filtered]
 
     if backend in ("auto", "embedding"):
         raw = index_db.search_semantic(store.kb_dir, query, limit=fetch_limit)
