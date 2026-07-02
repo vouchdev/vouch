@@ -673,6 +673,39 @@ def _h_propose_theme(p: dict) -> dict:
     return themes.propose_theme(store, cluster, proposed_by=actor)
 
 
+def _h_consolidate(p: dict) -> dict:
+    from . import consolidate as cons
+
+    store = _store()
+    actor = p.get("agent") or os.environ.get("VOUCH_AGENT", "unknown-agent")
+    th = p.get("threshold")
+    result = cons.consolidate(
+        store,
+        threshold=float(th) if th is not None else None,
+        mode=p.get("mode"),
+        max_clusters=int(p["max_clusters"]) if p.get("max_clusters") else None,
+        dry_run=bool(p.get("dry_run", False)),
+        actor=actor,
+    )
+    return {
+        "clusters": [
+            {
+                "survivor": c.survivor_id,
+                "members": [
+                    {"claim_id": m.claim_id, "cosine": m.cosine}
+                    for m in c.members
+                ],
+                "cosine_min": c.cosine_min,
+                "cosine_max": c.cosine_max,
+            }
+            for c in result.clusters
+        ],
+        "proposals": result.proposals,
+        "config": result.config_used,
+        "dry_run": result.dry_run,
+    }
+
+
 HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.capabilities": _h_capabilities,
     "kb.status": _h_status,
@@ -730,6 +763,7 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.provenance_rebuild": _h_provenance_rebuild,
     "kb.detect_themes": _h_detect_themes,
     "kb.propose_theme": _h_propose_theme,
+    "kb.consolidate": _h_consolidate,
 }
 
 

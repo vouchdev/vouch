@@ -2020,6 +2020,84 @@ def detect_themes_cmd(
         )
 
 
+# --- consolidation --------------------------------------------------------
+
+
+@cli.command(name="consolidate")
+@click.option(
+    "--threshold", default=None, type=float,
+    help="Cosine similarity threshold (default 0.95 from config).",
+)
+@click.option(
+    "--mode", default=None, type=click.Choice(["supersede", "merge"]),
+    help="Consolidation mode (default: supersede).",
+)
+@click.option(
+    "--max-clusters", default=None, type=int,
+    help="Maximum clusters per pass.",
+)
+@click.option("--dry-run", is_flag=True, help="Report clusters without proposing.")
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON output.")
+@click.option("--agent", default=None, help="Agent name for proposals.")
+def consolidate_cmd(
+    threshold: float | None,
+    mode: str | None,
+    max_clusters: int | None,
+    dry_run: bool,
+    as_json: bool,
+    agent: str | None,
+) -> None:
+    """Cluster near-duplicate approved claims and propose supersede/merge intents."""
+    from . import consolidate as cons
+
+    store = _load_store()
+    actor = agent or _whoami()
+    result = cons.consolidate(
+        store,
+        threshold=threshold,
+        mode=mode,
+        max_clusters=max_clusters,
+        dry_run=dry_run,
+        actor=actor,
+    )
+    if as_json:
+        _emit_json({
+            "clusters": [
+                {
+                    "survivor": c.survivor_id,
+                    "members": [
+                        {"claim_id": m.claim_id, "cosine": m.cosine}
+                        for m in c.members
+                    ],
+                    "cosine_min": c.cosine_min,
+                    "cosine_max": c.cosine_max,
+                }
+                for c in result.clusters
+            ],
+            "proposals": result.proposals,
+            "config": result.config_used,
+            "dry_run": result.dry_run,
+        })
+        return
+    if not result.clusters:
+        click.echo("no near-duplicate clusters found")
+        return
+    for i, c in enumerate(result.clusters, 1):
+        click.echo(
+            f"{i}. survivor={c.survivor_id}  "
+            f"members={len(c.members)}  "
+            f"cos=[{c.cosine_min:.4f}, {c.cosine_max:.4f}]"
+        )
+        for m in c.members:
+            click.echo(f"   <- {m.claim_id} (cos={m.cosine})")
+    if dry_run:
+        click.echo(f"\ndry run: {len(result.clusters)} cluster(s) detected")
+    else:
+        click.echo(
+            f"\n{len(result.proposals)} proposal(s) filed"
+        )
+
+
 # --- export / import ------------------------------------------------------
 
 

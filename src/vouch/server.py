@@ -928,6 +928,61 @@ def kb_propose_theme(
     return themes.propose_theme(store, cluster, proposed_by=actor)
 
 
+# --- consolidation --------------------------------------------------------
+
+
+@mcp.tool()
+def kb_consolidate(
+    *,
+    threshold: float | None = None,
+    mode: str | None = None,
+    max_clusters: int | None = None,
+    dry_run: bool = False,
+    agent: str | None = None,
+) -> dict[str, Any]:
+    """Cluster near-duplicate approved claims and propose supersede/merge intents.
+
+    Reuses embedding cosine similarity from dedup_scan. Each non-survivor
+    produces a pending proposal; nothing durable is written until a human
+    approves. dry_run=True returns clusters without proposing.
+
+    threshold: cosine similarity threshold (default 0.95 from config).
+    mode: "supersede" (default) or "merge". supersede proposes per-pair
+          supersede relations. merge proposes a single union claim per cluster.
+    max_clusters: bound a single pass (default 50 from config).
+    dry_run: if true, report what would be proposed without writing anything.
+    agent: actor name for audit trail.
+    """
+    from . import consolidate as cons
+    store = _store()
+    actor = agent or os.environ.get("VOUCH_AGENT", "unknown-agent")
+    result = cons.consolidate(
+        store,
+        threshold=threshold,
+        mode=mode,
+        max_clusters=max_clusters,
+        dry_run=dry_run,
+        actor=actor,
+    )
+    return {
+        "clusters": [
+            {
+                "survivor": c.survivor_id,
+                "members": [
+                    {"claim_id": m.claim_id, "cosine": m.cosine}
+                    for m in c.members
+                ],
+                "cosine_min": c.cosine_min,
+                "cosine_max": c.cosine_max,
+            }
+            for c in result.clusters
+        ],
+        "proposals": result.proposals,
+        "config": result.config_used,
+        "dry_run": result.dry_run,
+    }
+
+
 def _current_model_name() -> str:
     try:
         from .embeddings import get_embedder

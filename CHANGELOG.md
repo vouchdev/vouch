@@ -42,6 +42,15 @@ All notable changes to vouch are documented here. Format follows
   in sync as files change, and adds OpenClaw-style `size: XS` through
   `size: XL` labels based on non-doc changed lines. Maintainers can also run
   it manually to backfill labels on already-open PRs.
+- `vouch consolidate` — retroactive batch cleanup of near-duplicate approved
+  claims. clusters same-kind claims by embedding cosine similarity (reuses
+  `dedup.scan_all` vector machinery), picks a deterministic survivor per cluster
+  (highest confidence → most recent → lexicographic id), and emits supersede or
+  merge intents into the pending queue for human review. `--mode=supersede`
+  (default) proposes per-pair supersede relations; `--mode=merge` proposes a
+  single union claim per cluster. `--dry-run` reports clusters without writing
+  anything. configurable via `consolidate.threshold`, `consolidate.mode`,
+  `consolidate.max_clusters` in `config.yaml` (#308).
 - `vouch detect-themes` — cross-session pattern detection via deterministic
   entity co-occurrence scoring. `kb.detect_themes` is read-only (returns
   ranked clusters); `kb.propose_theme` routes synthesis pages through the

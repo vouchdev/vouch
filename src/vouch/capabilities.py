@@ -71,6 +71,7 @@ METHODS = [
     "kb.provenance_rebuild",
     "kb.detect_themes",
     "kb.propose_theme",
+    "kb.consolidate",
 ]
 
 
