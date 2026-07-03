@@ -6,6 +6,12 @@ All notable changes to vouch are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+- `docs/INSTALL_FOR_AGENTS.md` — a deterministic, agent-followable install and
+  verification checklist (detect the host, wire the mcp server, verify the `kb.*`
+  surface, smoke-test one propose → approve round trip). linked from `llms.txt`
+  under onboarding.
+
 ## [1.1.0] — 2026-07-03
 
 ### Added
