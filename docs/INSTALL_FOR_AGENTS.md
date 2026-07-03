@@ -76,11 +76,11 @@ this prints the json capabilities descriptor. assert on three fields:
 with `jq`:
 
 ```bash
-vouch capabilities | jq '{name, review_gated, has_propose: (.methods | index("kb.propose_claim") != null)}'
-# => { "name": "vouch", "review_gated": true, "has_propose": true }
+vouch capabilities | jq '{name, review_gated, has_methods: (["kb.propose_claim", "kb.approve", "kb.list_pending"] - .methods | length == 0)}'
+# => { "name": "vouch", "review_gated": true, "has_methods": true }
 ```
 
-if `.name` is not `"vouch"` or `.review_gated` is not `true`, you are not
+if `.name` is not `"vouch"` or `.review_gated` is not `true`, or `has_methods` is not `true`, you are not
 talking to a vouch server — stop.
 
 ## 4. point at (or create) a kb
