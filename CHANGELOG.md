@@ -119,6 +119,16 @@ All notable changes to vouch are documented here. Format follows
   successor (pages still require an explicit `new_id` — they have no
   successor pointer). Read-only throughout; still no writes, proposals, or
   audit events (#327).
+- `kb.timeline` / `vouch timeline <entity>` — a read-only chronological
+  trajectory of an entity's approved claims and relations (#313). orders them
+  along a time axis oldest-first: `--order effective` uses artifact `created_at`,
+  `--order decided` recovers approval time from the audit log. `--since` /
+  `--until` / `--types` / `--limit` filters; `--json` for the machine shape.
+  superseded/archived claims still appear, flagged by current status; relations
+  carry `status = null`; pending proposals never appear. pure read — no write
+  path is reachable from it. registered at all four surfaces (mcp/jsonl/
+  capabilities/cli) and attaches `_meta.vouch_salience` when a `session_id` is
+  passed.
 - auto-capture: claude code sessions are harvested via hooks and filed as a
   single pending session-summary proposal for human approval. a `PostToolUse`
   hook (`vouch capture observe`) appends compact tool-use observations to an

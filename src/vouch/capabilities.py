@@ -32,6 +32,7 @@ METHODS = [
     "kb.digest",
     "kb.search",
     "kb.neighbors",
+    "kb.timeline",
     "kb.context",
     "kb.synthesize",
     "kb.read_page",

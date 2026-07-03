@@ -198,6 +198,26 @@ def _h_neighbors(p: dict) -> dict:
     )
 
 
+def _h_timeline(p: dict) -> dict:
+    from .metrics import parse_since
+    from .timeline import build_timeline
+
+    store = _store()
+    cfg = _load_cfg(store)
+    session_id = p.get("session_id")
+    limit = p.get("limit")
+    result = build_timeline(
+        store,
+        p["entity_id"],
+        since=parse_since(p.get("since")),
+        until=parse_since(p.get("until")),
+        order=p.get("order", "effective"),
+        types=p.get("types"),
+        limit=int(limit) if limit is not None else None,
+    )
+    return salience_mod.attach_salience(result, store, session_id, cfg)
+
+
 def _h_context(p: dict) -> dict:
     store = _store()
     query = p["task"]
@@ -733,6 +753,7 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.digest": _h_digest,
     "kb.search": _h_search,
     "kb.neighbors": _h_neighbors,
+    "kb.timeline": _h_timeline,
     "kb.context": _h_context,
     "kb.synthesize": _h_synthesize,
     "kb.read_page": _h_read_page,
