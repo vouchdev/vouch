@@ -24,6 +24,7 @@ import yaml
 from . import __version__, bundle, health, volunteer_context
 from . import audit as audit_mod
 from . import capture as capture_mod
+from . import digest as digest_mod
 from . import install_adapter as install_mod
 from . import lifecycle as life
 from . import metrics as metrics_mod
@@ -656,6 +657,83 @@ def metrics(
     click.echo(
         f"  audit: {m.audit_events_in_window} events in window ({m.audit_events_total} total)"
     )
+
+
+# --- digest ---------------------------------------------------------------
+
+
+@cli.command()
+@click.option(
+    "--since",
+    default=digest_mod.DEFAULT_SINCE,
+    show_default=True,
+    help="Window: a duration like 7d / 12h / 2w, an ISO date like 2026-01-01, "
+    "or 'all' (same specs as `vouch metrics --since`).",
+)
+@click.option("--until", default=None, help="Upper bound for the window (same formats as --since).")
+@click.option(
+    "--stale-days",
+    default=digest_mod.DEFAULT_STALE_DAYS,
+    show_default=True,
+    type=int,
+    help="A claim un-confirmed for this many days counts as stale "
+    "(matches `vouch metrics` / `vouch lint --stale-days`).",
+)
+@click.option(
+    "--limit",
+    default=digest_mod.DEFAULT_LIMIT,
+    show_default=True,
+    type=int,
+    help="Cap each list at N rows (0 = show none).",
+)
+@click.option(
+    "--format",
+    "fmt",
+    type=click.Choice(["text", "json", "markdown"]),
+    default="text",
+    show_default=True,
+    help="Output format. `json` is the stable to_dict() schema.",
+)
+def digest(since: str | None, until: str | None, stale_days: int, limit: int, fmt: str) -> None:
+    """Read-only operator briefing: what needs review, what changed (#324).
+
+    \b
+    Folds four viewports over an existing .vouch/ into one glance:
+      • pending proposals awaiting review (oldest first)
+      • approvals / rejections in the window (from the audit log)
+      • active claims aged past the stale threshold
+      • citation-coverage movement over the window
+
+    \b
+    Examples:
+      vouch digest                    # last 7 days, human text
+      vouch digest --since 2w         # since two weeks ago
+      vouch digest --format markdown  # paste into a standup note
+      vouch digest --format json      # stable schema for a hook
+
+    Writes nothing — no proposals, no audit events, no files. The --json
+    shape is a documented, stable to_dict() schema.
+    """
+    store = _load_store()
+    try:
+        since_dt = metrics_mod.parse_since(since)
+        until_dt = metrics_mod.parse_since(until)
+        d = digest_mod.compute_digest(
+            store,
+            since=since_dt,
+            until=until_dt,
+            stale_after_days=stale_days,
+            limit=limit,
+        )
+    except metrics_mod.MetricsError as e:
+        raise click.ClickException(str(e)) from e
+
+    if fmt == "json":
+        _emit_json(d.to_dict())
+    elif fmt == "markdown":
+        click.echo(digest_mod.render_markdown(d), nl=False)
+    else:
+        click.echo(digest_mod.render_text(d), nl=False)
 
 
 # --- proposals ------------------------------------------------------------

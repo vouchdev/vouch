@@ -17,6 +17,15 @@ All notable changes to vouch are documented here. Format follows
   committed SVGs stay reproducible (#286).
 
 ### Added
+- `vouch digest` — a read-only operator briefing (#324). folds four viewports
+  over an existing `.vouch/` into one glance: pending proposals awaiting review
+  (oldest first), approvals/rejections in a `--since` window (from the
+  authoritative audit log), active claims aged past `--stale-days`, and
+  citation-coverage movement over the window. `--format text|json|markdown`;
+  the `json` shape is a stable `to_dict()` schema. read-only by construction —
+  it composes `metrics.compute` and `store` reads and writes nothing, so the
+  review gate is untouched. defaults to a 7-day window since a digest is
+  inherently "since last look".
 - auto-capture: claude code sessions are harvested via hooks and filed as a
   single pending session-summary proposal for human approval. a `PostToolUse`
   hook (`vouch capture observe`) appends compact tool-use observations to an
