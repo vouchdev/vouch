@@ -1523,6 +1523,38 @@ def new_cmd(
         return
     click.echo(pr.id)
 
+@cli.command(name="experts")
+@click.argument("topic")
+@click.option("--limit", default=10, show_default=True, type=int)
+@click.option("--min-claims", "min_claims", default=1, show_default=True, type=int)
+@click.option(
+    "--weight",
+    default="count",
+    show_default=True,
+    help="ranking weight: count | recency | citation (unknown falls back to count).",
+)
+@click.option("--json", "as_json", is_flag=True, help="emit the ranking as JSON.")
+def experts_cmd(
+    topic: str, limit: int, min_claims: int, weight: str, as_json: bool
+) -> None:
+    """Rank entities by evidence density on TOPIC (read-only)."""
+    from .experts import rank_experts
+
+    store = _load_store()
+    rows = rank_experts(store, topic, limit=limit, min_claims=min_claims, weight=weight)
+    if as_json:
+        _emit_json({"experts": rows})
+        return
+    if not rows:
+        click.echo("no experts found.")
+        return
+    for row in rows:
+        click.echo(
+            f"{row['name']} ({row['type']})  "
+            f"claims={row['claim_count']} citations={row['citation_count']} "
+            f"score={row['score']}"
+        )
+
 
 @cli.group(name="schema")
 def schema() -> None:

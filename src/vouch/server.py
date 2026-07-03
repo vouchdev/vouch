@@ -210,6 +210,23 @@ def _load_cfg(store: KBStore) -> dict[str, Any]:
 
 
 @mcp.tool()
+def kb_experts(
+    topic: str,
+    limit: int = 10,
+    min_claims: int = 1,
+    weight: str = "count",
+) -> dict[str, Any]:
+    """Rank entities by evidence density on a topic (read-only)."""
+    from .experts import rank_experts
+
+    return {
+        "experts": rank_experts(
+            _store(), topic, limit=limit, min_claims=min_claims, weight=weight
+        )
+    }
+
+
+@mcp.tool()
 def kb_neighbors(
     node_id: str,
     depth: int = 1,

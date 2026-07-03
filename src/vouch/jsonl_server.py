@@ -184,6 +184,20 @@ def _load_cfg(store: KBStore) -> dict:
     return loaded if isinstance(loaded, dict) else {}
 
 
+def _h_experts(p: dict) -> dict:
+    from .experts import rank_experts
+
+    return {
+        "experts": rank_experts(
+            _store(),
+            p["topic"],
+            limit=int(p.get("limit", 10)),
+            min_claims=int(p.get("min_claims", 1)),
+            weight=p.get("weight", "count"),
+        )
+    }
+
+
 def _h_neighbors(p: dict) -> dict:
     from .graph import find_neighbors
 
@@ -717,6 +731,7 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.digest": _h_digest,
     "kb.search": _h_search,
     "kb.neighbors": _h_neighbors,
+    "kb.experts": _h_experts,
     "kb.context": _h_context,
     "kb.synthesize": _h_synthesize,
     "kb.read_page": _h_read_page,
