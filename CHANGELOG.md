@@ -6,6 +6,19 @@ All notable changes to vouch are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+- `kb.triage_pending` — advisory triage scoring over the pending-review queue.
+  Scores each pending proposal on fit, citation quality, duplication risk, and
+  contradiction risk, then attaches a `_meta.vouch_triage` block
+  (`recommendation`, `score`, `signals`, `rationale`) to help a reviewer
+  prioritize a long `kb.list_pending`. Read-only and advisory only: it never
+  calls `kb.approve` / `kb.reject` and never moves a proposal out of pending —
+  a human still decides. Duplication and fit reuse the propose-time embedding
+  similarity path and degrade to a `difflib` heuristic when the `[embeddings]`
+  extra isn't installed. Opt-in via `triage.enabled: true` in `config.yaml`.
+  `vouch triage [proposal-id...]` mirrors it on the CLI with `--json` and
+  `--reverse` (#322).
+
 ## [1.2.1] — 2026-07-06
 
 ### Fixed
