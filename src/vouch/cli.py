@@ -784,6 +784,96 @@ def show(proposal_id: str) -> None:
     click.echo(yaml.safe_dump(pr.model_dump(mode="json"), sort_keys=False))
 
 
+@cli.command(name="read-claim")
+@click.argument("claim_id")
+def read_claim(claim_id: str) -> None:
+    """Read an approved claim by id."""
+    store = _load_store()
+    with _cli_errors():
+        claim = store.get_claim(claim_id)
+    click.echo(yaml.safe_dump(claim.model_dump(mode="json"), sort_keys=False))
+
+
+@cli.command(name="read-page")
+@click.argument("page_id")
+def read_page(page_id: str) -> None:
+    """Read an approved page by id."""
+    store = _load_store()
+    with _cli_errors():
+        page = store.get_page(page_id)
+    click.echo(yaml.safe_dump(page.model_dump(mode="json"), sort_keys=False))
+
+
+@cli.command(name="read-entity")
+@click.argument("entity_id")
+def read_entity(entity_id: str) -> None:
+    """Read an approved entity by id."""
+    store = _load_store()
+    with _cli_errors():
+        entity = store.get_entity(entity_id)
+    click.echo(yaml.safe_dump(entity.model_dump(mode="json"), sort_keys=False))
+
+
+@cli.command(name="read-relation")
+@click.argument("relation_id")
+def read_relation(relation_id: str) -> None:
+    """Read an approved relation by id."""
+    store = _load_store()
+    with _cli_errors():
+        relation = store.get_relation(relation_id)
+    click.echo(yaml.safe_dump(relation.model_dump(mode="json"), sort_keys=False))
+
+
+@cli.command(name="list-claims")
+def list_claims() -> None:
+    """List all approved claims."""
+    store = _load_store()
+    claims = store.list_claims()
+    if not claims:
+        click.echo("no claims found")
+        return
+    for claim in claims:
+        click.echo(f"{claim.id:50} {claim.text}")
+
+
+@cli.command(name="list-pages")
+def list_pages() -> None:
+    """List all approved pages."""
+    store = _load_store()
+    pages = store.list_pages()
+    if not pages:
+        click.echo("no pages found")
+        return
+    for page in pages:
+        click.echo(f"{page.id:50} {page.title}")
+
+
+@cli.command(name="list-entities")
+def list_entities() -> None:
+    """List all approved entities."""
+    store = _load_store()
+    entities = store.list_entities()
+    if not entities:
+        click.echo("no entities found")
+        return
+    for entity in entities:
+        click.echo(f"{entity.id:50} {entity.name} ({entity.type})")
+
+
+@cli.command(name="list-relations")
+def list_relations() -> None:
+    """List all approved relations."""
+    store = _load_store()
+    relations = store.list_relations()
+    if not relations:
+        click.echo("no relations found")
+        return
+    for relation in relations:
+        output = f"{relation.id:50} {relation.source} -> {relation.relation} -> "
+        output += relation.target
+        click.echo(output)
+
+
 @cli.command()
 @click.argument("proposal_ids", nargs=-1, required=True)
 @click.option("--reason", default=None)
