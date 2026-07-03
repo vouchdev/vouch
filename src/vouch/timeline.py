@@ -20,7 +20,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from .audit import read_events
-from .metrics import _APPROVE_RE
+from .metrics import APPROVE_RE
 from .models import Claim, Relation
 from .storage import KBStore
 
@@ -56,7 +56,7 @@ def _decided_map(store: KBStore) -> dict[str, datetime]:
     """
     out: dict[str, datetime] = {}
     for ev in read_events(store.kb_dir):
-        if _APPROVE_RE.match(ev.event) and len(ev.object_ids) >= 2:
+        if APPROVE_RE.match(ev.event) and len(ev.object_ids) >= 2:
             ts = _as_utc(ev.created_at)
             if ts is not None:
                 out[ev.object_ids[1]] = ts

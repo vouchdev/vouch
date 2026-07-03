@@ -60,7 +60,8 @@ DEFAULT_TOP_ACTORS = 5
 # (``proposal.claim.approve``), so we match on a regex rather than a literal
 # set — that way a new ProposalKind needs no change here.
 _CREATE_RE = re.compile(r"^proposal\.(?P<kind>[a-z]+)\.create$")
-_APPROVE_RE = re.compile(r"^proposal\.(?P<kind>[a-z]+)\.approve$")
+# public: timeline reuses this to recover approval time from the audit log.
+APPROVE_RE = re.compile(r"^proposal\.(?P<kind>[a-z]+)\.approve$")
 _REJECT_RE = re.compile(r"^proposal\.(?P<kind>[a-z]+)\.reject$")
 
 # Claim lifecycle verbs that count as "this actor touched the corpus" for the
@@ -383,7 +384,7 @@ def compute(
             proposed_counter[ev.actor] += 1
             continue
 
-        am = _APPROVE_RE.match(ev.event)
+        am = APPROVE_RE.match(ev.event)
         if am:
             approvals += 1
             approved_counter[ev.actor] += 1
