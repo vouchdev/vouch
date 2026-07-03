@@ -67,6 +67,19 @@ Claude Code install to point you at the next step (`vouch install-mcp
 claude-code`). Inspect it first if you'd like — it's [`install.sh`](install.sh)
 at the repo root.
 
+Or skip the install entirely and run the released container image
+([`ghcr.io/vouchdev/vouch`](https://github.com/vouchdev/vouch/pkgs/container/vouch)),
+bind-mounting the project root (the directory containing `.vouch/`) at
+`/data`:
+
+```bash
+# stdio MCP server (the canonical surface — note -i)
+docker run -i --rm -v "$PWD:/data" ghcr.io/vouchdev/vouch:latest
+
+# any CLI command
+docker run --rm -v "$PWD:/data" ghcr.io/vouchdev/vouch:latest status
+```
+
 ## Running the tests
 
 From a clone with the dev extras installed (`pip install -e '.[dev]'`):

@@ -67,6 +67,11 @@ All notable changes to vouch are documented here. Format follows
   #95 squash had reverted it to `vouch`, which PyPI rejects (the name belongs
   to an unrelated project, and the trusted publisher is registered for
   `vouch-kb`). The installed command is still `vouch`.
+- container image: every release now also pushes `ghcr.io/vouchdev/vouch`
+  (linux/amd64 + linux/arm64, tagged `X.Y.Z`, `X.Y`, and `latest`). The
+  entrypoint is the `vouch` CLI with the stdio MCP server as the default
+  command; bind-mount the project root at `/data`. Built from the new
+  repo-root `Dockerfile`; installs the `web` extra, leaves embeddings out.
 - the `[1.0.0]` section below was restored: a merge after the release folded
   its entries back under `[Unreleased]`, dropping the version header.
 
