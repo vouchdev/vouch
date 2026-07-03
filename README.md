@@ -237,7 +237,15 @@ vouch migrate [--check] [--dry-run]         # upgrade .vouch/ format safely
 
 vouch pending                               # list pending proposals
 vouch review [--limit N] [--type KIND]      # guided proposal review queue
-vouch show <proposal-id>
+vouch show <proposal-id>                    # show pending proposal details
+vouch read-claim <claim-id>                 # read an approved claim
+vouch read-page <page-id>                   # read an approved page
+vouch read-entity <entity-id>               # read an approved entity
+vouch read-relation <relation-id>           # read an approved relation
+vouch list-claims                           # list all approved claims
+vouch list-pages                            # list all approved pages
+vouch list-entities                         # list all approved entities
+vouch list-relations                        # list all approved relations
 vouch approve <proposal-id> [--reason ...]
 vouch reject <proposal-id> --reason "..."
 vouch expire [--apply] [--days N] [--json]   # GC stale pending proposals

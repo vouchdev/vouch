@@ -1,0 +1,15 @@
+id: 1f8ef21996a0f59eeb5174071f5293fc3b864defe928b9ce7879022a8230dbc8
+type: file
+locator: /tmp/decision-log-build/docs/q1-decisions.md
+title: Q1 2026 Decision log
+hash: 1f8ef21996a0f59eeb5174071f5293fc3b864defe928b9ce7879022a8230dbc8
+immutable: true
+scope:
+  visibility: project
+  project: null
+  agent: null
+byte_size: 305
+media_type: text/plain
+created_at: '2026-07-03T09:14:52.299176Z'
+metadata: {}
+tags: []

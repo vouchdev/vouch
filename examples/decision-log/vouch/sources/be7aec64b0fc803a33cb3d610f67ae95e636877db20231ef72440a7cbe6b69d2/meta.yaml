@@ -1,0 +1,17 @@
+id: be7aec64b0fc803a33cb3d610f67ae95e636877db20231ef72440a7cbe6b69d2
+type: message
+locator: vouch:init
+title: Vouch starter source
+hash: be7aec64b0fc803a33cb3d610f67ae95e636877db20231ef72440a7cbe6b69d2
+immutable: true
+scope:
+  visibility: project
+  project: null
+  agent: null
+byte_size: 243
+media_type: text/markdown
+created_at: '2026-07-03T09:14:52.098126Z'
+metadata: {}
+tags:
+- vouch
+- onboarding
