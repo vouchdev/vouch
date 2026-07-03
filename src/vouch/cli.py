@@ -1096,8 +1096,9 @@ def new_cmd(
     way any other proposal is).
     """
     store = _load_store()
-    registry = load_page_kind_registry(store)
-    page_kinds = registry.known()
+    with _cli_errors():
+        registry = load_page_kind_registry(store)
+        page_kinds = registry.known()
     entity_kinds = {e.value for e in EntityType}
 
     # Deterministic page/entity dispatch. Some names (``decision``, ``project``)
@@ -1160,7 +1161,8 @@ def new_cmd(
         raise click.BadParameter(f"page kind {kind!r} needs --title.")
     if body == "-":
         body = sys.stdin.read()
-    required, _schema, requires_citations = registry.resolve(kind)
+    with _cli_errors():
+        required, _schema, requires_citations = registry.resolve(kind)
     metadata = _parse_meta(fields)
     for field in required:
         if field in metadata:
