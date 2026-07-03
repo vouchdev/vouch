@@ -202,6 +202,39 @@ def kb_neighbors(
 
 
 @mcp.tool()
+def kb_timeline(
+    entity_id: str,
+    order: str = "effective",
+    since: str | None = None,
+    until: str | None = None,
+    types: list[str] | None = None,
+    limit: int | None = None,
+    session_id: str | None = None,
+) -> dict[str, Any]:
+    """Chronological trajectory of an entity's approved claims and relations.
+
+    ``order`` is ``effective`` (artifact ``created_at``) or ``decided`` (approval
+    time recovered from the audit log). Read-only; pending proposals never
+    appear. Attaches ``_meta.vouch_salience`` when a ``session_id`` is given.
+    """
+    from .metrics import parse_since
+    from .timeline import TimelineError, build_timeline
+
+    store = _store()
+    try:
+        result = build_timeline(
+            store, entity_id,
+            since=parse_since(since), until=parse_since(until),
+            order=order, types=types, limit=limit,
+        )
+    except ArtifactNotFoundError as e:
+        raise ValueError(str(e)) from e
+    except TimelineError as e:
+        raise ValueError(str(e)) from e
+    return salience_mod.attach_salience(result, store, session_id, _load_cfg(store))
+
+
+@mcp.tool()
 def kb_context(
     task: str,
     limit: int = 10,

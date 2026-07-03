@@ -35,6 +35,7 @@ from . import sessions as sess_mod
 from . import stats as stats_mod
 from . import sync as sync_mod
 from . import synthesize as synth
+from . import timeline as timeline_mod
 from . import trust as trust_mod
 from . import vault_sync as vault_sync_mod
 from . import verify as verify_mod
@@ -656,6 +657,87 @@ def metrics(
     click.echo(
         f"  audit: {m.audit_events_in_window} events in window ({m.audit_events_total} total)"
     )
+
+
+# --- timeline -------------------------------------------------------------
+
+
+@cli.command()
+@click.argument("entity_id")
+@click.option(
+    "--order",
+    type=click.Choice(["effective", "decided"]),
+    default="effective",
+    show_default=True,
+    help="Time axis: `effective` (artifact created_at) or `decided` (approval "
+    "time from the audit log).",
+)
+@click.option(
+    "--since", default=None, help="Lower bound (iso date/datetime or a duration like 30d)."
+)
+@click.option("--until", default=None, help="Upper bound (same formats as --since).")
+@click.option(
+    "--types",
+    default=None,
+    help="Comma-separated filter on claim type (fact,decision,…), relation type, "
+    "or the literal `claim` / `relation`.",
+)
+@click.option("--limit", default=None, type=int, help="Keep only the most recent N entries.")
+@click.option("--json", "as_json", is_flag=True, help="Emit the machine shape instead of a table.")
+def timeline(
+    entity_id: str,
+    order: str,
+    since: str | None,
+    until: str | None,
+    types: str | None,
+    limit: int | None,
+    as_json: bool,
+) -> None:
+    """Chronological trajectory of an entity's claims and relations (#313).
+
+    \b
+    Orders an entity's approved claims + relations along a time axis, oldest
+    first. Read-only — pending proposals never appear.
+
+    \b
+    Examples:
+      vouch timeline person:alice-example
+      vouch timeline repo:acme --order decided --since 2026-01-01
+      vouch timeline concept:auth --types decision,fact --json
+    """
+    store = _load_store()
+    type_list = [t.strip() for t in types.split(",")] if types else None
+    try:
+        result = timeline_mod.build_timeline(
+            store,
+            entity_id,
+            since=metrics_mod.parse_since(since),
+            until=metrics_mod.parse_since(until),
+            order=order,
+            types=type_list,
+            limit=limit,
+        )
+    except timeline_mod.TimelineError as e:
+        raise click.ClickException(str(e)) from e
+    except (ArtifactNotFoundError, KeyError) as e:
+        raise click.ClickException(f"entity not found: {entity_id}") from e
+
+    if as_json:
+        _emit_json(result)
+        return
+
+    ent = result["entity"]
+    click.echo(f"timeline: {ent['name']}  [{ent['type']}]  ({ent['id']})")
+    click.echo(f"  order={result['order']}  {result['count']} of {result['total']} entries")
+    click.echo("")
+    if not result["entries"]:
+        click.echo("  (no claims or relations for this entity in range)")
+        return
+    for entry in result["entries"]:
+        when = (entry["when"] or "—")[:19]
+        status = f"  <{entry['status']}>" if entry["status"] else ""
+        click.echo(f"  {when}  {entry['kind']:<8} {entry['id']}{status}")
+        click.echo(f"    {entry['summary'][:100]}")
 
 
 # --- proposals ------------------------------------------------------------
