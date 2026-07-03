@@ -42,7 +42,7 @@ from .capabilities import capabilities as build_caps
 from .context import build_context_pack
 from .lifecycle import LifecycleError
 from .logging_config import configure_logging
-from .models import Proposal, ProposalKind, ProposalStatus
+from .models import EntityType, Proposal, ProposalKind, ProposalStatus
 from .onboarding import seed_starter_kb
 from .page_kinds import PageKindError, load_page_kind_registry
 from .proposals import (
@@ -1031,6 +1031,187 @@ def _parse_meta(pairs: tuple[str, ...]) -> dict[str, Any]:
         key, _, raw = pair.partition("=")
         out[key.strip()] = yaml.safe_load(raw)
     return out
+
+
+@cli.command(name="new")
+@click.argument("kind")
+@click.option("--title", default=None, help="page title (required for page kinds).")
+@click.option("--name", default=None, help="entity name (required for entity kinds).")
+@click.option(
+    "--entity",
+    "force_entity",
+    is_flag=True,
+    help="force the entity path for a name that is also a page kind.",
+)
+@click.option(
+    "--field",
+    "fields",
+    multiple=True,
+    help="pre-fill a frontmatter field as key=value (repeatable). "
+    "Value parsed as YAML, mirroring --meta on propose-page.",
+)
+@click.option("--body", default="", help="page body. Use `-` to read from stdin.")
+@click.option(
+    "-i",
+    "--interactive",
+    is_flag=True,
+    help="prompt for each unfilled required field (default off, so runs stay scriptable).",
+)
+@click.option(
+    "--dry-run",
+    "dry_run",
+    is_flag=True,
+    help="print the assembled draft and its missing required fields; create no proposal.",
+)
+@click.option(
+    "--json", "as_json", is_flag=True, help="emit the proposal id (or dry-run draft) as JSON."
+)
+@click.option("--claim", "claims", multiple=True, help="claim id to cite (page kinds).")
+@click.option("--source", "sources", multiple=True, help="source id to cite (page kinds).")
+@click.option("--alias", "aliases", multiple=True, help="entity alias (entity kinds).")
+@click.option("--description", default=None, help="entity description (entity kinds).")
+def new_cmd(
+    kind: str,
+    title: str | None,
+    name: str | None,
+    force_entity: bool,
+    fields: tuple[str, ...],
+    body: str,
+    interactive: bool,
+    dry_run: bool,
+    as_json: bool,
+    claims: tuple[str, ...],
+    sources: tuple[str, ...],
+    aliases: tuple[str, ...],
+    description: str | None,
+) -> None:
+    """Scaffold a typed page or entity proposal from its registered shape.
+
+    Reads the page-kind registry (or ``EntityType``) for KIND, stubs every
+    required field, and files a *pending* proposal through the normal review
+    gate exactly as ``propose-page`` / ``propose-entity`` do. A human still
+    runs ``vouch approve <id>`` to land it; the scaffold never writes an
+    approved artifact and never weakens validation (``propose_page``
+    re-validates the kind, so an unfilled required field is flagged the same
+    way any other proposal is).
+    """
+    store = _load_store()
+    registry = load_page_kind_registry(store)
+    page_kinds = registry.known()
+    entity_kinds = {e.value for e in EntityType}
+
+    # Deterministic page/entity dispatch. Some names (``decision``, ``project``)
+    # are both a page kind and an EntityType member: a registered page kind
+    # scaffolds a page; ``--entity`` forces the entity path; a name that is only
+    # an EntityType scaffolds an entity; anything else fails with the known set.
+    if force_entity:
+        if kind not in entity_kinds:
+            raise click.BadParameter(
+                f"--entity given, but {kind!r} is not an entity type "
+                f"(known: {', '.join(sorted(entity_kinds))})."
+            )
+        target = "entity"
+    elif kind in page_kinds:
+        target = "page"
+    elif kind in entity_kinds:
+        target = "entity"
+    else:
+        raise click.BadParameter(
+            f"unknown kind {kind!r}. page kinds: {', '.join(sorted(page_kinds))}; "
+            f"entity types: {', '.join(sorted(entity_kinds))}."
+        )
+
+    if target == "entity":
+        if not name:
+            raise click.BadParameter(f"entity kind {kind!r} needs --name.")
+        if dry_run:
+            if as_json:
+                _emit_json(
+                    {
+                        "target": "entity",
+                        "kind": kind,
+                        "name": name,
+                        "aliases": list(aliases),
+                        "description": description,
+                    }
+                )
+            else:
+                click.echo(f"[dry-run] entity {kind}: name={name!r}")
+                if aliases:
+                    click.echo(f"  aliases: {', '.join(aliases)}")
+            return
+        with _cli_errors():
+            pr = propose_entity(
+                store,
+                name=name,
+                entity_type=kind,
+                aliases=list(aliases),
+                description=description,
+                proposed_by=_whoami(),
+            )
+        if as_json:
+            _emit_json({"id": pr.id})
+        else:
+            click.echo(pr.id)
+        return
+
+    # --- page path ---
+    if not title:
+        raise click.BadParameter(f"page kind {kind!r} needs --title.")
+    if body == "-":
+        body = sys.stdin.read()
+    required, _schema, requires_citations = registry.resolve(kind)
+    metadata = _parse_meta(fields)
+    for field in required:
+        if field in metadata:
+            continue
+        if interactive:
+            raw = click.prompt(field, default="", show_default=False)
+            metadata[field] = yaml.safe_load(raw) if raw != "" else ""
+        else:
+            metadata[field] = ""
+    missing = [f for f in required if metadata.get(f) in (None, "", [], {})]
+    cite_reminder = bool(requires_citations) and not (claims or sources)
+
+    if dry_run:
+        if as_json:
+            _emit_json(
+                {
+                    "target": "page",
+                    "kind": kind,
+                    "title": title,
+                    "frontmatter": metadata,
+                    "missing_required": missing,
+                    "citations_required": bool(requires_citations),
+                }
+            )
+        else:
+            click.echo(f"[dry-run] page {kind}: {title!r}")
+            for key, value in metadata.items():
+                click.echo(f"  {key}: {value!r}")
+            if missing:
+                click.echo(f"  missing required: {', '.join(missing)}")
+            if cite_reminder:
+                click.echo("  reminder: this kind requires citations - add --claim/--source.")
+        return
+
+    if cite_reminder:
+        click.echo("reminder: this kind requires citations - add --claim/--source.", err=True)
+    with _cli_errors():
+        pr = propose_page(
+            store,
+            title=title,
+            body=body,
+            page_type=kind,
+            claim_ids=list(claims),
+            source_ids=list(sources),
+            metadata=metadata,
+            proposed_by=_whoami(),
+        )
+    if as_json:
+        _emit_json({"id": pr.id})
+    else:
+        click.echo(pr.id)
 
 
 @cli.group(name="schema")
