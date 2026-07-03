@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from vouch.experts import rank_experts
+from vouch.jsonl_server import handle_request
 from vouch.models import Claim, ClaimStatus, Entity, EntityType
 from vouch.storage import KBStore
 
@@ -124,3 +125,27 @@ def test_deterministic_tie_break_on_entity_id(store: KBStore) -> None:
     ranked = rank_experts(store, "topic-x")
     tied = [r["entity_id"] for r in ranked if r["entity_id"] in {"a1", "a2"}]
     assert tied == ["a1", "a2"]  # equal score -> ascending entity_id
+
+
+def test_jsonl_experts_envelope_success(store: KBStore, monkeypatch) -> None:
+    # kb.experts over the JSONL contract: a well-formed request returns the
+    # {id, ok, result} envelope with the ranking under result["experts"].
+    _seed(store)
+    monkeypatch.chdir(store.root)
+    resp = handle_request(
+        {"id": "e1", "method": "kb.experts", "params": {"topic": "JWT"}}
+    )
+    assert resp["id"] == "e1"
+    assert resp["ok"] is True
+    names = [r["name"] for r in resp["result"]["experts"]]
+    assert "alice" in names
+
+
+def test_jsonl_experts_envelope_missing_topic_errors(store: KBStore, monkeypatch) -> None:
+    # A request missing the required `topic` param yields the failure envelope
+    # {id, ok: false, error} rather than raising out of the server.
+    monkeypatch.chdir(store.root)
+    resp = handle_request({"id": "e2", "method": "kb.experts", "params": {}})
+    assert resp["id"] == "e2"
+    assert resp["ok"] is False
+    assert resp["error"]["code"] == "missing_param"
