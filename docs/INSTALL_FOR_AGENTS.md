@@ -15,7 +15,10 @@ two rules before you start:
   hand-write a durable file under `.vouch/claims/`, `.vouch/pages/`, or any
   other approved location.
 - **everything is local.** only the current working directory's `.vouch/` and
-  your host's own config tree are touched. no network call is required.
+  your host's own config tree are touched. once vouch is installed, no network
+  call is required for these steps — the sole exception is the initial
+  `pipx install vouch-kb` fallback in step 1, which fetches the package over the
+  network.
 
 ## 1. confirm vouch is installed
 
