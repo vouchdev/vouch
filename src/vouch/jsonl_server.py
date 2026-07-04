@@ -38,6 +38,7 @@ from .capabilities import capabilities as build_caps
 from .context import build_context_pack
 from .logging_config import configure_logging
 from .models import ProposalStatus
+from .page_filters import filter_pages
 from .proposals import (
     EXPIRE_ACTOR,
     ProposalError,
@@ -235,8 +236,15 @@ def _h_read_relation(p: dict) -> dict:
     return _store().get_relation(p["relation_id"]).model_dump(mode="json")
 
 
-def _h_list_pages(_: dict) -> list[dict]:
-    return [p.model_dump(mode="json") for p in _store().list_pages()]
+def _h_list_pages(p: dict) -> list[dict]:
+    pages = filter_pages(
+        _store().list_pages(),
+        kind=p.get("type"),
+        equals=p.get("meta"),
+        before=p.get("meta_before"),
+        after=p.get("meta_after"),
+    )
+    return [pg.model_dump(mode="json") for pg in pages]
 
 
 def _h_list_claims(p: dict) -> list[dict]:

@@ -49,6 +49,7 @@ from .onboarding import (
     available_templates,
     seed_starter_kb,
 )
+from .page_filters import filter_pages, parse_kv
 from .page_kinds import PageKindError, load_page_kind_registry
 from .proposals import (
     EXPIRE_ACTOR,
@@ -679,6 +680,63 @@ def metrics(
     click.echo(
         f"  audit: {m.audit_events_in_window} events in window ({m.audit_events_total} total)"
     )
+
+
+# --- pages ------------------------------------------------------------------
+
+
+@cli.command(name="pages")
+@click.option("--kind", default=None, help="Filter by page kind (built-in or config-declared).")
+@click.option(
+    "--meta", "meta", multiple=True, metavar="K=V",
+    help="Frontmatter equality filter (repeatable).",
+)
+@click.option(
+    "--before", multiple=True, metavar="K=V",
+    help="Inclusive upper bound on a frontmatter field (dates/numbers).",
+)
+@click.option(
+    "--after", multiple=True, metavar="K=V",
+    help="Inclusive lower bound on a frontmatter field (dates/numbers).",
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON instead of text.")
+def pages_cmd(
+    kind: str | None,
+    meta: tuple[str, ...],
+    before: tuple[str, ...],
+    after: tuple[str, ...],
+    as_json: bool,
+) -> None:
+    """List pages, optionally filtered by kind and frontmatter.
+
+    Examples: `vouch pages --kind followup --meta followup_status=open
+    --before due_at=2026-07-10` lists open followups due by july 10.
+    """
+    store = _load_store()
+    try:
+        equals, lo, hi = parse_kv(meta), parse_kv(after), parse_kv(before)
+    except ValueError as e:
+        raise click.UsageError(str(e)) from e
+    hits = filter_pages(
+        store.list_pages(), kind=kind, equals=equals, before=hi, after=lo,
+    )
+    if as_json:
+        _emit_json(
+            [
+                {
+                    "id": p.id, "title": p.title, "type": p.type,
+                    "tags": p.tags, "metadata": p.metadata,
+                }
+                for p in hits
+            ]
+        )
+        return
+    for p in hits:
+        extras = " ".join(f"{k}={v}" for k, v in sorted(p.metadata.items()))
+        suffix = f"  ({extras})" if extras else ""
+        click.echo(f"{p.id}  [{p.type}]  {p.title}{suffix}")
+    if not hits:
+        click.echo("no matching pages")
 
 
 # --- proposals ------------------------------------------------------------

@@ -29,6 +29,7 @@ from .capabilities import capabilities as build_caps
 from .context import build_context_pack
 from .logging_config import configure_logging
 from .models import ProposalStatus
+from .page_filters import filter_pages
 from .proposals import (
     EXPIRE_ACTOR,
     ProposalError,
@@ -284,10 +285,30 @@ def kb_read_relation(relation_id: str) -> dict[str, Any]:
 
 
 @mcp.tool()
-def kb_list_pages() -> list[dict[str, Any]]:
+def kb_list_pages(
+    *,
+    type: str | None = None,
+    meta: dict[str, str] | None = None,
+    meta_before: dict[str, str] | None = None,
+    meta_after: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
+    """List pages, optionally filtered by kind and frontmatter.
+
+    type: page kind (built-in or config-declared, e.g. "followup").
+    meta: frontmatter equality, e.g. {"followup_status": "open"}.
+    meta_before / meta_after: inclusive bounds — numbers or ISO dates,
+    e.g. meta_before={"due_at": "2026-07-10"} for followups due by then.
+    """
+    pages = filter_pages(
+        _store().list_pages(),
+        kind=type,
+        equals=meta,
+        before=meta_before,
+        after=meta_after,
+    )
     return [
-        {"id": p.id, "title": p.title, "type": p.type, "tags": p.tags}
-        for p in _store().list_pages()
+        {"id": p.id, "title": p.title, "type": p.type, "tags": p.tags, "metadata": p.metadata}
+        for p in pages
     ]
 
 
