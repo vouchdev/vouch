@@ -67,7 +67,10 @@ def test_filter_date_bounds_are_inclusive(followups: list[Page]) -> None:
 
 
 def test_filter_numeric_bounds() -> None:
-    pages = [_page(f"p{i}", kind="project-record", record_status="active", budget=i) for i in (5, 30, 200)]
+    pages = [
+        _page(f"p{i}", kind="project-record", record_status="active", budget=i)
+        for i in (5, 30, 200)
+    ]
     hits = filter_pages(pages, before={"budget": "30"})
     assert [p.id for p in hits] == ["p5", "p30"]
 
@@ -85,7 +88,9 @@ def _seed_store(root: Path, pages: list[Page]) -> KBStore:
     return store
 
 
-def test_jsonl_list_pages_filters(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, followups: list[Page]) -> None:
+def test_jsonl_list_pages_filters(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, followups: list[Page],
+) -> None:
     _seed_store(tmp_path, followups)
     monkeypatch.chdir(tmp_path)
 
@@ -102,7 +107,9 @@ def test_jsonl_list_pages_filters(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     assert len(rows) == 4
 
 
-def test_mcp_list_pages_filters(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, followups: list[Page]) -> None:
+def test_mcp_list_pages_filters(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, followups: list[Page],
+) -> None:
     _seed_store(tmp_path, followups)
     monkeypatch.chdir(tmp_path)
 
@@ -113,7 +120,9 @@ def test_mcp_list_pages_filters(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     assert all("metadata" in r for r in rows)
 
 
-def test_cli_pages_command(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, followups: list[Page]) -> None:
+def test_cli_pages_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, followups: list[Page],
+) -> None:
     _seed_store(tmp_path, followups)
     monkeypatch.chdir(tmp_path)
 

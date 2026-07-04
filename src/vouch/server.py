@@ -20,7 +20,9 @@ import yaml
 from mcp.server.fastmcp import FastMCP
 
 from . import audit, bundle, health, volunteer_context
+from . import digest as digest_mod
 from . import lifecycle as life
+from . import metrics as metrics_mod
 from . import salience as salience_mod
 from . import sessions as sess_mod
 from . import trust as trust_mod
@@ -91,6 +93,28 @@ def kb_stats(*, days: int = 30) -> dict[str, Any]:
     """
     since = None if days == 0 else days
     return collect_stats(_store(), since_days=since)
+
+
+@mcp.tool()
+def kb_digest(
+    *,
+    since: str = digest_mod.DEFAULT_SINCE_SPEC,
+    stale_days: int = metrics_mod.DEFAULT_STALE_DAYS,
+    limit: int = digest_mod.DEFAULT_LIMIT,
+) -> dict[str, Any]:
+    """Read-only reviewer briefing: pending proposals oldest-first, recent
+    decisions, stale claims, and followups due.
+
+    since: window spec — a duration ("7d", "12h"), an ISO date, or "all".
+    """
+    store = _store()
+    d = digest_mod.build(
+        store,
+        since=metrics_mod.parse_since(since),
+        stale_after_days=stale_days,
+        limit=limit,
+    )
+    return d.to_dict()
 
 
 # === read tools (unrestricted) ============================================

@@ -5,7 +5,7 @@
 # T3 = custom slash commands (`/vouch-recall`, `/vouch-status`,
 #      `/vouch-resolve-issue`, `/vouch-propose-from-pr`, plus the
 #      company-brain set: `/vouch-ask`, `/vouch-remember`, `/vouch-record`,
-#      `/vouch-followup`).
+#      `/vouch-followup`, `/vouch-standup`).
 # T4 = `.claude/settings.json`: SessionStart (kb status + capture review banner +
 #      recall digest of approved knowledge), PostToolUse (capture observe),
 #      SessionEnd (capture finalize), plus read-only kb_* auto-allow.
@@ -28,5 +28,6 @@ tiers:
     - { src: .claude/commands/vouch-remember.md, dst: .claude/commands/vouch-remember.md }
     - { src: .claude/commands/vouch-record.md, dst: .claude/commands/vouch-record.md }
     - { src: .claude/commands/vouch-followup.md, dst: .claude/commands/vouch-followup.md }
+    - { src: .claude/commands/vouch-standup.md, dst: .claude/commands/vouch-standup.md }
   T4:
     - { src: .claude/settings.json, dst: .claude/settings.json, json_merge: true }

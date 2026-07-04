@@ -24,6 +24,7 @@ import yaml
 from . import __version__, bundle, health, volunteer_context
 from . import audit as audit_mod
 from . import capture as capture_mod
+from . import digest as digest_mod
 from . import install_adapter as install_mod
 from . import lifecycle as life
 from . import metrics as metrics_mod
@@ -286,6 +287,53 @@ def stats(days: int, as_json: bool) -> None:
     )
     if cites["invalid_claim"] or cites["broken_citation"]:
         _echo(f"    invalid: {cites['invalid_claim']}, broken: {cites['broken_citation']}")
+
+
+@cli.command(name="digest")
+@click.option(
+    "--since",
+    default=digest_mod.DEFAULT_SINCE_SPEC,
+    show_default=True,
+    help="Window: a duration (7d, 12h), an ISO date, or 'all'.",
+)
+@click.option(
+    "--stale-days",
+    default=metrics_mod.DEFAULT_STALE_DAYS,
+    show_default=True,
+    type=int,
+    help="Freshness threshold for the stale-claims section.",
+)
+@click.option(
+    "--limit",
+    default=digest_mod.DEFAULT_LIMIT,
+    show_default=True,
+    type=int,
+    help="Cap per section (pending, decisions, stale, followups).",
+)
+@click.option(
+    "--format",
+    "fmt",
+    default="text",
+    show_default=True,
+    type=click.Choice(["text", "json", "markdown"]),
+)
+def digest_cmd(since: str, stale_days: int, limit: int, fmt: str) -> None:
+    """Read-only briefing: pending queue, recent decisions, stale claims,
+    followups due. Writes nothing — safe to run from cron."""
+    store = _load_store()
+    try:
+        since_dt = metrics_mod.parse_since(since)
+    except metrics_mod.MetricsError as e:
+        raise click.UsageError(str(e)) from e
+    d = digest_mod.build(
+        store, since=since_dt, stale_after_days=stale_days, limit=limit,
+    )
+    if fmt == "json":
+        _emit_json(d.to_dict())
+    elif fmt == "markdown":
+        click.echo(digest_mod.render_markdown(d))
+    else:
+        click.echo(digest_mod.render_text(d))
 
 
 def _findings_json(report) -> list[dict[str, Any]]:

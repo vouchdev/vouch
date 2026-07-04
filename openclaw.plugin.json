@@ -42,7 +42,8 @@
     "adapters/claude-code/.claude/commands/vouch-ask.md",
     "adapters/claude-code/.claude/commands/vouch-remember.md",
     "adapters/claude-code/.claude/commands/vouch-record.md",
-    "adapters/claude-code/.claude/commands/vouch-followup.md"
+    "adapters/claude-code/.claude/commands/vouch-followup.md",
+    "adapters/claude-code/.claude/commands/vouch-standup.md"
   ],
   "shared_deps": [
     "adapters/claude-code/CLAUDE.md.snippet",

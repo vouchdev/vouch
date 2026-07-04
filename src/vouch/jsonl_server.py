@@ -29,7 +29,9 @@ from typing import Any
 import yaml
 
 from . import audit, bundle, health, volunteer_context
+from . import digest as digest_mod
 from . import lifecycle as life
+from . import metrics as metrics_mod
 from . import salience as salience_mod
 from . import sessions as sess_mod
 from . import trust as trust_mod
@@ -94,6 +96,16 @@ def _h_stats(p: dict) -> dict:
     days = int(p.get("days", 30))
     since = None if days == 0 else days
     return collect_stats(_store(), since_days=since)
+
+
+def _h_digest(p: dict) -> dict:
+    d = digest_mod.build(
+        _store(),
+        since=metrics_mod.parse_since(str(p.get("since", digest_mod.DEFAULT_SINCE_SPEC))),
+        stale_after_days=int(p.get("stale_days", metrics_mod.DEFAULT_STALE_DAYS)),
+        limit=int(p.get("limit", digest_mod.DEFAULT_LIMIT)),
+    )
+    return d.to_dict()
 
 
 def _h_search(p: dict) -> dict:
@@ -685,6 +697,7 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.capabilities": _h_capabilities,
     "kb.status": _h_status,
     "kb.stats": _h_stats,
+    "kb.digest": _h_digest,
     "kb.search": _h_search,
     "kb.neighbors": _h_neighbors,
     "kb.context": _h_context,
