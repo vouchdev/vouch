@@ -693,6 +693,22 @@ def _h_propose_theme(p: dict) -> dict:
     return themes.propose_theme(store, cluster, proposed_by=actor)
 
 
+def _h_reconcile_backlinks(p: dict) -> dict:
+    result = life.reconcile_backlinks(
+        _store(),
+        rel_types=p.get("rel_types"),
+        limit=int(p.get("limit", 50)),
+        dry_run=bool(p.get("dry_run", False)),
+    )
+    return {
+        "checked": result.checked,
+        "proposed": [pr.id for pr in result.proposed],
+        "skipped_unmapped": result.skipped_unmapped,
+        "skipped_existing": result.skipped_existing,
+        "dry_run": result.dry_run,
+    }
+
+
 HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.capabilities": _h_capabilities,
     "kb.status": _h_status,
@@ -751,6 +767,7 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.provenance_rebuild": _h_provenance_rebuild,
     "kb.detect_themes": _h_detect_themes,
     "kb.propose_theme": _h_propose_theme,
+    "kb.reconcile_backlinks": _h_reconcile_backlinks,
 }
 
 

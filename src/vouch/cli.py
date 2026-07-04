@@ -2605,6 +2605,52 @@ def detect_themes_cmd(
         )
 
 
+# --- backlink reconciliation (#307) ----------------------------------------
+
+
+@cli.command("reconcile-backlinks")
+@click.option(
+    "--rel-types", default=None,
+    help="Comma-separated relation types to scan "
+         "(default: every type with a configured inverse).",
+)
+@click.option("--limit", default=50, show_default=True, type=int,
+              help="Max proposals to file in one run.")
+@click.option("--dry-run", is_flag=True, help="Report the would-propose set; write nothing.")
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON instead of text.")
+def reconcile_backlinks_cmd(
+    rel_types: str | None, limit: int, dry_run: bool, as_json: bool,
+) -> None:
+    """Propose missing reverse relations across the graph (#307)."""
+    types = [t.strip() for t in rel_types.split(",") if t.strip()] if rel_types else None
+    store = _load_store()
+    with _cli_errors():
+        result = life.reconcile_backlinks(
+            store, rel_types=types, limit=limit, dry_run=dry_run,
+        )
+    if as_json:
+        _emit_json({
+            "checked": result.checked,
+            "proposed": [p.id for p in result.proposed],
+            "skipped_unmapped": result.skipped_unmapped,
+            "skipped_existing": result.skipped_existing,
+            "dry_run": result.dry_run,
+        })
+        return
+    if not result.proposed:
+        click.echo("no missing backlinks found")
+        return
+    verb = "would propose" if dry_run else "proposed"
+    click.echo(f"{verb} {len(result.proposed)} backlink proposal(s)")
+    for pr in result.proposed:
+        click.echo(
+            f"  {pr.id}  {pr.payload['source']} "
+            f"--{pr.payload['relation']}--> {pr.payload['target']}"
+        )
+    if dry_run:
+        click.echo("rerun without --dry-run to file these proposals")
+
+
 # --- export / import ------------------------------------------------------
 
 
