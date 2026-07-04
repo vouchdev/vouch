@@ -1,9 +1,39 @@
 {
-  "id": "vouch",
-  "name": "Vouch",
-  "version": "1.0.0",
-  "description": "Git-native, review-gated knowledge base. Registers vouch's context engine (cited retrieval + salience reflex + hot memory) and the four vouch skills. The kb.* MCP server is deployment config: `openclaw mcp add vouch -- vouch serve`.",
-  "kind": "context-engine",
+  "name": "vouch",
+  "version": "1.1.0",
+  "description": "Git-native, review-gated knowledge base for LLM agents. MCP server + JSONL tool server + CLI.",
+  "family": "bundle-plugin",
+  "homepage": "https://github.com/vouchdev/vouch",
+  "configSchema": {
+    "kb_path": {
+      "type": "string",
+      "required": false,
+      "description": "Absolute path to the project root containing .vouch/. When unset, vouch walks up from cwd to find the nearest KB.",
+      "default": null
+    },
+    "agent": {
+      "type": "string",
+      "required": false,
+      "description": "Identity string recorded on every proposal + audit event when this plugin is the writer. Exported as VOUCH_AGENT to the child process.",
+      "default": "openclaw"
+    },
+    "transport": {
+      "type": "string",
+      "required": false,
+      "description": "MCP wire format. 'stdio' is the canonical surface; 'jsonl' is the AKBP-style newline-delimited fallback for harnesses that can't speak MCP.",
+      "default": "stdio",
+      "enum": ["stdio", "jsonl"]
+    }
+  },
+  "mcpServers": {
+    "vouch": {
+      "command": "vouch",
+      "args": ["serve"],
+      "env": {
+        "VOUCH_AGENT": "openclaw"
+      }
+    }
+  },
   "skills": [
     "adapters/openclaw/skills"
   ],

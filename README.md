@@ -11,6 +11,7 @@
   <a href="https://pypi.org/project/vouch-kb/"><img src="https://img.shields.io/pypi/v/vouch-kb.svg" alt="PyPI"></a>
   <a href="https://pypi.org/project/vouch-kb/"><img src="https://img.shields.io/pypi/pyversions/vouch-kb.svg" alt="Python versions"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/vouchdev/vouch.svg" alt="MIT licensed"></a>
+  <a href="https://x.com/vouch_dev"><img src="https://img.shields.io/badge/follow-%40vouch__dev-000000?logo=x&logoColor=white" alt="Follow @vouch_dev on X"></a>
 </p>
 
 > Agents should not start every session with amnesia — but they shouldn't get to write whatever they want either.
@@ -66,6 +67,19 @@ The one-liner is POSIX `sh`, never needs `sudo`, and detects an existing
 Claude Code install to point you at the next step (`vouch install-mcp
 claude-code`). Inspect it first if you'd like — it's [`install.sh`](install.sh)
 at the repo root.
+
+Or skip the install entirely and run the released container image
+([`ghcr.io/vouchdev/vouch`](https://github.com/vouchdev/vouch/pkgs/container/vouch)),
+bind-mounting the project root (the directory containing `.vouch/`) at
+`/data`:
+
+```bash
+# stdio MCP server (the canonical surface — note -i)
+docker run -i --rm -v "$PWD:/data" ghcr.io/vouchdev/vouch:latest
+
+# any CLI command
+docker run --rm -v "$PWD:/data" ghcr.io/vouchdev/vouch:latest status
+```
 
 ## Running the tests
 
