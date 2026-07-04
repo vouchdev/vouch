@@ -160,31 +160,54 @@ about this; it's checked in PR review.
 | Sessions | `src/vouch/sessions.py` |
 | Manifest-driven adapter writer | `src/vouch/install_adapter.py` |
 | Web review-ui (when PR #195 lands) | `src/vouch/web/` |
-| OpenClaw plugin manifest | `openclaw.plugin.json` (repo root) |
+| OpenClaw plugin manifest | `openclaw.plugin.json` + `package.json` (repo root) |
 | Claude Code / Cursor / etc. install templates | `adapters/<host>/` |
 
 Tests mirror module names (`tests/test_<module>.py`); the convention is
 strict.
 
-## The OpenClaw plugin manifest
+## The OpenClaw plugin packaging
 
-[`openclaw.plugin.json`](./openclaw.plugin.json) at the repo root makes the
-vouch repo loadable directly as an OpenClaw plugin: drop the repo into a
-deployment, and the loader picks up the MCP server, the four slash commands
-under `adapters/claude-code/.claude/commands/`, and the trust-boundary
-declaration. Touch it whenever you:
+Two files make the vouch repo loadable directly as an OpenClaw plugin
+(`openclaw plugins install --link <repo>`):
 
-* bump the package version (`version` field must stay in step with
-  `pyproject.toml`),
-* add or rename a slash command (sync the `skills` array),
-* add a new MCP method that's safe to expose to remote callers (consider
-  whether to list it under `contracts.mcpMethods`),
-* change the trust boundary (e.g. a new "must-be-confined" surface that
-  arrives with the HTTP transport).
+* [`openclaw.plugin.json`](./openclaw.plugin.json) — the manifest the
+  loader parses: `id` + `configSchema` (required), `kind: context-engine`,
+  `version`, and `skills` (directories under `adapters/openclaw/skills/`,
+  one SKILL.md each; OpenClaw publishes them as skills *and* slash
+  commands).
+* [`package.json`](./package.json) — loader-facing only: the
+  `openclaw.extensions` pointer at the JS entry module and the
+  `openclaw.compat.pluginApi` floor. The Python package stays in
+  `pyproject.toml`.
 
-Keep it small. Anything that would require a runtime decision (which kb to
-use, whose audit log to write to) belongs in the deployment's own config,
-not in the plugin manifest.
+Invariants, all enforced by `tests/test_openclaw_plugin_manifest.py`:
+
+* **One id everywhere.** The manifest `id`, the Python `ENGINE_ID`, and the
+  entry module's export id are all `vouch`. OpenClaw's installer auto-binds
+  `plugins.slots.contextEngine` to the *plugin* id and resolves that slot by
+  *engine* id — if they ever diverge, the engine is quarantined at resolve
+  time and OpenClaw silently falls back to its legacy engine.
+* **Version in three places.** `pyproject.toml`, `openclaw.plugin.json`,
+  and `package.json` must agree.
+* **Skills mirror the claude-code commands.** Each
+  `adapters/openclaw/skills/<name>/SKILL.md` body must match the
+  corresponding `adapters/claude-code/.claude/commands/<name>.md` body.
+* **No dead dialect fields.** `mcpServers`, `contracts`, `family`,
+  `shared_deps`, `openclaw.*` in the manifest are silently ignored by
+  current loaders — the sync test rejects them. The kb.* MCP server is
+  deployment config (`openclaw mcp add vouch -- vouch serve`); the trust
+  boundary lives in `adapters/openclaw/policy.json`.
+
+`tests/test_openclaw_plugin_load_real.py` is the live gate: with the
+`openclaw` CLI on PATH it links the repo into an isolated profile and
+asserts import, engine registration, slot auto-bind, skill publication,
+and a clean `plugins doctor`. It skips (does not fail) where the CLI is
+absent, e.g. GitHub CI.
+
+Keep the manifest small. Anything that would require a runtime decision
+(which kb to use, whose audit log to write to) belongs in the deployment's
+own config, not in the plugin packaging.
 
 ## When you add a new `kb.*` method
 

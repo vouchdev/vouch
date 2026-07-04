@@ -16,7 +16,7 @@ from contextlib import contextmanager
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import click
 import yaml
@@ -784,6 +784,96 @@ def show(proposal_id: str) -> None:
     click.echo(yaml.safe_dump(pr.model_dump(mode="json"), sort_keys=False))
 
 
+@cli.command(name="read-claim")
+@click.argument("claim_id")
+def read_claim(claim_id: str) -> None:
+    """Read an approved claim by id."""
+    store = _load_store()
+    with _cli_errors():
+        claim = store.get_claim(claim_id)
+    click.echo(yaml.safe_dump(claim.model_dump(mode="json"), sort_keys=False))
+
+
+@cli.command(name="read-page")
+@click.argument("page_id")
+def read_page(page_id: str) -> None:
+    """Read an approved page by id."""
+    store = _load_store()
+    with _cli_errors():
+        page = store.get_page(page_id)
+    click.echo(yaml.safe_dump(page.model_dump(mode="json"), sort_keys=False))
+
+
+@cli.command(name="read-entity")
+@click.argument("entity_id")
+def read_entity(entity_id: str) -> None:
+    """Read an approved entity by id."""
+    store = _load_store()
+    with _cli_errors():
+        entity = store.get_entity(entity_id)
+    click.echo(yaml.safe_dump(entity.model_dump(mode="json"), sort_keys=False))
+
+
+@cli.command(name="read-relation")
+@click.argument("relation_id")
+def read_relation(relation_id: str) -> None:
+    """Read an approved relation by id."""
+    store = _load_store()
+    with _cli_errors():
+        relation = store.get_relation(relation_id)
+    click.echo(yaml.safe_dump(relation.model_dump(mode="json"), sort_keys=False))
+
+
+@cli.command(name="list-claims")
+def list_claims() -> None:
+    """List all approved claims."""
+    store = _load_store()
+    claims = store.list_claims()
+    if not claims:
+        click.echo("no claims found")
+        return
+    for claim in claims:
+        click.echo(f"{claim.id:50} {claim.text}")
+
+
+@cli.command(name="list-pages")
+def list_pages() -> None:
+    """List all approved pages."""
+    store = _load_store()
+    pages = store.list_pages()
+    if not pages:
+        click.echo("no pages found")
+        return
+    for page in pages:
+        click.echo(f"{page.id:50} {page.title}")
+
+
+@cli.command(name="list-entities")
+def list_entities() -> None:
+    """List all approved entities."""
+    store = _load_store()
+    entities = store.list_entities()
+    if not entities:
+        click.echo("no entities found")
+        return
+    for entity in entities:
+        click.echo(f"{entity.id:50} {entity.name} ({entity.type})")
+
+
+@cli.command(name="list-relations")
+def list_relations() -> None:
+    """List all approved relations."""
+    store = _load_store()
+    relations = store.list_relations()
+    if not relations:
+        click.echo("no relations found")
+        return
+    for relation in relations:
+        output = f"{relation.id:50} {relation.source} -> {relation.relation} -> "
+        output += relation.target
+        click.echo(output)
+
+
 @cli.command()
 @click.argument("proposal_ids", nargs=-1, required=True)
 @click.option("--reason", default=None)
@@ -1018,8 +1108,8 @@ def propose_page_cmd(
     click.echo(pr.id)
 
 
-def _parse_meta(pairs: tuple[str, ...]) -> dict[str, Any]:
-    """Parse repeated ``--meta key=value`` pairs into a frontmatter dict.
+def _parse_meta(pairs: tuple[str, ...], *, flag: str = "--meta") -> dict[str, Any]:
+    """Parse repeated ``key=value`` pairs into a frontmatter dict.
 
     Values run through ``yaml.safe_load`` so ``attendees=[a, b]`` and
     ``count=3`` arrive as a list / int rather than strings.
@@ -1027,10 +1117,255 @@ def _parse_meta(pairs: tuple[str, ...]) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for pair in pairs:
         if "=" not in pair:
-            raise click.BadParameter(f"--meta expects key=value, got {pair!r}")
+            raise click.BadParameter(f"{flag} expects key=value, got {pair!r}")
         key, _, raw = pair.partition("=")
-        out[key.strip()] = yaml.safe_load(raw)
+        key = key.strip()
+        try:
+            out[key] = yaml.safe_load(raw)
+        except yaml.YAMLError as e:
+            raise click.BadParameter(
+                f"{flag} value for {key!r} is invalid YAML: {e}",
+            ) from e
     return out
+
+
+# Keep entity scaffolding intentionally narrow because `propose_entity` accepts
+# arbitrary type strings; only well-known EntityType names are routed here.
+_SCAFFOLD_ENTITY_TYPES: frozenset[str] = frozenset(
+    {"person", "project", "repo", "company", "concept", "decision", "workflow"}
+)
+
+_CITATION_REMINDER = (
+    "\n\n<!-- citations required: attach at least one claim or source "
+    "(--claim <id> / --source <id> on vouch new) -->\n"
+)
+
+
+def _field_missing(value: Any) -> bool:
+    return value is None or value == "" or value == [] or value == {}
+
+
+def _resolve_new_kind(
+    kind: str,
+    registry: Any,
+    *,
+    force_entity: bool,
+) -> tuple[Literal["page", "entity"], str]:
+    if force_entity:
+        if kind not in _SCAFFOLD_ENTITY_TYPES:
+            known = ", ".join(sorted(_SCAFFOLD_ENTITY_TYPES))
+            raise click.ClickException(f"unknown entity type {kind!r} (known: {known})")
+        return "entity", kind
+    if registry.is_known(kind):
+        return "page", kind
+    if kind in _SCAFFOLD_ENTITY_TYPES:
+        return "entity", kind
+    page_kinds = ", ".join(sorted(registry.known()))
+    entity_kinds = ", ".join(sorted(_SCAFFOLD_ENTITY_TYPES))
+    raise click.ClickException(
+        f"unknown kind {kind!r}; page kinds: {page_kinds}; entity kinds: {entity_kinds}"
+    )
+
+
+def _stub_page_frontmatter(
+    registry: Any,
+    kind: str,
+    prefilled: dict[str, Any],
+) -> tuple[dict[str, Any], list[str], bool]:
+    required, _schema, required_citations = registry.resolve(kind)
+    metadata = dict(prefilled)
+    for field in required:
+        metadata.setdefault(field, "")
+    missing = [f for f in required if _field_missing(metadata.get(f))]
+    return metadata, missing, required_citations
+
+
+def _prompt_missing_fields(
+    missing: list[str],
+    metadata: dict[str, Any],
+) -> list[str]:
+    still_missing: list[str] = []
+    for field in missing:
+        raw = click.prompt(field, default="", show_default=False)
+        if raw:
+            try:
+                metadata[field] = yaml.safe_load(raw)
+            except yaml.YAMLError as e:
+                raise click.BadParameter(
+                    f"interactive value for {field!r} is invalid YAML: {e}",
+                ) from e
+        else:
+            metadata[field] = ""
+        if _field_missing(metadata.get(field)):
+            still_missing.append(field)
+    return still_missing
+
+
+def _print_new_page_draft(draft: dict[str, Any]) -> None:
+    click.echo(f"kind: {draft['kind']} (page)")
+    click.echo(f"title: {draft['title']}")
+    fm = yaml.safe_dump(draft["frontmatter"], default_flow_style=True).strip()
+    click.echo(f"frontmatter: {fm}")
+    missing = draft["missing_required_fields"]
+    if missing:
+        click.echo(f"missing required fields: {', '.join(missing)}")
+    else:
+        click.echo("missing required fields: (none)")
+    if draft["citation_reminder"]:
+        click.echo("citations: required (reminder appended to body)")
+    if draft.get("body"):
+        click.echo(f"body:\n{draft['body']}")
+    if draft.get("id"):
+        click.echo(f"proposal id (dry-run): {draft['id']}")
+
+
+def _print_new_entity_draft(draft: dict[str, Any]) -> None:
+    click.echo(f"kind: {draft['kind']} (entity)")
+    click.echo(f"name: {draft['name']}")
+    if draft.get("id"):
+        click.echo(f"proposal id (dry-run): {draft['id']}")
+
+
+@cli.command(name="new")
+@click.argument("kind")
+@click.option("--title", default=None, help="Page title (required for page kinds).")
+@click.option("--name", default=None, help="Entity name (required for entity kinds).")
+@click.option(
+    "--field",
+    "fields",
+    multiple=True,
+    help="Pre-fill a frontmatter field as key=value (repeatable). Value parsed as YAML.",
+)
+@click.option("--interactive", "-i", is_flag=True, help="Prompt for unfilled required fields.")
+@click.option("--body", default="", help="Page body. Use `-` to read from stdin.")
+@click.option("--claim", "claims", multiple=True)
+@click.option("--source", "sources", multiple=True)
+@click.option("--entity", "force_entity", is_flag=True, help="Force entity scaffold path.")
+@click.option("--dry-run", is_flag=True, help="Print assembled draft without creating a proposal.")
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON.")
+def new_cmd(
+    kind: str,
+    title: str | None,
+    name: str | None,
+    fields: tuple[str, ...],
+    interactive: bool,
+    body: str,
+    claims: tuple[str, ...],
+    sources: tuple[str, ...],
+    force_entity: bool,
+    dry_run: bool,
+    as_json: bool,
+) -> None:
+    """Scaffold a typed page or entity proposal from the page-kind registry."""
+    store = _load_store()
+    registry = load_page_kind_registry(store)
+    target, resolved_kind = _resolve_new_kind(kind, registry, force_entity=force_entity)
+
+    if target == "entity":
+        if not name or not name.strip():
+            raise click.ClickException("--name is required for entity kinds")
+        draft: dict[str, Any] = {
+            "dry_run": dry_run,
+            "target": "entity",
+            "kind": resolved_kind,
+            "name": name.strip(),
+        }
+        if dry_run:
+            with _cli_errors():
+                pr = propose_entity(
+                    store,
+                    name=name,
+                    entity_type=resolved_kind,
+                    proposed_by=_whoami(),
+                    dry_run=True,
+                )
+            draft["id"] = pr.id
+            if as_json:
+                _emit_json(draft)
+            else:
+                _print_new_entity_draft(draft)
+            return
+        with _cli_errors():
+            pr = propose_entity(
+                store,
+                name=name,
+                entity_type=resolved_kind,
+                proposed_by=_whoami(),
+            )
+        if as_json:
+            _emit_json({"id": pr.id})
+            return
+        click.echo(pr.id)
+        return
+
+    if not title or not title.strip():
+        raise click.ClickException("--title is required for page kinds")
+    if body == "-":
+        body = sys.stdin.read()
+
+    metadata = _parse_meta(fields, flag="--field")
+    metadata, missing, requires_citations = _stub_page_frontmatter(
+        registry, resolved_kind, metadata,
+    )
+    if interactive and missing:
+        missing = _prompt_missing_fields(missing, metadata)
+
+    citation_reminder = requires_citations and not (claims or sources)
+    if citation_reminder and not dry_run:
+        raise click.ClickException(
+            "this page kind requires citations; pass --claim/--source, "
+            "or rerun with --dry-run to print a draft with the citation reminder"
+        )
+    if citation_reminder:
+        body = body + _CITATION_REMINDER
+
+    page_draft: dict[str, Any] = {
+        "dry_run": dry_run,
+        "target": "page",
+        "kind": resolved_kind,
+        "title": title.strip(),
+        "frontmatter": metadata,
+        "body": body,
+        "missing_required_fields": missing,
+        "citation_reminder": citation_reminder,
+    }
+
+    if dry_run:
+        if not missing and not (requires_citations and not (claims or sources)):
+            with _cli_errors():
+                pr = propose_page(
+                    store,
+                    title=title,
+                    body=body,
+                    page_type=resolved_kind,
+                    claim_ids=list(claims),
+                    source_ids=list(sources),
+                    metadata=metadata,
+                    proposed_by=_whoami(),
+                    dry_run=True,
+                )
+            page_draft["id"] = pr.id
+        if as_json:
+            _emit_json(page_draft)
+        else:
+            _print_new_page_draft(page_draft)
+        return
+
+    with _cli_errors():
+        pr = propose_page(
+            store,
+            title=title,
+            body=body,
+            page_type=resolved_kind,
+            claim_ids=list(claims),
+            source_ids=list(sources),
+            metadata=metadata,
+            proposed_by=_whoami(),
+        )
+    if as_json:
+        _emit_json({"id": pr.id})
+        return
+    click.echo(pr.id)
 
 
 @cli.group(name="schema")

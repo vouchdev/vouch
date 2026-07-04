@@ -29,6 +29,11 @@ All notable changes to vouch are documented here. Format follows
   strategy) instead of skipping it, so the capture / recall hooks land on
   projects that already have a settings file. idempotent; user entries are
   preserved.
+- `vouch new <kind>` — scaffold a typed page or entity proposal from the
+  page-kind registry: stubs required frontmatter fields, supports
+  `--field key=value`, `--interactive`, `--dry-run`, and `--json`; entity
+  kinds (`person`, `project`, …) route to `propose_entity`, with page kinds
+  taking precedence on name collisions unless `--entity` is set (#330).
 - GitHub PR auto-labeling: a pull-request metadata-only labeler workflow now
   applies vouch surface labels from `.github/labeler.yml`, keeps those labels
   in sync as files change, and adds OpenClaw-style `size: XS` through

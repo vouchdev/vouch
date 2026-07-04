@@ -35,32 +35,21 @@
     }
   },
   "skills": [
-    "adapters/claude-code/.claude/commands/vouch-recall.md",
-    "adapters/claude-code/.claude/commands/vouch-status.md",
-    "adapters/claude-code/.claude/commands/vouch-resolve-issue.md",
-    "adapters/claude-code/.claude/commands/vouch-propose-from-pr.md"
+    "adapters/openclaw/skills"
   ],
-  "shared_deps": [
-    "adapters/claude-code/CLAUDE.md.snippet",
-    "adapters/claude-code/install.yaml"
-  ],
-  "excluded_from_install": [],
-  "openclaw": {
-    "compat": {
-      "pluginApi": ">=2026.4.0"
-    },
-    "extensions": [
-      "./adapters/openclaw/vouch-context-engine.mjs"
-    ],
-    "trust_boundary": {
-      "remote_callers_filesystem": "confined",
-      "write_tools_review_gated": true,
-      "lifecycle_tools_audit_logged": true
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "kb_path": {
+        "type": "string",
+        "description": "Absolute path to the project root containing .vouch/. When unset, vouch walks up from the workspace directory to find the nearest KB."
+      },
+      "agent": {
+        "type": "string",
+        "default": "openclaw",
+        "description": "Identity string recorded on every proposal + audit event when this plugin is the writer. Exported as VOUCH_AGENT to the child process."
+      }
     }
-  },
-  "contracts": {
-    "reviewGatedKB": ["vouch-kb-0.1.0"],
-    "mcpMethods": ["kb.capabilities", "kb.status", "kb.search", "kb.context"],
-    "contextEngines": ["vouch-context"]
   }
 }
