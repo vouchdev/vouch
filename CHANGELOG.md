@@ -6,6 +6,19 @@ All notable changes to vouch are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+- `vouch reconcile-backlinks` (`kb.reconcile_backlinks`) — a read-then-propose
+  pass over the relation graph that finds edges whose expected reverse or
+  symmetric mirror is missing at the target and files one
+  `kb.propose_relation` per gap (#307). Which mirror to propose per
+  `RelationType` is configurable via `.vouch/config.yaml`'s
+  `backlinks.inverse_map` (defaults: `depends_on` ↔ `blocks`, and the
+  symmetric set `similar_to` / `relates_to` / `contradicts`); unmapped types
+  are skipped rather than guessed. Never writes an approved edge directly —
+  every gap lands as a pending proposal attributed to the fixed `reconcile`
+  actor, same as `vouch-extractor` for auto-extracted edges, requiring a
+  human `vouch approve`. Supports `--rel-types`, `--limit`, and `--dry-run`.
+
 ## [1.1.0] — 2026-07-03
 
 ### Added

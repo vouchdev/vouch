@@ -928,6 +928,35 @@ def kb_propose_theme(
     return themes.propose_theme(store, cluster, proposed_by=actor)
 
 
+@mcp.tool()
+def kb_reconcile_backlinks(
+    rel_types: list[str] | None = None,
+    limit: int = 50,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Propose missing reverse relations across the graph (#307).
+
+    Read-then-propose: scans existing relations for a configured mirror
+    that's missing at the target and files one `kb.propose_relation` per
+    gap. Never writes an approved edge directly — pending human approval
+    via `vouch approve <id>`, like any other proposal. `dry_run` reports
+    the would-propose set without writing anything.
+    """
+    try:
+        result = life.reconcile_backlinks(
+            _store(), rel_types=rel_types, limit=limit, dry_run=dry_run,
+        )
+    except (ArtifactNotFoundError, ValueError, ProposalError) as e:
+        raise ValueError(str(e)) from e
+    return {
+        "checked": result.checked,
+        "proposed": [p.id for p in result.proposed],
+        "skipped_unmapped": result.skipped_unmapped,
+        "skipped_existing": result.skipped_existing,
+        "dry_run": result.dry_run,
+    }
+
+
 def _current_model_name() -> str:
     try:
         from .embeddings import get_embedder
