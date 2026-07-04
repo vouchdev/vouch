@@ -142,6 +142,31 @@ def test_company_brain_registered_in_templates() -> None:
     assert "company-brain" in available_templates()
 
 
+def test_init_command_with_company_brain_template(tmp_path: Path) -> None:
+    result = CliRunner().invoke(
+        cli, ["init", "--path", str(tmp_path), "--template", "company-brain"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "company-brain" in result.output
+
+    store = KBStore(tmp_path)
+    registry = load_page_kind_registry(store)
+    assert registry.is_known("followup")
+    assert store.get_page(BRAIN_PAGE_ID).status.value == "active"
+    # the starter claim still seeds — templates add to the default, not replace
+    assert store.get_claim(STARTER_CLAIM_ID)
+
+
+def test_init_command_rejects_unknown_template(tmp_path: Path) -> None:
+    result = CliRunner().invoke(
+        cli, ["init", "--path", str(tmp_path), "--template", "bogus"]
+    )
+
+    assert result.exit_code != 0
+    assert "bogus" in result.output
+
+
 def test_init_command_can_run_twice(tmp_path: Path) -> None:
     runner = CliRunner()
 

@@ -43,7 +43,12 @@ from .context import build_context_pack
 from .lifecycle import LifecycleError
 from .logging_config import configure_logging
 from .models import Proposal, ProposalKind, ProposalStatus
-from .onboarding import seed_starter_kb
+from .onboarding import (
+    DEFAULT_TEMPLATE,
+    TEMPLATES,
+    available_templates,
+    seed_starter_kb,
+)
 from .page_kinds import PageKindError, load_page_kind_registry
 from .proposals import (
     EXPIRE_ACTOR,
@@ -148,12 +153,22 @@ def cli() -> None:
 
 @cli.command()
 @click.option("--path", default=".", type=click.Path(file_okay=False), show_default=True)
-def init(path: str) -> None:
+@click.option(
+    "--template",
+    default=DEFAULT_TEMPLATE,
+    show_default=True,
+    type=click.Choice(available_templates()),
+    help="Seed preset applied on top of the starter KB.",
+)
+def init(path: str, template: str) -> None:
     """Initialise a .vouch/ knowledge base at PATH."""
     root = Path(path).resolve()
     root.mkdir(parents=True, exist_ok=True)
     store = KBStore.init(root)
     seed = seed_starter_kb(store, approved_by=_whoami())
+    template_result = None
+    if template != DEFAULT_TEMPLATE:
+        template_result = TEMPLATES[template](store, approved_by=_whoami())
     health.rebuild_index(store)
     audit_mod.log_event(store.kb_dir, event="kb.init", actor=_whoami())
     click.echo(f"Initialised KB at {store.kb_dir}")
@@ -161,6 +176,14 @@ def init(path: str) -> None:
         click.echo(f"Seeded starter claim: {seed.claim_id}")
     else:
         click.echo("Starter claim already present.")
+    if template_result is not None:
+        if template_result.created_anything:
+            click.echo(
+                f"Applied template '{template_result.template}': "
+                f"{len(template_result.created)} item(s) created"
+            )
+        else:
+            click.echo(f"Template '{template_result.template}' already applied.")
     click.echo("Next steps:")
     click.echo("  vouch status")
     click.echo("  vouch search agent")
