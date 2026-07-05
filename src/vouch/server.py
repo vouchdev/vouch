@@ -20,6 +20,7 @@ import yaml
 from mcp.server.fastmcp import FastMCP
 
 from . import audit, bundle, health, volunteer_context
+from . import compile as compile_mod
 from . import lifecycle as life
 from . import salience as salience_mod
 from . import sessions as sess_mod
@@ -427,6 +428,29 @@ def kb_propose_page(
     except (ProposalError, ArtifactNotFoundError, ValueError) as e:
         raise ValueError(str(e)) from e
     return _proposal_response(pr, dry_run)
+
+
+@mcp.tool()
+def kb_compile(
+    max_pages: int | None = None,
+    dry_run: bool = False,
+    session_id: str | None = None,
+) -> dict[str, Any]:
+    """Compile live approved claims into topic-page proposals.
+
+    Runs the deployment-configured LLM (compile.llm_cmd in config.yaml),
+    validates every citation in the drafts, and files survivors as PENDING
+    page proposals by the wiki-compiler actor. Long-running (the LLM call is
+    synchronous); never approves.
+    """
+    try:
+        report = compile_mod.compile_kb(
+            _store(), triggered_by=_agent(),
+            max_pages=max_pages, dry_run=dry_run, session_id=session_id,
+        )
+    except compile_mod.CompileError as e:
+        raise ValueError(str(e)) from e
+    return report.to_dict()
 
 
 @mcp.tool()

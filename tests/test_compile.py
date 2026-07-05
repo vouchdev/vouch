@@ -350,6 +350,44 @@ def test_unicode_body_survives(store: KBStore, tmp_path: Path) -> None:
     assert pending[0].payload["body"] == body
 
 
+def test_jsonl_kb_compile_files_proposals(
+    store: KBStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """kb.compile over the JSONL wire — what vouch-ui calls — files pending
+    page proposals and returns the report envelope."""
+    from vouch.jsonl_server import handle_request
+
+    c1 = _approved_claim(store, "a wire-visible fact")
+    cmd = _stub_llm(tmp_path, [
+        {"title": "Wire Topic", "type": "concept",
+         "body": f"x [claim: {c1}]", "claims": [c1]},
+    ])
+    store.config_path.write_text(
+        store.config_path.read_text(encoding="utf-8")
+        + f"\ncompile:\n  llm_cmd: \"{cmd}\"\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(store.root)
+    resp = handle_request({"id": "r1", "method": "kb.compile", "params": {}})
+    assert resp["ok"]
+    assert resp["result"]["proposed"][0]["title"] == "Wire Topic"
+    assert store.list_pages() == []
+    pending = store.list_proposals(ProposalStatus.PENDING)
+    assert pending and pending[0].kind.value == "page"
+
+
+def test_jsonl_kb_compile_unconfigured_is_clean_error(
+    store: KBStore, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from vouch.jsonl_server import handle_request
+
+    _approved_claim(store, "a fact")
+    monkeypatch.chdir(store.root)
+    resp = handle_request({"id": "r2", "method": "kb.compile", "params": {}})
+    assert not resp["ok"]
+    assert "llm_cmd is not configured" in resp["error"]["message"]
+
+
 def test_compile_logs_attributed_audit_event(
     store: KBStore, tmp_path: Path,
 ) -> None:

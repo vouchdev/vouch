@@ -29,6 +29,7 @@ from typing import Any
 import yaml
 
 from . import audit, bundle, health, volunteer_context
+from . import compile as compile_mod
 from . import lifecycle as life
 from . import salience as salience_mod
 from . import sessions as sess_mod
@@ -344,6 +345,22 @@ def _h_propose_page(p: dict) -> dict:
         proposed_by=_agent(),
     )
     return {"proposal_id": pr.id, "status": pr.status.value, "kind": pr.kind.value}
+
+
+def _h_compile(p: dict) -> dict:
+    try:
+        report = compile_mod.compile_kb(
+            _store(), triggered_by=_agent(),
+            max_pages=p.get("max_pages"),
+            dry_run=bool(p.get("dry_run", False)),
+            session_id=p.get("session_id"),
+        )
+    except compile_mod.CompileError as e:
+        # config/LLM/output-shape failures are caller-visible conditions,
+        # not server faults — surface them on the ValueError path so the
+        # envelope carries a clean message instead of internal_error.
+        raise ValueError(str(e)) from e
+    return report.to_dict()
 
 
 def _h_propose_entity(p: dict) -> dict:
@@ -695,6 +712,7 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.register_source_from_path": _h_register_source_from_path,
     "kb.propose_claim": _h_propose_claim,
     "kb.propose_page": _h_propose_page,
+    "kb.compile": _h_compile,
     "kb.propose_entity": _h_propose_entity,
     "kb.propose_relation": _h_propose_relation,
     "kb.approve": _h_approve,
