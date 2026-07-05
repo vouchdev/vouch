@@ -6,6 +6,18 @@ All notable changes to vouch are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+- `vouch compile` — the llm-wiki ingest pass: a deployment-configured LLM
+  (`compile.llm_cmd` in `.vouch/config.yaml`) drafts topic pages from live
+  approved claims; every inline `[claim: …]` marker and `[[wikilink]]` is
+  verified mechanically against the store, and surviving drafts are filed as
+  PENDING page proposals by the `wiki-compiler` actor. never approves — the
+  review gate is the ingest review. `--dry-run`, `--max-pages`, `--llm-cmd`,
+  `--json`. see `docs/compile.md`.
+- review-ui: a **compile wiki** button on the queue (shown once
+  `compile.llm_cmd` is configured) runs the same ingest pass and lands the
+  drafts in the queue; success and per-draft drop counts surface as a notice.
+
 ## [1.1.0] — 2026-07-03
 
 ### Added
