@@ -18,9 +18,9 @@ Response envelope (failure):
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sys
-import traceback
 from collections.abc import Callable
 from contextvars import ContextVar
 from pathlib import Path
@@ -37,6 +37,8 @@ from . import verify as verify_mod
 from .capabilities import capabilities as build_caps
 from .context import build_context_pack
 from .logging_config import configure_logging
+
+_log = logging.getLogger("vouch.jsonl_server")
 from .models import ProposalStatus
 from .proposals import (
     EXPIRE_ACTOR,
@@ -761,12 +763,12 @@ def handle_request(envelope: dict) -> dict:
             "error": {"code": "invalid_request", "message": str(e)},
         }
     except Exception as e:
+        _log.exception("internal error handling %s", method)
         return {
             "id": req_id, "ok": False,
             "error": {
                 "code": "internal_error",
                 "message": str(e),
-                "traceback": traceback.format_exc(),
             },
         }
 
