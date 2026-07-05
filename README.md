@@ -23,6 +23,12 @@ Still alpha — surface is small on purpose; expect breaking changes pre-1.0.
 
 > **Built for Gittensor (SN74) miners.** Mining subnet 74 means landing merged PRs across a whitelist of repos that keeps shuffling — which means re-investigating each repo's codebase and merge bar every session your agent opens. vouch auto-captures what a session works out, you approve what's worth keeping, and the next session recalls it: less re-discovery, more merged PRs. → **[docs/gittensor.md](docs/gittensor.md)**
 
+## Watch it work (110 seconds)
+
+[![vouch demo — capture, summarize, approve, compile, recall](docs/img/how-it-works-poster.jpg)](docs/vouch-how-it-works.mp4)
+
+**[▶ docs/vouch-how-it-works.mp4](docs/vouch-how-it-works.mp4)** — captured live from the review console, no mockups: a Claude Code session auto-captures itself, one click has an LLM summarize what it meant, a human approves it at the gate, **`vouch compile`** distills the approved claims into cited topic pages (drafted by a real LLM, every `[claim: …]` citation machine-verified, still gated), and the film ends on the actual `vouch recall` digest — the knowledge the video just built, injected into the next session's first turn.
+
 ## Why this exists
 
 Four opinionated choices distinguish vouch from the neighbours:
