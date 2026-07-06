@@ -480,3 +480,46 @@ def test_installed_wheel_resolves_adapters(tmp_path: Path) -> None:
     assert "claude-code" in result["hosts"], (
         f"installed copy can't resolve adapters: {result}"
     )
+
+
+# --- codex: T2 AGENTS.md fenced snippet (vouchdev/vouch#385) ---------------
+
+
+def test_install_codex_t1_writes_config_toml(tmp_path: Path) -> None:
+    """T1 produces the project-local .codex/config.toml."""
+    result = install("codex", target=tmp_path, tier="T1")
+    assert (tmp_path / ".codex" / "config.toml").is_file()
+    assert not (tmp_path / "AGENTS.md").exists()
+    assert result.written and not result.appended
+
+
+def test_install_codex_t2_creates_agents_md(tmp_path: Path) -> None:
+    """T2 appends the fenced AGENTS.md snippet; creates file when absent."""
+    result = install("codex", target=tmp_path, tier="T2")
+    assert (tmp_path / ".codex" / "config.toml").is_file()
+    assert (tmp_path / "AGENTS.md").is_file()
+    assert "AGENTS.md" in result.written
+    content = (tmp_path / "AGENTS.md").read_text()
+    assert "<!-- BEGIN vouch -->" in content
+    assert "<!-- END vouch -->" in content
+    assert "VOUCH_AGENT=codex" in content
+
+
+def test_install_codex_t2_idempotent(tmp_path: Path) -> None:
+    """Re-running T2 leaves AGENTS.md unchanged — fence dedup."""
+    install("codex", target=tmp_path, tier="T2")
+    content_first = (tmp_path / "AGENTS.md").read_text()
+    again = install("codex", target=tmp_path, tier="T2")
+    content_again = (tmp_path / "AGENTS.md").read_text()
+    assert content_first == content_again
+    assert "AGENTS.md" not in again.appended
+
+
+def test_install_codex_t2_appends_to_existing_agents_md(tmp_path: Path) -> None:
+    """When AGENTS.md already exists without a fence, the snippet is appended."""
+    (tmp_path / "AGENTS.md").write_text("# Existing project notes\n")
+    result = install("codex", target=tmp_path, tier="T2")
+    assert "AGENTS.md" in result.appended
+    content = (tmp_path / "AGENTS.md").read_text()
+    assert content.startswith("# Existing project notes\n")
+    assert "<!-- BEGIN vouch -->" in content
