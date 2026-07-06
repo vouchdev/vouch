@@ -14,6 +14,10 @@ The writer is idempotent: files that already exist are left alone (the
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -90,9 +94,14 @@ def test_install_claude_code_t4_writes_all_tiers(tmp_path: Path) -> None:
     assert (cmd_dir / "vouch-status.md").is_file()
     assert (cmd_dir / "vouch-resolve-issue.md").is_file()
     assert (cmd_dir / "vouch-propose-from-pr.md").is_file()
+    assert (cmd_dir / "vouch-ask.md").is_file()
+    assert (cmd_dir / "vouch-remember.md").is_file()
+    assert (cmd_dir / "vouch-record.md").is_file()
+    assert (cmd_dir / "vouch-followup.md").is_file()
+    assert (cmd_dir / "vouch-standup.md").is_file()
     assert (tmp_path / ".claude" / "settings.json").is_file()
-    # T1 .mcp.json + T2 CLAUDE.md + 4 T3 commands + T4 settings = 7 files.
-    assert len(result.written) == 7, result.written
+    # T1 .mcp.json + T2 CLAUDE.md + 9 T3 commands + T4 settings = 12 files.
+    assert len(result.written) == 12, result.written
 
 
 def test_install_claude_code_is_idempotent(tmp_path: Path) -> None:
@@ -109,6 +118,11 @@ def test_install_claude_code_is_idempotent(tmp_path: Path) -> None:
         ".claude/commands/vouch-status.md",
         ".claude/commands/vouch-resolve-issue.md",
         ".claude/commands/vouch-propose-from-pr.md",
+        ".claude/commands/vouch-ask.md",
+        ".claude/commands/vouch-remember.md",
+        ".claude/commands/vouch-record.md",
+        ".claude/commands/vouch-followup.md",
+        ".claude/commands/vouch-standup.md",
         ".claude/settings.json",
     }
 
@@ -392,3 +406,77 @@ def test_cli_install_mcp_default_tier_is_t4(tmp_path: Path) -> None:
     assert (tmp_path / ".mcp.json").is_file()
     assert (tmp_path / "CLAUDE.md").is_file()
     assert (tmp_path / ".claude" / "settings.json").is_file()
+
+
+# --- packaging --------------------------------------------------------------
+
+
+def test_wheel_ships_adapters(tmp_path: Path) -> None:
+    """1.1.0 regression: wheels shipped without adapters/, so every pip/pipx
+    install failed ``vouch install-mcp <host>`` with ``(available: (none))``
+    — the templates only existed in source checkouts. The wheel build must
+    force-include them at ``vouch/adapters/``.
+    """
+    pytest.importorskip("hatchling")
+    proc = subprocess.run(
+        [sys.executable, "-m", "hatchling", "build", "-t", "wheel", "-d", str(tmp_path)],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert proc.returncode == 0, proc.stderr
+    wheels = sorted(tmp_path.glob("*.whl"))
+    assert wheels, proc.stdout
+    with zipfile.ZipFile(wheels[-1]) as zf:
+        names = zf.namelist()
+    assert any(
+        n.endswith("vouch/adapters/claude-code/install.yaml") for n in names
+    ), "adapter templates missing from the wheel"
+
+
+def test_installed_wheel_resolves_adapters(tmp_path: Path) -> None:
+    """Follow-up to the wheel-contents test, which was not enough: 1.1.0's
+    ADAPTERS_DIR pointed three parents above the package, so an installed
+    wheel could *contain* the templates yet still report
+    "(available: (none))". Import the wheel's own copy of the package (no
+    repo checkout in sight) and assert the resolver finds the packaged
+    templates.
+    """
+    pytest.importorskip("hatchling")
+    proc = subprocess.run(
+        [sys.executable, "-m", "hatchling", "build", "-t", "wheel", "-d", str(tmp_path)],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert proc.returncode == 0, proc.stderr
+    wheel = sorted(tmp_path.glob("*.whl"))[-1]
+    site = tmp_path / "site"
+    with zipfile.ZipFile(wheel) as zf:
+        zf.extractall(site)
+    env = dict(os.environ)
+    # The unpacked wheel must shadow the repo checkout; deps still resolve
+    # from the test venv further down sys.path.
+    env["PYTHONPATH"] = str(site)
+    probe = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import vouch.install_adapter as ia; import json, sys; "
+            "print(json.dumps({'file': ia.__file__, "
+            "'hosts': ia.available_adapters()}))",
+        ],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert probe.returncode == 0, probe.stderr
+    result = json.loads(probe.stdout)
+    assert str(site) in result["file"], result  # really the wheel's copy
+    assert "claude-code" in result["hosts"], (
+        f"installed copy can't resolve adapters: {result}"
+    )

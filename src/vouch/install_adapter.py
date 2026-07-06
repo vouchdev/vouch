@@ -35,10 +35,13 @@ from typing import Any
 
 import yaml
 
-# All adapters live next to the package, in ``<repo>/adapters/``. The writer
-# resolves the location from this file's path so it works equally for an
-# editable install, a wheel layout, and a sdist test environment.
-ADAPTERS_DIR = Path(__file__).resolve().parent.parent.parent / "adapters"
+# Adapters live at ``<repo>/adapters/`` in a checkout / editable install,
+# and are force-included into the wheel at ``vouch/adapters/`` (see
+# pyproject.toml) so pip/pipx installs ship them too. Prefer the repo copy
+# when present so dev edits win over a stale packaged copy.
+_REPO_ADAPTERS = Path(__file__).resolve().parent.parent.parent / "adapters"
+_PACKAGED_ADAPTERS = Path(__file__).resolve().parent / "adapters"
+ADAPTERS_DIR = _REPO_ADAPTERS if _REPO_ADAPTERS.is_dir() else _PACKAGED_ADAPTERS
 
 _TIER_ORDER: tuple[str, ...] = ("T1", "T2", "T3", "T4")
 _DEFAULT_FENCE_BEGIN = "<!-- BEGIN vouch -->"

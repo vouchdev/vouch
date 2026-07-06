@@ -1,0 +1,20 @@
+agents:
+  recommended_loop:
+  - kb.search before writing
+  - kb.propose_* with citations
+  - human review via vouch pending/show/approve
+capture:
+  enabled: true
+  min_observations: 3
+page_kinds: {}
+recall:
+  enabled: true
+  max_chars: 12000
+retrieval:
+  backend: auto
+  default_limit: 10
+review:
+  approver_role: trusted-agent
+  expire_pending_after_days: 90
+  require_human_approval: true
+version: 1

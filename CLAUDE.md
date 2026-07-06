@@ -188,8 +188,11 @@ Invariants, all enforced by `tests/test_openclaw_plugin_manifest.py`:
   `plugins.slots.contextEngine` to the *plugin* id and resolves that slot by
   *engine* id — if they ever diverge, the engine is quarantined at resolve
   time and OpenClaw silently falls back to its legacy engine.
-* **Version in three places.** `pyproject.toml`, `openclaw.plugin.json`,
-  and `package.json` must agree.
+* **Version in four places.** `pyproject.toml`, `openclaw.plugin.json`,
+  `package.json`, and `src/vouch/__init__.py` (`__version__`, what
+  `vouch --version` prints) must agree. 1.2.0 shipped self-reporting
+  1.1.0 because the fourth site wasn't checked; the manifest test now
+  ties all four.
 * **Skills mirror the claude-code commands.** Each
   `adapters/openclaw/skills/<name>/SKILL.md` body must match the
   corresponding `adapters/claude-code/.claude/commands/<name>.md` body.
@@ -239,7 +242,8 @@ dict-shaped result by a global wrapper, not per-tool.)
 
 Pre-release checklist (also in `CONTRIBUTING.md`):
 
-1. Bump `version = "X.Y.Z"` in `pyproject.toml`.
+1. Bump the version in all four sites: `pyproject.toml`,
+   `openclaw.plugin.json`, `package.json`, `src/vouch/__init__.py`.
 2. Move everything under `[Unreleased]` in `CHANGELOG.md` into a dated
    `[X.Y.Z]` section.
 3. `make check` green.

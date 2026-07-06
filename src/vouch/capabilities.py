@@ -18,6 +18,7 @@ METHODS = [
     "kb.capabilities",
     "kb.status",
     "kb.stats",
+    "kb.digest",
     "kb.search",
     "kb.neighbors",
     "kb.context",
@@ -71,6 +72,7 @@ METHODS = [
     "kb.provenance_rebuild",
     "kb.detect_themes",
     "kb.propose_theme",
+    "kb.compile",
 ]
 
 
