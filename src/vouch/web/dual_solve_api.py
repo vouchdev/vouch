@@ -68,9 +68,10 @@ def _serialize(job: DualSolveJob) -> dict[str, Any]:
         "candidates": [
             {"engine": c.engine, "branch": c.branch, "ok": c.ok,
              "error": c.error, "changed_files": ds.changed_files(c.diff),
-             "diff": c.diff}
+             "log": c.log, "diff": c.diff}
             for c in job.candidates
         ],
+        "recommendation": ds.recommendation(job.candidates),
         "proposed_ids": list(job.proposed_ids),
         "kept_branch": job.kept_branch,
         "changed_files": ds.changed_files(kept.diff) if kept is not None else [],
@@ -200,4 +201,5 @@ def register(
             "kept_branch": job.kept_branch,
             "proposed_ids": ids,
             "changed_files": ds.changed_files(chosen.diff) if chosen is not None else [],
+            "recommendation": ds.recommendation(job.candidates),
         }

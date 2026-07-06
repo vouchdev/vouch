@@ -37,6 +37,7 @@ __all__ = [
     "parse_issue_ref",
     "parse_summary",
     "prepare",
+    "recommendation",
     "record_to_kb",
     "repo_root",
     "run_candidate",
@@ -73,6 +74,7 @@ class Candidate:
     worktree: Path
     diff: str = ""
     sha: str = ""
+    log: str = ""
     ok: bool = False
     error: str | None = None
 
@@ -95,6 +97,53 @@ def changed_files(diff: str) -> list[str]:
         seen.add(path)
         files.append(path)
     return files
+
+
+def _diff_stats(candidate: Candidate) -> tuple[int, int]:
+    files = changed_files(candidate.diff)
+    return len(files), len(candidate.diff.splitlines())
+
+
+def recommendation(candidates: list[Candidate]) -> dict[str, str | None]:
+    """Return a deterministic reviewer hint for the two dual-solve candidates.
+
+    This is deliberately a scope heuristic, not an automated quality judgment:
+    successful candidates beat failed ones; then the smaller changed-file count
+    and smaller diff win. Ties stay unresolved for the human reviewer.
+    """
+    ok = [c for c in candidates if c.ok]
+    if not ok:
+        return {
+            "engine": None,
+            "reason": "neither engine produced a usable diff.",
+        }
+    if len(ok) == 1:
+        return {
+            "engine": ok[0].engine,
+            "reason": f"only {ok[0].engine} produced a usable diff.",
+        }
+
+    ranked = sorted(ok, key=_diff_stats)
+    best = ranked[0]
+    other = ranked[1]
+    best_files, best_lines = _diff_stats(best)
+    other_files, other_lines = _diff_stats(other)
+    if (best_files, best_lines) == (other_files, other_lines):
+        return {
+            "engine": None,
+            "reason": (
+                "both engines produced equally scoped diffs; "
+                "review the logs and tests before choosing."
+            ),
+        }
+    return {
+        "engine": best.engine,
+        "reason": (
+            f"{best.engine} has the smaller scoped diff "
+            f"({best_files} files, {best_lines} lines vs "
+            f"{other_files} files, {other_lines} lines)."
+        ),
+    }
 
 
 def parse_issue_ref(ref: str) -> tuple[str | None, str]:
@@ -209,7 +258,7 @@ def run_candidate(engine: Engine, issue: Issue, prompt: str, root: Path,
         return cand
 
     try:
-        engine.fix(cwd=str(worktree), prompt=prompt)
+        cand.log = engine.fix(cwd=str(worktree), prompt=prompt)
     except Exception as exc:
         cand.error = f"engine failed: {exc}"
         return cand

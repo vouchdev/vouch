@@ -40,8 +40,6 @@ from . import verify as verify_mod
 from .capabilities import capabilities as build_caps
 from .context import build_context_pack
 from .logging_config import configure_logging
-
-_log = logging.getLogger("vouch.jsonl_server")
 from .models import ProposalStatus
 from .page_filters import filter_pages
 from .proposals import (
@@ -64,6 +62,8 @@ from .storage import (
     discover_root,
 )
 from .synthesize import synthesize
+
+_log = logging.getLogger("vouch.jsonl_server")
 
 # Per-request actor override. The HTTP transport sets this from the
 # X-Vouch-Agent header so audit attribution is correct without mutating
