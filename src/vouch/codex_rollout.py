@@ -31,7 +31,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import capture
+from . import audit, capture
+from .models import Proposal, ProposalStatus
 from .proposals import propose_page
 from .storage import KBStore
 
@@ -297,12 +298,44 @@ def find_latest_rollout(cwd: Path, *, codex_home: Path | None = None) -> Path | 
     return best
 
 
-def find_existing_proposal(store: KBStore, session_id: str) -> str | None:
-    """Id of any proposal (any status) already filed for this session."""
+def find_existing_proposal(store: KBStore, session_id: str) -> Proposal | None:
+    """Any proposal (any status) already filed for this session."""
     for proposal in store.list_proposals(None):
         if proposal.session_id == session_id:
-            return proposal.id
+            return proposal
     return None
+
+
+def find_rollout_by_session_id(
+    session_id: str, *, codex_home: Path | None = None
+) -> Path | None:
+    """The rollout file for one session id — codex embeds the id in the
+    filename (``rollout-<stamp>-<uuid>.jsonl``), so no file needs opening.
+
+    The session id comes from a hook payload, so it's matched as a literal
+    filename suffix rather than interpolated into the glob pattern: a
+    payload carrying glob metacharacters (``*``, ``?``, ``[``) can't widen
+    the search or change its semantics.
+    """
+    sessions = (codex_home or default_codex_home()) / "sessions"
+    if not sessions.is_dir() or not session_id.strip():
+        return None
+    suffix = f"-{session_id}.jsonl"
+    best: Path | None = None
+    for path in sessions.rglob("rollout-*.jsonl"):
+        if not path.name.endswith(suffix):
+            continue
+        if best is None or path.name > best.name:
+            best = path
+    return best
+
+
+def _comparable_body(body: str) -> str:
+    """The summary body minus its generation timestamp, so re-ingesting an
+    unchanged rollout compares equal across runs."""
+    return "\n".join(
+        line for line in body.splitlines() if not line.startswith("- generated:")
+    )
 
 
 def ingest_rollout(
@@ -316,8 +349,12 @@ def ingest_rollout(
 
     Honours the same ``capture:`` config as live capture (``enabled``,
     ``min_observations``) so the two front doors gate identically, and
-    dedups on the rollout's session id: re-ingesting reports the existing
-    proposal instead of filing a second one.
+    dedups on the rollout's session id: at most one proposal per session,
+    ever. Because codex's Stop hook fires per *turn* rather than at session
+    end, re-ingesting a session that grew since the last ingest refreshes
+    the still-PENDING proposal in place (same id, updated summary) instead
+    of filing a duplicate; an unchanged rollout is a flat no-op, and a
+    decided proposal is history — it blocks re-ingest regardless.
     """
     cfg = capture.load_config(store)
     session = parse_rollout(path)
@@ -330,11 +367,11 @@ def ingest_rollout(
         }
 
     existing = find_existing_proposal(store, session.session_id)
-    if existing is not None:
+    if existing is not None and existing.status != ProposalStatus.PENDING:
         return {
             "session_id": session.session_id,
             "captured": len(session.observations),
-            "summary_proposal_id": existing,
+            "summary_proposal_id": existing.id,
             "skipped": "already-ingested",
         }
 
@@ -358,12 +395,42 @@ def ingest_rollout(
         generated_at=generated_at or session.started_at,
         first_prompt=session.first_prompt,
     )
+    resolved_actor = actor or os.environ.get("VOUCH_AGENT") or CODEX_ACTOR
+
+    if existing is not None:
+        if _comparable_body(body) == _comparable_body(
+            str(existing.payload.get("body", ""))
+        ):
+            return {
+                "session_id": session.session_id,
+                "captured": len(session.observations),
+                "summary_proposal_id": existing.id,
+                "skipped": "already-ingested",
+            }
+        refreshed = existing.model_copy(deep=True)
+        refreshed.payload["title"] = title.strip()
+        refreshed.payload["body"] = body
+        store.update_proposal(refreshed)
+        audit.log_event(
+            store.kb_dir,
+            event="proposal.page.update",
+            actor=resolved_actor,
+            object_ids=[existing.id],
+            data={"reason": "codex rollout re-ingest", "captured": len(session.observations)},
+        )
+        return {
+            "session_id": session.session_id,
+            "captured": len(session.observations),
+            "summary_proposal_id": existing.id,
+            "updated": True,
+        }
+
     proposal = propose_page(
         store,
         title=title,
         body=body,
         page_type=capture.CAPTURE_PAGE_TYPE,
-        proposed_by=actor or os.environ.get("VOUCH_AGENT") or CODEX_ACTOR,
+        proposed_by=resolved_actor,
         session_id=session.session_id,
         rationale="ingested codex session rollout",
     )
@@ -372,3 +439,37 @@ def ingest_rollout(
         "captured": len(session.observations),
         "summary_proposal_id": proposal.id,
     }
+
+
+def ingest_hook_payload(
+    store: KBStore | None,
+    payload: dict[str, Any],
+    *,
+    codex_home: Path | None = None,
+) -> dict[str, Any] | None:
+    """Handle one codex Stop-hook payload; never raises.
+
+    The hook wire (`vouch capture ingest-codex --hook`) must exit 0 even on
+    failure — a capture problem must never break the user's codex turn,
+    the same rule ``capture observe`` follows. Returns the ingest result,
+    or None when there was nothing safe to do.
+    """
+    try:
+        if store is None:
+            return None
+        session_id = str(payload.get("session_id") or "")
+        if not session_id:
+            return None
+        rollout: Path | None = None
+        transcript = payload.get("transcript_path")
+        if isinstance(transcript, str) and transcript.endswith(".jsonl"):
+            candidate = Path(transcript)
+            if candidate.is_file():
+                rollout = candidate
+        if rollout is None:
+            rollout = find_rollout_by_session_id(session_id, codex_home=codex_home)
+        if rollout is None:
+            return None
+        return ingest_rollout(store, rollout)
+    except Exception:
+        return None

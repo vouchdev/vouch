@@ -38,3 +38,14 @@ tiers:
     - { src: ../openclaw/skills/vouch-record/SKILL.md, dst: .codex/skills/vouch-record/SKILL.md }
     - { src: ../openclaw/skills/vouch-followup/SKILL.md, dst: .codex/skills/vouch-followup/SKILL.md }
     - { src: ../openclaw/skills/vouch-standup/SKILL.md, dst: .codex/skills/vouch-standup/SKILL.md }
+  # T4 = automatic session capture -- see issue #388. codex's hooks system
+  # fires Stop when a turn completes; the handler re-ingests the session's
+  # rollout idempotently (`vouch capture ingest-codex --hook` exits 0 even
+  # on failure, so capture can never break a codex turn), updating the
+  # session's single PENDING summary proposal as the session grows.
+  # hooks live in their own `.codex/hooks.json` file (project-local in
+  # trusted projects) and json_merge preserves any hooks the user already
+  # has. note: the legacy `notify` setting can't be used here -- codex only
+  # honours it in user-global config, which the #179 rule forbids touching.
+  T4:
+    - { src: hooks.json, dst: .codex/hooks.json, json_merge: true }

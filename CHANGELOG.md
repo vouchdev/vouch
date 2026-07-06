@@ -229,6 +229,12 @@ All notable changes to vouch are documented here. Format follows
   temporary copied home containing known Claude/Codex credential files, so agent
   writes stay in the throwaway dual-solve branches and host credential files are
   not modified.
+- dual-solve JSON, review-ui job, and choose responses now include
+  `changed_files` for each candidate and the kept branch, so desktop and browser
+  clients can show the resulting files without parsing unified diffs.
+- dual-solve JSON and review-ui job responses now include each engine's returned
+  output log plus a deterministic recommendation hint based on success and diff
+  scope, so clients can compare Claude and Codex results before choosing.
 - `vouch review-ui --allow-dual-solve` — a browser SPA that runs `dual-solve`
   on a github issue link, streams progress over the review-ui's websocket, shows
   both engines' diffs side by side, and lets you pick the winner. Off by default;
@@ -251,6 +257,7 @@ All notable changes to vouch are documented here. Format follows
   New `vouch schema list` and `vouch schema sync` commands inspect declared
   kinds and audit existing pages against them; `propose-page` gains `--kind`
   and repeatable `--meta key=value`.
+- `kb.capabilities` now reports a `host_compat` block mirroring the `openclaw.compat` constraints declared in `openclaw.plugin.json` (e.g. `pluginApi`), so non-OpenClaw clients can detect compat without parsing the manifest. A new test asserts the two stay in sync and fails CI on drift (#237).
 - `kb.synthesize` — answer-mode retrieval over the review-gated KB. Answers a
   query in prose from approved claims only, with an inline `[claim_id]`
   citation behind every sentence, an explicit `gaps` block listing query
@@ -291,6 +298,8 @@ All notable changes to vouch are documented here. Format follows
 - `vault_to_kb` skips filing a second proposal when a pending proposal already targets the same page id (with differing body), preventing duplicate proposals on repeated sync runs before approval (fixes #219).
 - `vault_to_kb` now warns when a user edits a claim stub instead of silently dropping the edit, directing the user to edit the citing page instead, and reports it via the dedicated `claim_stubs_edited` field on `VaultSyncResult` (fixes #219).
 - `approve()` now supports updating an existing page via `KBStore.update_page` when a PAGE proposal's id matches an existing artifact (the vault-edit flow), instead of raising `cannot approve: page already exists` for every vault edit (fixes #219).
+- `crystallize()` now updates an existing session summary page on retry instead of
+  failing with `page session-... already exists` after a partial approval run (#139).
 
 ### Fixed
 - `vouch serve` now fails fast with a clear `vouch init` hint when no `.vouch/` KB is present, instead of starting a server that immediately misbehaves (#95).
