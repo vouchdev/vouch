@@ -72,10 +72,27 @@ All notable changes to vouch are documented here. Format follows
   `compile.llm_cmd` is configured. page citations open the page drawer, and
   llm answers carry an `llm` badge next to the confidence grade.
 
+### Changed
+- ``kb.list_*`` JSONL/MCP responses now use a dict envelope
+  ``{"items": [...], "_meta": {...}}`` instead of a bare list. A one-release
+  deprecation note lives at ``_meta.deprecation``; read ``result.items`` instead
+  of treating ``result`` as the list. When the KB has recent approved claims,
+  ``_meta.vouch_hot_memory`` carries the same recency sidebar as other read
+  tools (#225).
+- ``kb.capabilities`` advertises the hot-memory contract under ``hot_memory``
+  (sidebar key, list-envelope flag, covered method list).
+
 ### Fixed
 - `vouch digest --limit` now caps the followups-due section like the
   pending, decisions, and stale sections — it previously returned every
   due followup regardless of the limit, contradicting the `--limit` help.
+- `kb.capabilities.host_compat` always reported `{}`: `_load_host_compat`
+  (#237) read `openclaw.compat` from `openclaw.plugin.json`, but that
+  manifest may not carry a top-level `openclaw` key at all (enforced by
+  `test_manifest_carries_no_dead_dialect_fields`) — `openclaw.compat.pluginApi`
+  has only ever lived in `package.json`. Repointed `_load_host_compat` (now
+  reading `_PACKAGE_JSON_PATH`) at `package.json`, where the value has been
+  present all along.
 
 - the dual-solve diff renderer dropped added/removed lines whose content
   starts with `++`/`--` (e.g. an added `++counter` line) by treating them as
@@ -133,16 +150,6 @@ All notable changes to vouch are documented here. Format follows
   an oversized (or newline-free blob) rollout whole into memory. the file is
   now bounded to 64 MiB up front, mirroring the byte caps on other untrusted
   reads.
-
-### Changed
-- ``kb.list_*`` JSONL/MCP responses now use a dict envelope
-  ``{"items": [...], "_meta": {...}}`` instead of a bare list. A one-release
-  deprecation note lives at ``_meta.deprecation``; read ``result.items`` instead
-  of treating ``result`` as the list. When the KB has recent approved claims,
-  ``_meta.vouch_hot_memory`` carries the same recency sidebar as other read
-  tools (#225).
-- ``kb.capabilities`` advertises the hot-memory contract under ``hot_memory``
-  (sidebar key, list-envelope flag, covered method list).
 
 ## [1.2.1] — 2026-07-06
 

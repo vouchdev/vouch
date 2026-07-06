@@ -507,7 +507,7 @@ class Capabilities(BaseModel):
         default_factory=dict,
         description=(
             "Per-host compatibility ranges (#237). Mirrors the "
-            "`openclaw.compat` block in openclaw.plugin.json so non-OpenClaw "
+            "`openclaw.compat` block in package.json so non-OpenClaw "
             "clients can detect compat without parsing the manifest, e.g. "
             '{"openclaw": {"pluginApi": ">=2026.4.0"}}.'
         ),
