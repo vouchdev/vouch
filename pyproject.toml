@@ -37,6 +37,9 @@ web = [
     # channel; without it the WebSocket handshake 500s at runtime.
     "websockets>=12,<16",
 ]
+# the hosted multi-tenant service lives in its own repo (vouchhub) and
+# depends on vouch-kb[web]; the multi-tenant seams it needs (mount-prefix
+# templates, jsonl request_context, build_app reviewer_name) ship here.
 dev = [
     "pytest>=9.0.3,<10",
     "pytest-benchmark>=5,<6",
@@ -113,3 +116,4 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = ["fastapi", "fastapi.*", "uvicorn", "uvicorn.*", "starlette", "starlette.*"]
 ignore_missing_imports = true
+

@@ -21,7 +21,8 @@ import json
 import os
 import sys
 import traceback
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
@@ -29,9 +30,11 @@ from typing import Any
 import yaml
 
 from . import audit, bundle, health, volunteer_context
+from . import capture as capture_mod
 from . import lifecycle as life
 from . import salience as salience_mod
 from . import sessions as sess_mod
+from . import summarize as summarize_mod
 from . import trust as trust_mod
 from . import verify as verify_mod
 from .capabilities import capabilities as build_caps
@@ -43,6 +46,7 @@ from .proposals import (
     ProposalError,
     approve,
     expire_pending,
+    merge_pending_pages,
     propose_claim,
     propose_entity,
     propose_page,
@@ -66,8 +70,36 @@ from .synthesize import synthesize
 # fall back to VOUCH_AGENT.
 _actor: ContextVar[str | None] = ContextVar("vouch_actor", default=None)
 
+# Per-request KB override. Multi-tenant hosts (vouchhub) bind each request
+# to one tenant's KB root; stdio/JSONL leave it unset and fall back to
+# discover_root() from cwd, exactly as before.
+_kb_root: ContextVar[Path | None] = ContextVar("vouch_kb_root", default=None)
+
+
+@contextmanager
+def request_context(
+    *, kb_root: Path | None = None, actor: str | None = None
+) -> Iterator[None]:
+    """Bind HANDLERS dispatch to one KB + actor for the current context.
+
+    The public seam for embedding the handler map in a multi-tenant host:
+    every handler resolves its store through _store(), so binding here
+    covers the whole method surface without threading a store parameter
+    through every signature.
+    """
+    root_token = _kb_root.set(kb_root)
+    actor_token = _actor.set(actor)
+    try:
+        yield
+    finally:
+        _kb_root.reset(root_token)
+        _actor.reset(actor_token)
+
 
 def _store() -> KBStore:
+    bound = _kb_root.get()
+    if bound is not None:
+        return KBStore(bound)
     try:
         return KBStore(discover_root())
     except KBNotFoundError as e:
@@ -273,6 +305,14 @@ def _h_list_pending(_: dict) -> list[dict]:
     ]
 
 
+def _h_list_sessions(_: dict) -> dict:
+    return {"sessions": capture_mod.list_sessions(_store())}
+
+
+def _h_summarize_session(p: dict) -> dict:
+    return summarize_mod.summarize_by_session(_store(), p["session_id"])
+
+
 def _h_register_source(p: dict) -> dict:
     s = _store()
     src = s.put_source(
@@ -382,6 +422,18 @@ def _h_approve(p: dict) -> dict:
 def _h_reject(p: dict) -> dict:
     reject(_store(), p["proposal_id"], rejected_by=_agent(), reason=p["reason"])
     return {"proposal_id": p["proposal_id"], "status": "rejected"}
+
+
+def _h_merge_pending(p: dict) -> dict:
+    merged = merge_pending_pages(
+        _store(), list(p["proposal_ids"]), merged_by=_agent(),
+        reason=p.get("reason"),
+    )
+    return {
+        "proposal_id": merged.id,
+        "merged_from": list(p["proposal_ids"]),
+        "status": "pending",
+    }
 
 
 def _h_reject_extracted(p: dict) -> dict:
@@ -691,6 +743,8 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.list_relations": _h_list_relations,
     "kb.list_sources": _h_list_sources,
     "kb.list_pending": _h_list_pending,
+    "kb.list_sessions": _h_list_sessions,
+    "kb.summarize_session": _h_summarize_session,
     "kb.register_source": _h_register_source,
     "kb.register_source_from_path": _h_register_source_from_path,
     "kb.propose_claim": _h_propose_claim,
@@ -700,6 +754,7 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.approve": _h_approve,
     "kb.reject": _h_reject,
     "kb.reject_extracted": _h_reject_extracted,
+    "kb.merge_pending": _h_merge_pending,
     "kb.expire": _h_expire,
     "kb.supersede": _h_supersede,
     "kb.contradict": _h_contradict,

@@ -190,7 +190,7 @@ def _seed(store: KBStore, sid: str, n: int) -> None:
         cap.observe(store, sid, tool="Edit", summary=f"Edited f{i}.py", now=float(i))
 
 
-def test_finalize_files_one_pending_page(store: KBStore, tmp_path: Path) -> None:
+def test_finalize_files_one_pending_claim(store: KBStore, tmp_path: Path) -> None:
     from vouch.models import ProposalKind, ProposalStatus
 
     _seed(store, "s1", 3)
@@ -201,10 +201,16 @@ def test_finalize_files_one_pending_page(store: KBStore, tmp_path: Path) -> None
     match = [p for p in pend if p.id == pid]
     assert len(match) == 1
     pr = match[0]
-    assert pr.kind == ProposalKind.PAGE
+    assert pr.kind == ProposalKind.CLAIM
     assert pr.proposed_by == cap.CAPTURE_ACTOR
-    assert pr.payload["type"] == cap.CAPTURE_PAGE_TYPE
+    assert pr.payload["type"] == cap.CAPTURE_CLAIM_TYPE
     assert pr.status == ProposalStatus.PENDING
+    # the mechanical record is registered as a transcript source and cited,
+    # so the "claims must cite sources" invariant holds for captures too
+    assert pr.payload["evidence"], "capture claim must cite its session source"
+    src = store.get_source(pr.payload["evidence"][0])
+    assert src.type.value == "transcript"
+    assert src.metadata.get("session_id") == "s1"
 
 
 def test_finalize_below_min_files_nothing(store: KBStore, tmp_path: Path) -> None:
@@ -244,6 +250,132 @@ def test_build_summary_body_has_sections() -> None:
     assert "a.py" in body
 
 
+def test_build_summary_body_title_names_edited_files() -> None:
+    obs = [
+        {"ts": 1.0, "tool": "Edit", "summary": "Edited base.css", "files": ["web/base.css"]},
+        {"ts": 2.0, "tool": "Edit", "summary": "Edited index.html", "files": ["web/index.html"]},
+        {"ts": 3.0, "tool": "Bash", "summary": "Ran: git status", "cmd": "git status"},
+    ]
+    title, _ = cap.build_summary_body(
+        "f6826c90-9931-4bcc-aac7-7b2d61f00b64", obs,
+        ["web/app.js", "web/app.css"], "", project="vouch",
+    )
+    assert "base.css" in title
+    assert "index.html" in title
+    assert "+2 more" in title
+    assert "f6826c90" in title
+    assert "f6826c90-9931" not in title
+
+
+def test_build_summary_body_title_falls_back_to_commands() -> None:
+    obs = [
+        {"ts": float(i), "tool": "Bash", "summary": f"Ran: c{i}", "cmd": c}
+        for i, c in enumerate(["git status", "git push", "pytest -q"])
+    ]
+    title, _ = cap.build_summary_body("s1", obs, [], "", project="vouch")
+    assert "ran 3 commands" in title
+    assert "git" in title
+
+
+def test_build_summary_body_title_read_only_session() -> None:
+    obs = [
+        {"ts": 1.0, "tool": "Read", "summary": "Read spec.md", "files": ["docs/spec.md"]},
+        {"ts": 2.0, "tool": "Read", "summary": "Read cli.py", "files": ["src/cli.py"]},
+    ]
+    title, _ = cap.build_summary_body("s1", obs, [], "")
+    assert "read spec.md, cli.py" in title
+
+
+def test_build_summary_body_leads_with_what_happened() -> None:
+    obs = [
+        {"ts": 1.0, "tool": "Edit", "summary": "Edited a.py", "files": ["a.py"]},
+        {"ts": 2.0, "tool": "Write", "summary": "Created b.py", "files": ["b.py"]},
+        {"ts": 3.0, "tool": "Read", "summary": "Read c.py", "files": ["c.py"]},
+        {"ts": 4.0, "tool": "Bash", "summary": "Ran: git status", "cmd": "git status"},
+        {"ts": 5.0, "tool": "Bash", "summary": "Ran: git push", "cmd": "git push"},
+    ]
+    _, body = cap.build_summary_body("s1", obs, [], "")
+    assert "## what happened" in body
+    assert body.index("## what happened") < body.index("## activity")
+    assert "edited 1 file: a.py" in body
+    assert "created 1 file: b.py" in body
+    assert "ran 2 commands (git x2)" in body
+    assert "read 1 file" in body
+
+
+def test_record_prompt_appends(store: KBStore) -> None:
+    assert cap.record_prompt(store, "s1", "make the titles readable", now=1.0)
+    obs = cap._read_observations(cap.buffer_path(store, "s1"))
+    assert obs == [{
+        "ts": 1.0, "tool": cap.PROMPT_TOOL,
+        "summary": "make the titles readable",
+        "prompt": "make the titles readable",
+    }]
+
+
+def test_record_prompt_skips_blank_and_disabled(store: KBStore) -> None:
+    assert not cap.record_prompt(store, "s1", "   \n  ")
+    cfg = cap.CaptureConfig(enabled=False)
+    assert not cap.record_prompt(store, "s1", "hello", config=cfg)
+    assert not cap.buffer_path(store, "s1").exists()
+
+
+def test_title_is_the_full_prompt_sentence() -> None:
+    # the old format cut this at ~64 chars with a mid-word "…"
+    prompt = "generate the post for vouch so that I can post the first poster to dev community"
+    obs = [
+        {"ts": 0.5, "tool": cap.PROMPT_TOOL, "summary": prompt, "prompt": prompt},
+        {"ts": 1.0, "tool": "Edit", "summary": "Edited a.py", "files": ["a.py"]},
+    ]
+    title, body = cap.build_summary_body("s1", obs, [], "", project="vouch")
+    assert title == f"session: {prompt}"
+    assert "…" not in title
+    assert "## prompt" in body
+    assert f"> {prompt}" in body
+
+
+def test_title_clips_walls_of_text_at_word_boundary() -> None:
+    prompt = "word " * 60  # 300 chars, no newline to fall back on
+    obs = [{"ts": 0.5, "tool": cap.PROMPT_TOOL, "summary": "w", "prompt": prompt}]
+    title, _ = cap.build_summary_body("s1", obs, [], "")
+    assert title.endswith("word…")
+    assert len(title) <= len("session: ") + 201
+
+
+def test_follow_up_prompts_listed_whole() -> None:
+    obs = [
+        {"ts": 0.5, "tool": cap.PROMPT_TOOL, "summary": "first", "prompt": "first ask"},
+        {"ts": 1.0, "tool": cap.PROMPT_TOOL, "summary": "second",
+         "prompt": "second ask with a full sentence that should not be cut"},
+        {"ts": 2.0, "tool": "Edit", "summary": "Edited a.py", "files": ["a.py"]},
+    ]
+    _, body = cap.build_summary_body("s1", obs, [], "")
+    assert "## follow-up prompts" in body
+    assert "- second ask with a full sentence that should not be cut" in body
+    # prompt records stay out of the activity section
+    assert "- prompt:" not in body
+
+
+def test_prompts_do_not_count_toward_min_observations(
+    store: KBStore, tmp_path: Path
+) -> None:
+    for i in range(5):
+        cap.record_prompt(store, "s1", f"chat message {i}", now=float(i))
+    result = cap.finalize(store, "s1", cwd=tmp_path)
+    assert result["summary_proposal_id"] is None
+    assert result["skipped"] == "below-min"
+
+
+def test_finalize_pins_stable_page_slug(store: KBStore, tmp_path: Path) -> None:
+    from vouch.models import ProposalStatus
+
+    _seed(store, "s1", 3)
+    result = cap.finalize(store, "s1", cwd=tmp_path)
+    pend = store.list_proposals(ProposalStatus.PENDING)
+    pr = next(p for p in pend if p.id == result["summary_proposal_id"])
+    assert pr.payload["id"] == "session-summary-workspace-s1"
+
+
 def test_pending_count_counts_capture_actor(store: KBStore, tmp_path: Path) -> None:
     _seed(store, "s1", 3)
     cap.finalize(store, "s1", cwd=tmp_path)
@@ -280,6 +412,23 @@ def test_cli_observe_appends(store: KBStore) -> None:
 
 def test_cli_observe_never_errors_on_garbage(store: KBStore) -> None:
     res = _run(store, ["capture", "observe"], stdin="not json")
+    assert res.exit_code == 0
+
+
+def test_cli_prompt_records_full_text(store: KBStore) -> None:
+    payload = _json.dumps({
+        "session_id": "cc-p",
+        "prompt": "run both vouch and vouch-ui\nthen prettify the review page",
+    })
+    res = _run(store, ["capture", "prompt"], stdin=payload)
+    assert res.exit_code == 0
+    obs = cap._read_observations(cap.buffer_path(store, "cc-p"))
+    assert obs[0]["tool"] == cap.PROMPT_TOOL
+    assert obs[0]["prompt"].endswith("prettify the review page")
+
+
+def test_cli_prompt_never_errors_on_garbage(store: KBStore) -> None:
+    res = _run(store, ["capture", "prompt"], stdin="not json")
     assert res.exit_code == 0
 
 
@@ -651,3 +800,41 @@ def test_capture_e2e_sessionstart_cleanup_then_finalize(tmp_path):
 
     # Total proposals: old + new
     assert len(pending_after) >= 2
+
+
+# --- list_sessions (review-surface feed) ------------------------------------
+
+
+def test_list_sessions_reports_both_stages(store: KBStore, tmp_path: Path) -> None:
+    # a still-open buffer (e.g. tab closed without SessionEnd)
+    cap.record_prompt(store, "open-sid", "investigate the locale bug", now=1.0)
+    _seed(store, "open-sid", 2)
+    # a finalized-but-unsummarized pending proposal
+    _seed(store, "done-sid", 3)
+    cap.finalize(store, "done-sid", cwd=tmp_path, allow_llm=False)
+
+    by_id = {s["session_id"]: s for s in cap.list_sessions(store)}
+    assert by_id["open-sid"]["stage"] == "buffer"
+    assert by_id["open-sid"]["summarized"] is False
+    assert by_id["open-sid"]["title"] == "investigate the locale bug"
+    assert by_id["open-sid"]["observations"] == 3
+    assert by_id["done-sid"]["stage"] == "pending"
+    assert by_id["done-sid"]["kind"] == "claim"
+    assert by_id["done-sid"]["summarized"] is False
+    assert by_id["done-sid"]["proposal_id"]
+
+
+def test_list_sessions_marks_summarized(store: KBStore, tmp_path: Path) -> None:
+    from vouch import summarize as summ
+
+    _seed(store, "s1", 3)
+    result = cap.finalize(store, "s1", cwd=tmp_path, allow_llm=False)
+    fake_llm = (
+        "python3 -c 'import sys; sys.stdin.read(); print(\"- narrative\")'"
+    )
+    cfg = summ.SummaryConfig(mode="manual", llm_cmd=fake_llm)
+    summ.summarize_pending(store, result["summary_proposal_id"], config=cfg)
+
+    (entry,) = cap.list_sessions(store)
+    assert entry["stage"] == "pending"
+    assert entry["summarized"] is True

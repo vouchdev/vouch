@@ -170,3 +170,76 @@ def test_crystallize_audit_event_records_summary_page_id(
     assert cryst_events, "no session.crystallize audit event found"
     last = cryst_events[-1]
     assert page_id in last["object_ids"], last["object_ids"]
+
+
+# --- start-from ------------------------------------------------------------
+
+
+def _captured_page(store: KBStore, title: str = "session: fix locale bug") -> str:
+    from vouch.proposals import propose_page
+
+    pr = propose_page(
+        store, title=title,
+        body="# session\n\n## what happened\n\n- edited storage.py\n",
+        page_type="session", proposed_by="vouch-capture", session_id="claude-1",
+    )
+    return pr.id
+
+
+def test_start_from_pending_proposal(store: KBStore) -> None:
+    pid = _captured_page(store)
+    ctx = sess_mod.build_start_context(store, pid)
+    assert ctx["ref"] == pid
+    assert ctx["title"] == "session: fix locale bug"
+    assert ctx["status"] == "pending proposal"
+    assert "edited storage.py" in ctx["seed"]
+    assert "starting a new session" in ctx["seed"]
+    # read-only: the proposal is untouched
+    assert store.get_proposal(pid).status.value == "pending"
+
+
+def test_start_from_approved_page(store: KBStore) -> None:
+    pid = _captured_page(store)
+    artifact = approve(store, pid, approved_by="u")
+    ctx = sess_mod.build_start_context(store, artifact.id)
+    assert ctx["status"] == "approved page"
+    assert "edited storage.py" in ctx["seed"]
+
+
+def test_start_from_claim_proposal(store: KBStore) -> None:
+    src = store.put_source(b"e")
+    pr = propose_claim(
+        store, text="# session: fix locale bug\n\n- edited storage.py\n",
+        evidence=[src.id], proposed_by="vouch-capture", claim_type="session",
+    )
+    ctx = sess_mod.build_start_context(store, pr.proposal.id)
+    assert ctx["status"] == "pending proposal"
+    assert ctx["title"] == "session: fix locale bug"
+    assert "edited storage.py" in ctx["seed"]
+
+
+def test_start_from_approved_claim(store: KBStore) -> None:
+    src = store.put_source(b"e")
+    pr = propose_claim(
+        store, text="# session: fix locale bug\n\n- edited storage.py\n",
+        evidence=[src.id], proposed_by="vouch-capture", claim_type="session",
+    )
+    artifact = approve(store, pr.proposal.id, approved_by="u")
+    ctx = sess_mod.build_start_context(store, artifact.id)
+    assert ctx["status"] == "approved claim"
+    assert "edited storage.py" in ctx["seed"]
+
+
+def test_start_from_rejects_non_seedable_refs(store: KBStore) -> None:
+    from vouch.proposals import propose_entity
+
+    pr = propose_entity(store, name="ruff", entity_type="tool", proposed_by="a")
+    with pytest.raises(ValueError, match="session summary claim or page"):
+        sess_mod.build_start_context(store, pr.id)
+
+
+def test_start_from_unknown_ref(store: KBStore) -> None:
+    from vouch.storage import ArtifactNotFoundError
+
+    with pytest.raises(ArtifactNotFoundError):
+        sess_mod.build_start_context(store, "nope")

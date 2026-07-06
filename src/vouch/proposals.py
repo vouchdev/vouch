@@ -572,6 +572,179 @@ def reject_auto_extracted(
     return [reject(store, p.id, rejected_by=rejected_by, reason=reason) for p in targets]
 
 
+def _demote_headings(md: str) -> str:
+    """Push every markdown heading one level down, skipping fenced code."""
+    out: list[str] = []
+    in_fence = False
+    for ln in md.splitlines():
+        if ln.lstrip().startswith("```"):
+            in_fence = not in_fence
+        if not in_fence and ln.startswith("#"):
+            out.append("#" + ln)
+        else:
+            out.append(ln)
+    return "\n".join(out)
+
+
+def merge_pending(
+    store: KBStore,
+    proposal_ids: list[str],
+    *,
+    merged_by: str,
+    reason: str | None = None,
+) -> Proposal:
+    """Merge two or more pending proposals of one kind into one proposal.
+
+    Pages merge into a combined page; claims (e.g. captured session
+    summaries) merge into a combined claim whose evidence is the union of
+    the originals'. The merge stays inside the review gate: it files a NEW
+    pending proposal carrying every source body (chronological, headings
+    demoted), then rejects the originals with an audited pointer to it.
+    Nothing is approved here — the merged proposal still needs a reviewer's
+    decision.
+    """
+    ids = list(dict.fromkeys(proposal_ids))
+    if len(ids) < 2:
+        raise ProposalError("merge needs at least two distinct pending proposals")
+    sources = [store.get_proposal(pid) for pid in ids]
+    for p in sources:
+        if p.status != ProposalStatus.PENDING:
+            raise ProposalError(f"proposal {p.id} is {p.status.value}, not pending")
+    kinds = {p.kind for p in sources}
+    if kinds == {ProposalKind.PAGE}:
+        return _merge_pending_pages(store, sources, merged_by=merged_by, reason=reason)
+    if kinds == {ProposalKind.CLAIM}:
+        return _merge_pending_claims(store, sources, merged_by=merged_by, reason=reason)
+    raise ProposalError(
+        "merge handles pending proposals of a single kind (page or claim), got: "
+        + ", ".join(sorted(k.value for k in kinds))
+    )
+
+
+# Back-compat alias — external callers predate claim merging.
+merge_pending_pages = merge_pending
+
+
+def _union_payload(sources: list[Proposal], key: str) -> list[str]:
+    seen: list[str] = []
+    for p in sources:
+        for v in p.payload.get(key) or []:
+            if v not in seen:
+                seen.append(v)
+    return seen
+
+
+def _merge_pending_pages(
+    store: KBStore,
+    sources: list[Proposal],
+    *,
+    merged_by: str,
+    reason: str | None,
+) -> Proposal:
+    page_types = {str(p.payload.get("type", "")) for p in sources}
+    if len(page_types) > 1:
+        raise ProposalError(
+            f"cannot merge pages of different types: {', '.join(sorted(page_types))}"
+        )
+    sources.sort(key=lambda p: _utc(p.proposed_at))
+
+    first_title = str(sources[0].payload.get("title", sources[0].id))
+    title = f"merged ({len(sources)}): {first_title}"
+    lines: list[str] = [f"# {title}", "", f"merged from {len(sources)} pending proposals:", ""]
+    for p in sources:
+        sid = p.session_id or "unknown-session"
+        lines.append(f"- {p.payload.get('title', p.id)} — proposal `{p.id}`, session `{sid}`")
+    for p in sources:
+        lines += ["", "---", "", _demote_headings(str(p.payload.get("body", "")))]
+    body = "\n".join(lines).rstrip() + "\n"
+
+    metadata: dict[str, Any] = {}
+    for p in sources:
+        meta = p.payload.get("metadata")
+        if isinstance(meta, dict):
+            metadata.update(meta)
+
+    merged = propose_page(
+        store,
+        title=title,
+        body=body,
+        page_type=page_types.pop(),
+        claim_ids=_union_payload(sources, "claims"),
+        entity_ids=_union_payload(sources, "entities"),
+        source_ids=_union_payload(sources, "sources"),
+        tags=_union_payload(sources, "tags"),
+        metadata=metadata,
+        proposed_by=merged_by,
+        rationale=reason or f"merged from {', '.join(p.id for p in sources)}",
+        slug_hint=_slugify(f"merged {len(sources)} {sources[0].payload.get('id', sources[0].id)}"),
+    )
+    _finish_merge(store, sources, merged, merged_by=merged_by, kind="page")
+    return merged
+
+
+def _merge_pending_claims(
+    store: KBStore,
+    sources: list[Proposal],
+    *,
+    merged_by: str,
+    reason: str | None,
+) -> Proposal:
+    sources.sort(key=lambda p: _utc(p.proposed_at))
+
+    first_text = str(sources[0].payload.get("text", ""))
+    gist = (
+        first_text.lstrip().splitlines()[0].lstrip("# ").strip()
+        if first_text.strip() else sources[0].id
+    )
+    title = f"merged ({len(sources)}): {gist}"
+    lines = [f"# {title}", "", f"merged from {len(sources)} pending proposals:", ""]
+    for p in sources:
+        sid = p.session_id or "unknown-session"
+        lines.append(f"- proposal `{p.id}`, session `{sid}`")
+    for p in sources:
+        lines += ["", "---", "", _demote_headings(str(p.payload.get("text", "")))]
+    text = "\n".join(lines).rstrip() + "\n"
+
+    claim_types = {str(p.payload.get("type", "")) for p in sources}
+    claim_type = claim_types.pop() if len(claim_types) == 1 else "observation"
+    confidence = min(float(p.payload.get("confidence", 0.7)) for p in sources)
+
+    merged = propose_claim(
+        store,
+        text=text,
+        evidence=_union_payload(sources, "evidence"),
+        proposed_by=merged_by,
+        claim_type=claim_type,
+        confidence=confidence,
+        entities=_union_payload(sources, "entities"),
+        tags=_union_payload(sources, "tags"),
+        rationale=reason or f"merged from {', '.join(p.id for p in sources)}",
+        slug_hint=_slugify(f"merged {len(sources)} {sources[0].payload.get('id', sources[0].id)}"),
+    ).proposal
+    _finish_merge(store, sources, merged, merged_by=merged_by, kind="claim")
+    return merged
+
+
+def _finish_merge(
+    store: KBStore,
+    sources: list[Proposal],
+    merged: Proposal,
+    *,
+    merged_by: str,
+    kind: str,
+) -> None:
+    for p in sources:
+        reject(
+            store, p.id, rejected_by=merged_by,
+            reason=f"merged into proposal {merged.id}",
+        )
+    audit.log_event(
+        store.kb_dir, event=f"proposal.{kind}.merge", actor=merged_by,
+        object_ids=[merged.id, *[p.id for p in sources]],
+        data={"merged_into": merged.id, "sources": [p.id for p in sources]},
+    )
+
+
 def expire_pending_after_days(store: KBStore, *, override: int | None = None) -> int:
     """Resolve GC threshold from config (`review.expire_pending_after_days`)."""
     if override is not None:

@@ -48,6 +48,10 @@ class ClaimType(StrEnum):
     OBSERVATION = "observation"
     QUESTION = "question"
     WARNING = "warning"
+    # An auto-captured session summary. Sessions are claims (not pages) so
+    # they flow through the same pending → approved → recallable lifecycle
+    # as every other unit of knowledge.
+    SESSION = "session"
 
 
 class ClaimStatus(StrEnum):

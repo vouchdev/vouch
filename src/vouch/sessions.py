@@ -14,9 +14,9 @@ from datetime import UTC, datetime
 
 from . import audit, index_db, volunteer_context
 from . import salience as salience_mod
-from .models import Page, PageType, ProposalStatus, Session
+from .models import Page, PageType, ProposalKind, ProposalStatus, Session
 from .proposals import approve
-from .storage import KBStore
+from .storage import ArtifactNotFoundError, KBStore
 
 logger = logging.getLogger(__name__)
 
@@ -132,6 +132,76 @@ def crystallize(
         "failures": failures,
         "summary_page_id": summary_page_id,
     }
+
+
+def build_start_context(store: KBStore, ref: str) -> dict[str, str]:
+    """Seed context for starting a new agent session from a previous one.
+
+    ``ref`` points at a session summary or claim: a *proposal* id (pending
+    or decided — captured summaries live here before review), an approved
+    *claim* id (captured sessions land as claims; any other approved claim
+    works as a seed too), or an approved *page* id (pre-claim captures).
+    Returns ``{ref, title, status, seed}`` where ``seed`` is a paste-ready
+    context block for a fresh agent session, e.g.::
+
+        claude "$(vouch session start-from <ref>)"
+
+    Read-only — nothing is written and no proposal status changes.
+    """
+    title = body = status = ""
+    try:
+        proposal = store.get_proposal(ref)
+    except ArtifactNotFoundError:
+        proposal = None
+    if proposal is not None:
+        if proposal.kind == ProposalKind.CLAIM:
+            body = str(proposal.payload.get("text") or "")
+            title = (
+                body.lstrip().splitlines()[0].lstrip("# ").strip()
+                if body.strip() else ref
+            )
+        elif proposal.kind == ProposalKind.PAGE:
+            title = str(proposal.payload.get("title") or ref)
+            body = str(proposal.payload.get("body") or "")
+        else:
+            raise ValueError(
+                f"{ref} is a {proposal.kind.value} proposal; "
+                "start-from needs a session summary claim or page"
+            )
+        status = f"{proposal.status.value} proposal"
+    else:
+        claim = page = None
+        try:
+            claim = store.get_claim(ref)
+        except ArtifactNotFoundError:
+            try:
+                page = store.get_page(ref)
+            except ArtifactNotFoundError as e:
+                raise ArtifactNotFoundError(
+                    f"no session summary found for {ref!r} "
+                    "(tried proposal, approved claim, and approved page ids)"
+                ) from e
+        if claim is not None:
+            body = claim.text
+            title = (
+                body.lstrip().splitlines()[0].lstrip("# ").strip() or ref
+            )
+            status = "approved claim"
+        else:
+            assert page is not None
+            title = page.title
+            body = page.body
+            status = "approved page"
+    seed = (
+        "you are starting a new session seeded from a previous session's "
+        f"summary (vouch {status} `{ref}`). continue where that session left "
+        "off: treat the record below as reviewed context, verify anything "
+        "that may have gone stale against the current repo state, and recall "
+        "more with kb_context or /vouch-recall before re-deriving.\n\n"
+        "---\n\n"
+        f"{body.strip()}\n"
+    )
+    return {"ref": ref, "title": title, "status": status, "seed": seed}
 
 
 def _build_summary_body(sess: Session, ids: list[str]) -> str:

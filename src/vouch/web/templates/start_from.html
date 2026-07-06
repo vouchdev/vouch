@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}start from {{ ctx.ref }} · vouch review{% endblock %}
+
+{% block content %}
+<article class="start-from">
+  <header class="section-head">
+    <h1>start from: {{ ctx.title }}</h1>
+    <a class="back" href="{{ root }}/">← queue</a>
+  </header>
+
+  <p class="hint">
+    paste this seed into a new agent session — or run
+    <code>claude "$(vouch session start-from {{ ctx.ref }})"</code>.
+    source: {{ ctx.status }} <code>{{ ctx.ref }}</code>. read-only; nothing
+    is approved by starting from it.
+  </p>
+
+  <textarea id="seed" class="seed" readonly rows="24"
+            aria-label="session seed context">{{ ctx.seed }}</textarea>
+  <button type="button" id="copy-seed" class="copy">copy seed</button>
+
+  <script>
+    document.getElementById("copy-seed").addEventListener("click", async () => {
+      const btn = document.getElementById("copy-seed");
+      await navigator.clipboard.writeText(document.getElementById("seed").value);
+      btn.textContent = "copied";
+      setTimeout(() => { btn.textContent = "copy seed"; }, 1500);
+    });
+  </script>
+</article>
+{% endblock %}

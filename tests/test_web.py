@@ -269,3 +269,70 @@ def test_cli_review_ui_refuses_non_localhost_bind_without_auth(tmp_path: Path) -
     assert result.exit_code != 0
     assert "--auth" in result.output
     assert "non-loopback" in result.output.lower()
+
+
+# --- merge + start-from ----------------------------------------------------
+
+
+def _seed_session_page(store: KBStore, n: int) -> str:
+    from vouch.proposals import propose_page
+
+    pr = propose_page(
+        store, title=f"session summary {n}",
+        body=f"# session {n}\n\n## what happened\n\n- edited file{n}.py\n",
+        page_type="session", proposed_by="vouch-capture",
+        session_id=f"claude-{n}",
+    )
+    return pr.id
+
+
+def test_merge_combines_pending_pages(client: TestClient, store: KBStore) -> None:
+    a, b = _seed_session_page(store, 1), _seed_session_page(store, 2)
+    r = client.post(
+        "/merge",
+        data={"proposal_ids": [a, b], "reason": "same work block"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    merged_id = r.headers["location"].rsplit("/", 1)[-1]
+    merged = store.get_proposal(merged_id)
+    assert merged.status == ProposalStatus.PENDING  # gate intact
+    assert "edited file1.py" in merged.payload["body"]
+    assert "edited file2.py" in merged.payload["body"]
+    assert store.get_proposal(a).status == ProposalStatus.REJECTED
+    assert store.get_proposal(b).status == ProposalStatus.REJECTED
+
+
+def test_merge_needs_two_proposals(client: TestClient, store: KBStore) -> None:
+    a = _seed_session_page(store, 1)
+    r = client.post("/merge", data={"proposal_ids": [a]}, follow_redirects=False)
+    assert r.status_code == 400
+
+
+def test_start_from_renders_seed(client: TestClient, store: KBStore) -> None:
+    pid = _seed_session_page(store, 1)
+    r = client.get(f"/start-from/{pid}")
+    assert r.status_code == 200
+    assert "edited file1.py" in r.text
+    assert "vouch session start-from" in r.text
+
+
+def test_start_from_unknown_404(client: TestClient) -> None:
+    assert client.get("/start-from/nope").status_code == 404
+
+
+def test_queue_offers_merge_for_page_proposals(client: TestClient, store: KBStore) -> None:
+    _seed_session_page(store, 1)
+    r = client.get("/")
+    assert r.status_code == 200
+    assert 'action="/merge"' in r.text
+    assert 'name="proposal_ids"' in r.text
+
+
+def test_claim_detail_links_start_from_for_session_pages(
+    client: TestClient, store: KBStore,
+) -> None:
+    pid = _seed_session_page(store, 1)
+    r = client.get(f"/claim/{pid}")
+    assert r.status_code == 200
+    assert f"/start-from/{pid}" in r.text

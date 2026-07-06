@@ -40,7 +40,7 @@ import os
 import secrets
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import (
     Depends,
@@ -59,6 +59,7 @@ from starlette.concurrency import run_in_threadpool
 from .. import audit as audit_mod
 from .. import lifecycle as life
 from .. import proposals as proposals_mod
+from .. import sessions as sessions_mod
 from ..models import Proposal, ProposalStatus
 from ..storage import ArtifactNotFoundError, KBStore, _yaml_load, discover_root
 from .dual_solve_api import register as _register_dual_solve
@@ -139,8 +140,11 @@ class _Hub:
 
 def _is_review_event(name: str) -> bool:
     """The audit log carries every mutation; the timeline only shows
-    review-gate decisions (approve / reject) and claim lifecycle moves."""
-    if name.startswith("proposal.") and name.endswith((".approve", ".reject")):
+    review-gate decisions (approve / reject / merge) and claim lifecycle
+    moves."""
+    if name.startswith("proposal.") and name.endswith(
+        (".approve", ".reject", ".merge")
+    ):
         return True
     return name in {"claim.supersede", "claim.contradict",
                     "claim.archive", "claim.confirm"}
@@ -274,12 +278,16 @@ def build_app(
     allow_dual_solve: bool = False,
     dual_solve_sandbox: bool = False,
     dual_solve_sandbox_image: str | None = None,
+    reviewer_name: str | None = None,
 ) -> FastAPI:
     """FastAPI app bound to a KB root.
 
     ``kb_root`` defaults to the nearest ``.vouch/`` discovered by walking up
     from ``cwd``. ``auth`` enables the Bearer gate; ``page_size`` controls
-    queue pagination.
+    queue pagination. ``reviewer_name`` pins audit attribution for decisions
+    made through this app — multi-tenant hosts (vouchhub) pass the
+    logged-in account so approvals are attributed to the human, not to a
+    shared label.
     """
     start = Path(kb_root).resolve() if kb_root else None
     # Resolve once at construction so every request hits the same store and a
@@ -297,9 +305,12 @@ def build_app(
     app.state.auth = auth
 
     def reviewer() -> str:
-        """Reviewer identity. With Bearer auth the token's label wins; without
-        it we fall back to the same env var the CLI uses, so audit-log
+        """Reviewer identity. An explicit reviewer_name (multi-tenant host)
+        wins; with Bearer auth the token's label wins; without either we
+        fall back to the same env var the CLI uses, so audit-log
         attribution stays consistent across surfaces."""
+        if reviewer_name:
+            return reviewer_name
         if auth.enabled:
             return auth.label
         return os.environ.get("VOUCH_AGENT", "web-reviewer")
@@ -357,6 +368,10 @@ def build_app(
         # browser authenticates via the HttpOnly cookie, not via JS).
         ctx.setdefault("auth_enabled", auth.enabled)
         ctx.setdefault("dual_solve_enabled", allow_dual_solve)
+        # Mount prefix for every absolute URL in the templates. Empty when
+        # served at the root (localhost review-ui); "/u/{user}/{kb}" when a
+        # multi-tenant host mounts this app under a tenant path.
+        ctx.setdefault("root", request.scope.get("root_path", ""))
         return templates.TemplateResponse(request, name, ctx)
 
     async def _notify(kind: str, **extra: Any) -> None:
@@ -486,8 +501,16 @@ def build_app(
     # the write; ``run_in_threadpool`` offloads them, which is what FastAPI
     # does for you automatically with sync route handlers.
 
+    def _rooted(request: Request, path: str) -> str:
+        # Redirect targets must respect the mount prefix (empty locally,
+        # "/u/{user}/{kb}" under vouchhub) or a post-decision redirect
+        # escapes the tenant app.
+        return request.scope.get("root_path", "") + path
+
     @app.post("/approve/{proposal_id}", dependencies=guarded)
-    async def approve(proposal_id: str, reason: str | None = Form(default=None)) -> Any:
+    async def approve(
+        request: Request, proposal_id: str, reason: str | None = Form(default=None),
+    ) -> Any:
         try:
             artifact = await run_in_threadpool(
                 proposals_mod.approve,
@@ -497,10 +520,12 @@ def build_app(
             raise HTTPException(status_code=400, detail=str(e)) from e
         await _notify("queue", action="approve", proposal_id=proposal_id,
                       artifact_id=getattr(artifact, "id", None))
-        return RedirectResponse(url="/", status_code=303)
+        return RedirectResponse(url=_rooted(request, "/"), status_code=303)
 
     @app.post("/reject/{proposal_id}", dependencies=guarded)
-    async def reject(proposal_id: str, reason: str = Form(...)) -> Any:
+    async def reject(
+        request: Request, proposal_id: str, reason: str = Form(...),
+    ) -> Any:
         if not reason.strip():
             raise HTTPException(status_code=400, detail="reason is required")
         try:
@@ -511,10 +536,46 @@ def build_app(
         except (proposals_mod.ProposalError, ArtifactNotFoundError) as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
         await _notify("queue", action="reject", proposal_id=proposal_id)
-        return RedirectResponse(url="/", status_code=303)
+        return RedirectResponse(url=_rooted(request, "/"), status_code=303)
+
+    @app.post("/merge", dependencies=guarded)
+    async def merge(
+        request: Request,
+        proposal_ids: Annotated[list[str], Form()],
+        reason: Annotated[str | None, Form()] = None,
+    ) -> Any:
+        """Merge the ticked pending page proposals into one combined pending
+        proposal (same code path as ``vouch merge-pending`` / kb.merge_pending);
+        the reviewer lands on the merged page to decide it."""
+        try:
+            merged = await run_in_threadpool(
+                proposals_mod.merge_pending_pages,
+                store, list(proposal_ids), merged_by=reviewer(), reason=reason,
+            )
+        except (proposals_mod.ProposalError, ArtifactNotFoundError) as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        await _notify("queue", action="merge", proposal_id=merged.id,
+                      merged_from=list(proposal_ids))
+        return RedirectResponse(
+            url=_rooted(request, f"/claim/{merged.id}"), status_code=303,
+        )
+
+    @app.get("/start-from/{ref}", response_class=HTMLResponse, dependencies=guarded)
+    def start_from(request: Request, ref: str) -> Any:
+        """Paste-ready seed to start a new agent session from a captured
+        session summary (pending proposal or approved page). Read-only."""
+        try:
+            ctx = sessions_mod.build_start_context(store, ref)
+        except ArtifactNotFoundError as e:
+            raise HTTPException(status_code=404, detail=str(e)) from e
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        return _tmpl(request, "start_from.html", {"ctx": ctx})
 
     @app.post("/contradict/{claim_id}", dependencies=guarded)
-    async def contradict(claim_id: str, against: str = Form(...)) -> Any:
+    async def contradict(
+        request: Request, claim_id: str, against: str = Form(...),
+    ) -> Any:
         """Mark two durable claims as contradicting each other — a gate action
         the spec lists alongside approve/reject. Routes through lifecycle so
         the audit entry is identical to ``vouch contradict``."""
@@ -526,7 +587,7 @@ def build_app(
         except (life.LifecycleError, ArtifactNotFoundError, ValueError) as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
         await _notify("audit", action="contradict", claim_id=claim_id)
-        return RedirectResponse(url="/audit", status_code=303)
+        return RedirectResponse(url=_rooted(request, "/audit"), status_code=303)
 
     # --- audit timeline ---
 

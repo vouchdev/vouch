@@ -84,6 +84,13 @@ def _starter_config() -> dict[str, Any]:
             # auto-capture claude code sessions into pending summaries.
             "enabled": True,
             "min_observations": 3,
+            # llm narrative inside the pending summary. summary_mode:
+            # auto (generate at SessionEnd) | manual (`vouch summarize`) | off.
+            # summary_llm_cmd reads the session record on stdin and prints
+            # markdown on stdout — e.g. "claude -p" or an api-key script.
+            # unset ⇒ mechanical summaries only.
+            "summary_mode": "auto",
+            "summary_llm_cmd": "",
         },
         "recall": {
             # inject a digest of all approved knowledge at session start.
@@ -813,6 +820,20 @@ class KBStore:
             raise ValueError(
                 f"proposal {proposal.id} already exists -- choose a different id"
             ) from e
+        return proposal
+
+    def update_proposal(self, proposal: Proposal) -> Proposal:
+        """Overwrite a still-undecided proposal file in place.
+
+        Only proposals under `proposed/` (pre-review scratch) can be
+        rewritten; a decided proposal is history and stays immutable.
+        """
+        path = self._proposal_path(proposal.id)
+        if not path.exists():
+            raise ArtifactNotFoundError(f"pending proposal {proposal.id}")
+        path.write_text(
+            _yaml_dump(proposal.model_dump(mode="json")), encoding="utf-8"
+        )
         return proposal
 
     def get_proposal(self, proposal_id: str) -> Proposal:

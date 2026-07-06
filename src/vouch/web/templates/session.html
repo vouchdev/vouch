@@ -5,7 +5,7 @@
 <article class="session-detail">
   <header class="section-head">
     <h1><span class="kind kind-session">run</span> {{ session.id }}</h1>
-    <a class="back" href="/">← queue</a>
+    <a class="back" href="{{ root }}/">← queue</a>
   </header>
 
   <dl class="meta-grid">
@@ -27,7 +27,7 @@
           <li class="queue-row status-{{ row.status }}">
             <div class="queue-meta">
               <span class="kind kind-{{ row.kind }}">{{ row.kind }}</span>
-              <a class="proposal-link" href="/claim/{{ row.id }}">{{ row.id }}</a>
+              <a class="proposal-link" href="{{ root }}/claim/{{ row.id }}">{{ row.id }}</a>
               <span class="status-pill status-pill-{{ row.status }}">{{ row.status }}</span>
               <time datetime="{{ row.proposed_at }}">{{ row.proposed_at }}</time>
             </div>

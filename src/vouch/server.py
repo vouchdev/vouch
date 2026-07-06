@@ -20,9 +20,11 @@ import yaml
 from mcp.server.fastmcp import FastMCP
 
 from . import audit, bundle, health, volunteer_context
+from . import capture as capture_mod
 from . import lifecycle as life
 from . import salience as salience_mod
 from . import sessions as sess_mod
+from . import summarize as summarize_mod
 from . import trust as trust_mod
 from . import verify as verify_mod
 from .capabilities import capabilities as build_caps
@@ -34,6 +36,7 @@ from .proposals import (
     ProposalError,
     approve,
     expire_pending,
+    merge_pending_pages,
     propose_claim,
     propose_entity,
     propose_page,
@@ -336,6 +339,21 @@ def kb_list_pending() -> list[dict[str, Any]]:
     ]
 
 
+@mcp.tool()
+def kb_list_sessions() -> dict[str, Any]:
+    """List captured agent sessions: still-open buffers and pending summary
+    proposals, each with a `summarized` flag."""
+    return {"sessions": capture_mod.list_sessions(_store())}
+
+
+@mcp.tool()
+def kb_summarize_session(session_id: str) -> dict[str, Any]:
+    """Generate the LLM narrative for one captured session, by agent session
+    id. Finalizes a still-open buffer first; mutates only the PENDING
+    proposal's summary text — approval stays a separate human decision."""
+    return summarize_mod.summarize_by_session(_store(), session_id)
+
+
 # === write tools — gated (produce proposals) =============================
 
 
@@ -516,6 +534,29 @@ def kb_reject(proposal_id: str, reason: str) -> dict[str, Any]:
     except (ArtifactNotFoundError, ValueError, ProposalError) as e:
         raise ValueError(str(e)) from e
     return {"proposal_id": proposal_id, "status": "rejected", "reason": reason}
+
+
+@mcp.tool()
+def kb_merge_pending(
+    proposal_ids: list[str], reason: str | None = None,
+) -> dict[str, Any]:
+    """Merge two or more pending page proposals into one combined proposal.
+
+    Files a NEW pending page carrying every source body and rejects the
+    originals with an audited pointer to it — the merged page still goes
+    through review like any other write.
+    """
+    try:
+        merged = merge_pending_pages(
+            _store(), proposal_ids, merged_by=_agent(), reason=reason,
+        )
+    except (ArtifactNotFoundError, ValueError, ProposalError) as e:
+        raise ValueError(str(e)) from e
+    return {
+        "proposal_id": merged.id,
+        "merged_from": proposal_ids,
+        "status": "pending",
+    }
 
 
 @mcp.tool()

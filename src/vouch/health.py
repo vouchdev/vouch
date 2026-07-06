@@ -7,6 +7,7 @@ contradictions, stale claims. Status is a one-line summary used by tooling.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -42,6 +43,29 @@ class HealthReport:
     counts: dict[str, Any] = field(default_factory=dict)
 
 
+def _last_audit_at(kb_dir: Path) -> str | None:
+    """Timestamp of the newest audit event, without parsing the whole log.
+
+    The /vouch-status skill (and any at-a-glance tooling) renders a
+    "last audit" line; count_events alone can't supply it.
+    """
+    log = kb_dir / "audit.log.jsonl"
+    try:
+        lines = log.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    for raw in reversed(lines):
+        line = raw.strip()
+        if not line:
+            continue
+        try:
+            created = json.loads(line).get("created_at")
+        except (ValueError, AttributeError):
+            return None
+        return str(created) if created else None
+    return None
+
+
 def status(store: KBStore) -> dict[str, Any]:
     """Quick, machine-readable summary. No deep checks."""
     return {
@@ -55,6 +79,7 @@ def status(store: KBStore) -> dict[str, Any]:
         "sessions": len(store.list_sessions()),
         "pending_proposals": len(store.list_proposals(ProposalStatus.PENDING)),
         "audit_events": count_events(store.kb_dir),
+        "last_audit_at": _last_audit_at(store.kb_dir),
         "index_present": (store.kb_dir / index_db.DB_FILENAME).exists(),
     }
 

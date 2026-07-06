@@ -33,6 +33,7 @@ from . import provenance as prov_mod
 from . import recall as recall_mod
 from . import sessions as sess_mod
 from . import stats as stats_mod
+from . import summarize as summarize_mod
 from . import sync as sync_mod
 from . import synthesize as synth
 from . import trust as trust_mod
@@ -50,6 +51,7 @@ from .proposals import (
     ProposalError,
     check_approvable,
     expire_pending,
+    merge_pending_pages,
     propose_claim,
     propose_entity,
     propose_page,
@@ -943,6 +945,24 @@ def reject(proposal_id: str, reason: str) -> None:
     click.echo(f"Rejected {proposal_id}")
 
 
+@cli.command("merge-pending")
+@click.argument("proposal_ids", nargs=-1, required=True)
+@click.option("--reason", default=None, help="Why these belong together (goes in the rationale).")
+def merge_pending(proposal_ids: tuple[str, ...], reason: str | None) -> None:
+    """Merge two or more pending page proposals into one combined proposal.
+
+    Files a new pending page carrying every source body and rejects the
+    originals with an audited pointer to it — the merged page still goes
+    through review.
+    """
+    store = _load_store()
+    with _cli_errors():
+        merged = merge_pending_pages(
+            store, list(proposal_ids), merged_by=_whoami(), reason=reason,
+        )
+    click.echo(f"Merged {len(proposal_ids)} proposals into {merged.id} (pending)")
+
+
 @cli.command("reject-extracted")
 @click.option("--page", "page_id", default=None, help="Limit to edges extracted from one page id.")
 @click.option("--reason", default="auto-extracted edge rejected in bulk")
@@ -1404,6 +1424,51 @@ def session_end_cmd(session_id: str, note: str | None) -> None:
     _emit_json({"session": sess.id, "proposals": sess.proposal_ids})
 
 
+@session.command("start-from")
+@click.argument("ref")
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON instead of the raw seed.")
+def session_start_from_cmd(ref: str, as_json: bool) -> None:
+    """Print a paste-ready context block that starts a new agent session
+    from a captured session summary (proposal id or approved page id).
+
+    e.g.  claude "$(vouch session start-from <ref>)"
+    """
+    store = _load_store()
+    with _cli_errors():
+        try:
+            ctx = sess_mod.build_start_context(store, ref)
+        except ValueError as e:
+            raise click.ClickException(str(e)) from e
+    if as_json:
+        _emit_json(ctx)
+        return
+    click.echo(ctx["seed"], nl=False)
+
+
+@session.command("list")
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON instead of a table.")
+def session_list_cmd(as_json: bool) -> None:
+    """List captured sessions: open buffers and pending summary proposals.
+
+    Mirrors kb.list_sessions. Entries with summarized=false are waiting for
+    `vouch summarize --session <id>` (or vouch-ui's Summarize button).
+    """
+    store = _load_store()
+    sessions = capture_mod.list_sessions(store)
+    if as_json:
+        _emit_json({"sessions": sessions})
+        return
+    if not sessions:
+        click.echo("(no captured sessions)")
+        return
+    for s in sessions:
+        mark = "summarized" if s["summarized"] else "needs-summary"
+        title = s["title"] or "(untitled)"
+        click.echo(
+            f"{s['session_id'] or '?'}  {s['stage']:<7} {mark:<13} {title}"
+        )
+
+
 @cli.group()
 def capture() -> None:
     """Automatic session capture (driven by claude code hooks)."""
@@ -1452,6 +1517,29 @@ def capture_observe_cmd() -> None:
         return
 
 
+@capture.command("prompt")
+def capture_prompt_cmd() -> None:
+    """Record the user's prompt from a UserPromptSubmit hook payload (stdin JSON)."""
+    if sys.stdin.isatty():
+        return
+    try:
+        raw = sys.stdin.read()
+        payload = json.loads(raw) if raw.strip() else {}
+        if not isinstance(payload, dict):
+            return
+        session_id = str(payload.get("session_id") or "")
+        prompt = str(payload.get("prompt") or "")
+        if not session_id or not prompt.strip():
+            return
+        store = _capture_store()
+        if store is None:
+            return
+        capture_mod.record_prompt(store, session_id, prompt)
+    except Exception:
+        # a capture failure must never break the user's prompt.
+        return
+
+
 @capture.command("finalize")
 @click.option("--session-id", default=None, help="Session id (else read from stdin payload).")
 def capture_finalize_cmd(session_id: str | None) -> None:
@@ -1473,9 +1561,11 @@ def capture_finalize_cmd(session_id: str | None) -> None:
     if store is None:
         return
     cwd = Path(str(payload.get("cwd") or ".")).resolve()
+    transcript = str(payload.get("transcript_path") or "")
     result = capture_mod.finalize(
         store, sid, cwd=cwd, project=cwd.name,
         generated_at=datetime.now(UTC).isoformat(),
+        transcript_path=Path(transcript) if transcript else None,
     )
     _emit_json(result)
 
@@ -1501,6 +1591,112 @@ def capture_finalize_all_cmd(session_id: str | None, max_age_seconds: float) -> 
         store, sid, max_age_seconds=max_age_seconds,
     )
     _emit_json(result)
+
+
+@cli.command("summarize")
+@click.argument("proposal_id", required=False)
+@click.option("--session", "session_id", default=None,
+              help="Claude Code session id — resolves the session's pending "
+                   "summary AND auto-locates its transcript under "
+                   "~/.claude/projects/.")
+@click.option("--all", "summarize_all", is_flag=True,
+              help="Enrich every pending captured session (the backlog).")
+@click.option("--force", is_flag=True,
+              help="With --all: regenerate even sessions that already have an ai summary.")
+@click.option("--transcript", default=None, type=click.Path(dir_okay=False),
+              help="Transcript file to include in the record (single-id mode).")
+def summarize_cmd(
+    proposal_id: str | None, session_id: str | None, summarize_all: bool,
+    force: bool, transcript: str | None,
+) -> None:
+    """Add an LLM narrative to pending captured-session summaries.
+
+    Manual counterpart of `capture.summary_mode: auto` — needs
+    `capture.summary_llm_cmd` in config.yaml. Only mutates PENDING proposal
+    bodies; approval stays a separate human step (`vouch review`).
+
+    \b
+    Examples:
+      vouch summarize --session 3cd62baa-…    # by claude code session id
+      vouch summarize <proposal-id>           # by pending proposal id
+      vouch summarize --all                   # the whole backlog
+    """
+    store = _load_store()
+    cfg = summarize_mod.load_summary_config(store)
+    if not cfg.configured:
+        raise click.ClickException(
+            "capture.summary_llm_cmd is not configured (or summary_mode is off) "
+            "in .vouch/config.yaml — e.g. summary_llm_cmd: \"claude -p\""
+        )
+    with _cli_errors():
+        if session_id:
+            result = summarize_mod.summarize_by_session(
+                store, session_id, config=cfg,
+            )
+        elif summarize_all:
+            result = summarize_mod.summarize_all_pending(
+                store, config=cfg, only_missing=not force,
+            )
+        elif proposal_id:
+            result = summarize_mod.summarize_pending(
+                store, proposal_id, config=cfg,
+                transcript_path=Path(transcript) if transcript else None,
+            )
+        else:
+            raise click.UsageError("pass a PROPOSAL_ID, --session <id>, or --all")
+    _emit_json(result)
+
+
+@capture.command("sweep")
+@click.option("--max-age-seconds", type=float, default=1800.0, show_default=True,
+              help="Buffers idle longer than this are finalized.")
+@click.option("--summarize", "auto_summarize", is_flag=True,
+              help="Also LLM-enrich the summaries this sweep just filed.")
+@click.option("--backlog", is_flag=True,
+              help="Also LLM-enrich every older pending summary missing one.")
+def capture_sweep_cmd(
+    max_age_seconds: float, auto_summarize: bool, backlog: bool,
+) -> None:
+    """Finalize idle session buffers into unsummarized pending proposals.
+
+    The tab-close catch-all: the VSCode extension fires no SessionEnd when a
+    tab closes, so run this on a timer (cron / systemd) — a closed tab's
+    session goes quiet and the sweep files its mechanical summary within one
+    sweep interval. By default no LLM runs: the swept session waits on the
+    review surface (vouch-ui's Review page, or `vouch summarize --session`)
+    for a human to trigger its narrative. Pass --summarize to auto-enrich
+    what this sweep filed, --backlog to also enrich older pending summaries.
+    The current session (VOUCH_SESSION_ID, when set) is always skipped.
+    """
+    store = _capture_store()
+    if store is None:
+        _emit_json({"finalized": [], "summarized": [], "skipped": "no-kb"})
+        return
+    current = os.environ.get("VOUCH_SESSION_ID") or ""
+    result = capture_mod.finalize_all_except(
+        store, current, max_age_seconds=max_age_seconds,
+    )
+    cfg = summarize_mod.load_summary_config(store)
+    summarized: list[str] = []
+    skipped: list[Any] = []
+    if cfg.configured and cfg.mode != "off":
+        if auto_summarize:
+            for pid in result.get("finalized_proposals", []):
+                one = summarize_mod.summarize_pending(store, pid, config=cfg)
+                if one["summarized"]:
+                    summarized.append(pid)
+                else:
+                    skipped.append(one)
+        if backlog:
+            bulk = summarize_mod.summarize_all_pending(store, config=cfg)
+            summarized.extend(bulk["summarized"])
+            skipped.extend(bulk["skipped"])
+    _emit_json({
+        "finalized": result.get("finalized", []),
+        "summarized": summarized,
+        "skipped": skipped,
+        "llm_configured": cfg.configured,
+    })
 
 
 @capture.command("banner")
@@ -1881,7 +2077,12 @@ def provenance_rebuild(as_json: bool) -> None:
 @click.option("--dry-run/--no-dry-run", default=False)
 def dedup(threshold: float, dry_run: bool) -> None:
     """Scan embeddings for cross-artifact near-duplicates."""
-    from .embeddings.dedup import scan_all
+    try:
+        from .embeddings.dedup import scan_all
+    except ImportError as e:
+        raise click.ClickException(
+            "dedup needs the embeddings extra — pip install 'vouch-kb[embeddings]'"
+        ) from e
 
     store = _load_store()
     rows = scan_all(store.kb_dir, threshold=threshold, dry_run=dry_run)

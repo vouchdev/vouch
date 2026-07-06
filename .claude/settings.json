@@ -34,6 +34,16 @@
         ]
       }
     ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "vouch capture prompt || true"
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "matcher": "*",
@@ -51,7 +61,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "vouch capture finalize || true"
+            "command": "vouch capture finalize || true",
+            "timeout": 120
           }
         ]
       }

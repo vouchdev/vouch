@@ -38,8 +38,10 @@
     if (!("WebSocket" in window)) return;
     var proto = window.location.protocol === "https:" ? "wss:" : "ws:";
     // The HttpOnly cookie rides the same-origin handshake automatically — no
-    // token in the URL.
-    var wsUrl = proto + "//" + window.location.host + "/ws";
+    // token in the URL. data-root carries the mount prefix when this app is
+    // served under a tenant path (vouch hub); empty at the root.
+    var root = (document.body && document.body.dataset.root) || "";
+    var wsUrl = proto + "//" + window.location.host + root + "/ws";
     var ws;
     try {
       ws = new WebSocket(wsUrl);

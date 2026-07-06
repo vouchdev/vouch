@@ -8,7 +8,7 @@
       <span class="kind kind-{{ proposal.kind }}">{{ proposal.kind }}</span>
       {{ proposal.id }}
     </h1>
-    <a class="back" href="/">← queue</a>
+    <a class="back" href="{{ root }}/">← queue</a>
   </header>
 
   <dl class="meta-grid">
@@ -29,13 +29,19 @@
     </details>
   </section>
 
+  {% if proposal.payload.type == "session" and proposal.kind in ("page", "claim") %}
+    <p class="start-from-link">
+      <a href="{{ root }}/start-from/{{ proposal.id }}">start a new agent session from this summary →</a>
+    </p>
+  {% endif %}
+
   {% if proposal.status == "pending" %}
     <section class="actions actions-large">
-      <form method="post" action="/approve/{{ proposal.id }}" class="inline">
+      <form method="post" action="{{ root }}/approve/{{ proposal.id }}" class="inline">
         <input type="text" name="reason" placeholder="reason (optional)">
         <button type="submit" class="approve">approve</button>
       </form>
-      <form method="post" action="/reject/{{ proposal.id }}" class="inline">
+      <form method="post" action="{{ root }}/reject/{{ proposal.id }}" class="inline">
         <input type="text" name="reason" placeholder="reason (required)" required>
         <button type="submit" class="reject">reject</button>
       </form>

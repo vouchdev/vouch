@@ -4,20 +4,20 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>{% block title %}vouch review{% endblock %}</title>
-  <link rel="stylesheet" href="/static/app.css">
+  <link rel="stylesheet" href="{{ root }}/static/app.css">
   {% block head %}{% endblock %}
   <meta name="vouch-auth" content="{{ 'on' if auth_enabled else 'off' }}">
 </head>
-<body data-active="{{ active|default('') }}">
+<body data-active="{{ active|default('') }}" data-root="{{ root|default('') }}">
   <header class="masthead">
     <div class="brand">
       <span class="brand-mark">▌</span>
       <span class="brand-text">vouch · review console</span>
     </div>
     <nav class="nav">
-      <a href="/" {% if active == "queue" %}aria-current="page"{% endif %}>queue</a>
-      <a href="/audit" {% if active == "audit" %}aria-current="page"{% endif %}>audit</a>
-      {% if dual_solve_enabled %}<a href="/dual-solve" {% if active == "dual-solve" %}aria-current="page"{% endif %}>dual-solve</a>{% endif %}
+      <a href="{{ root }}/" {% if active == "queue" %}aria-current="page"{% endif %}>queue</a>
+      <a href="{{ root }}/audit" {% if active == "audit" %}aria-current="page"{% endif %}>audit</a>
+      {% if dual_solve_enabled %}<a href="{{ root }}/dual-solve" {% if active == "dual-solve" %}aria-current="page"{% endif %}>dual-solve</a>{% endif %}
       <span id="live" class="live live-off" title="realtime channel">●&nbsp;live</span>
     </nav>
   </header>
@@ -28,6 +28,6 @@
     <span>localhost-first · approve via plain form POST (works JS-off) ·
       <kbd>j</kbd>/<kbd>k</kbd> move · <kbd>a</kbd> approve · <kbd>?</kbd> help</span>
   </footer>
-  <script src="/static/app.js" defer></script>
+  <script src="{{ root }}/static/app.js" defer></script>
 </body>
 </html>
