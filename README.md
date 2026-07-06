@@ -76,7 +76,16 @@ compile:
 vouch review                    # walk pending proposals one at a time
 ```
 
-`vouch review-ui` opens the same queue as the browser console seen in the video (`pipx install 'vouch-kb[web]'` for that extra). Piecemeal alternatives: `vouch pending`, `vouch show <id>`, `vouch approve <id>`, `vouch reject <id> --reason "…"`.
+The browser console in the video is the **[vouch webapp](https://github.com/vouchdev/webApp)** — chat, review, pending queue, claims, and stats over a running KB. Connect it in two commands:
+
+```bash
+vouch serve --transport http    # serves the kb.* surface on 127.0.0.1:8731
+# then, in a clone of the vouch webapp:
+npm install && npm run dev      # opens http://localhost:5173 — point the
+                                # connect dialog at http://127.0.0.1:8731
+```
+
+Lighter alternatives ship with vouch itself: `vouch review-ui` (a built-in browser queue; `pipx install 'vouch-kb[web]'` for the extra), or piecemeal `vouch pending`, `vouch show <id>`, `vouch approve <id>`, `vouch reject <id> --reason "…"`.
 
 **5. Compile the wiki.**
 
@@ -110,6 +119,7 @@ Pending drafts (`proposed/`) and the derived search index (`state.db`) are gitig
 * [SPEC.md](SPEC.md) — the protocol contract (object model, JSONL envelopes, trust metadata)
 * `vouch --help` / `vouch capabilities` — the full CLI and machine-readable method surface
 * `vouch install-mcp <host>` also wires cursor, codex, zed, windsurf, openclaw and friends ([adapters/](adapters/))
+* [vouch webapp](https://github.com/vouchdev/webApp) — the chat-first browser console from the video; [vouch-desktop](https://github.com/vouchdev/vouch-desktop) wraps the same loop as a desktop app
 * [CONTRIBUTING.md](CONTRIBUTING.md) — development setup and the test gate
 
 ## License
