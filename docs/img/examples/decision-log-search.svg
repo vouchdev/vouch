@@ -1,12 +1,12 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1317" height="112" viewBox="0 0 1317 112" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="14">
-<rect width="1317" height="112" rx="8" fill="#0d1117"/>
-<rect width="1317" height="36" rx="8" fill="#161b22"/>
-<rect y="28" width="1317" height="8" fill="#161b22"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="1342" height="112" viewBox="0 0 1342 112" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="14">
+<rect width="1342" height="112" rx="8" fill="#0d1117"/>
+<rect width="1342" height="36" rx="8" fill="#161b22"/>
+<rect y="28" width="1342" height="8" fill="#161b22"/>
 <circle cx="16" cy="18" r="6" fill="#ff5f56"/>
 <circle cx="34" cy="18" r="6" fill="#ffbd2e"/>
 <circle cx="52" cy="18" r="6" fill="#27c93f"/>
-<text x="658.5" y="23" fill="#8b949e" text-anchor="middle" >decision-log/ — vouch search postgresql</text>
+<text x="671.0" y="23" fill="#8b949e" text-anchor="middle" >decision-log/ — vouch search postgresql</text>
 <text x="16" y="52" fill="#7ee787" xml:space="preserve">$ vouch search postgresql</text>
-<text x="16" y="72" fill="#c9d1d9" xml:space="preserve">claim/use-postgresql-15-for-enhanced-replication-and-monitoring-fe	Use «PostgreSQL» 15 for enhanced replication and monitoring features.  (fts5)</text>
-<text x="16" y="92" fill="#c9d1d9" xml:space="preserve">claim/billing-data-requires-acid-guarantees-postgresql-is-the-prim	Billing data requires ACID guarantees; «PostgreSQL» is the primary data store.  (fts5)</text>
+<text x="16" y="72" fill="#c9d1d9" xml:space="preserve">claim/billing-data-requires-acid-guarantees-postgresql-is-the-prim	Billing data requires ACID guarantees; PostgreSQL is the primary data store.  (substring)</text>
+<text x="16" y="92" fill="#c9d1d9" xml:space="preserve">claim/use-postgresql-15-for-enhanced-replication-and-monitoring-fe	Use PostgreSQL 15 for enhanced replication and monitoring features.  (substring)</text>
 </svg>
