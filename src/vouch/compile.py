@@ -314,6 +314,10 @@ def compile_kb(
             "e.g.\ncompile:\n  llm_cmd: \"claude -p --model sonnet\""
         )
     cap = max_pages if max_pages is not None else cfg.max_pages
+    if cap < 1:
+        # a zero/negative cap would drop every draft after spending the LLM
+        # run; refuse up front instead of silently producing nothing.
+        raise CompileError(f"max_pages must be >= 1, got {cap}")
 
     prompt = build_prompt(store, max_pages=cap)
     drafts = parse_drafts(run_llm(cmd, prompt, timeout_seconds=cfg.timeout_seconds))
