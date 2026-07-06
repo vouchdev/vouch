@@ -2978,20 +2978,32 @@ def dual_solve_cmd(issue_url: str, claude_effort: str, codex_effort: str,
         _emit_json({
             "issue": {"number": issue.number, "title": issue.title,
                       "url": issue.url},
+            "recommendation": ds_mod.recommendation(candidates),
             "candidates": [
                 {"engine": c.engine, "branch": c.branch, "ok": c.ok,
                  "error": c.error, "changed_files": ds_mod.changed_files(c.diff),
-                 "diff": c.diff} for c in candidates
+                 "log": c.log, "diff": c.diff} for c in candidates
             ],
         })
         return
 
     for c in candidates:
         click.echo(f"\n=== {c.engine} ({c.branch}) ===", err=True)
+        if c.log.strip():
+            click.echo("--- engine log ---", err=True)
+            click.echo(c.log)
         if c.ok:
+            if c.log.strip():
+                click.echo("--- diff ---", err=True)
             click.echo(c.diff)
         else:
             click.echo(f"(failed: {c.error})", err=True)
+
+    rec = ds_mod.recommendation(candidates)
+    if rec.get("reason"):
+        label = f"recommendation: {rec['engine']}" if rec.get("engine") \
+            else "recommendation: no automatic pick"
+        click.echo(f"{label} -- {rec['reason']}", err=True)
 
     ok = [c for c in candidates if c.ok]
     if not ok:
