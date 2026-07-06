@@ -6,15 +6,57 @@ All notable changes to vouch are documented here. Format follows
 
 ## [Unreleased]
 
-### Docs
-- example KBs now carry their own screenshots: `examples/README.md` and the
-  `tiny/` + `decision-log/` READMEs embed terminal renders of `vouch status`,
-  `search`, `show`, `audit`, and a supersession `diff` against the shipped
-  fixtures, so a reader can see what vouch looks like before installing it.
-  Images live under `docs/img/examples/` and are generated deterministically
-  from the fixtures by `docs/img/examples/render.py` (`make
-  examples-screenshots`); `tests/test_example_screenshots.py` asserts the
-  committed SVGs stay reproducible (#286).
+### Added
+- `vouch compile` — the llm-wiki ingest pass: a deployment-configured LLM
+  (`compile.llm_cmd` in `.vouch/config.yaml`) drafts topic pages from live
+  approved claims; every inline `[claim: …]` marker and `[[wikilink]]` is
+  verified mechanically against the store, and surviving drafts are filed as
+  PENDING page proposals by the `wiki-compiler` actor. never approves — the
+  review gate is the ingest review. `--dry-run`, `--max-pages`, `--llm-cmd`,
+  `--json`. see `docs/compile.md`.
+- review-ui: a **compile wiki** button on the queue (shown once
+  `compile.llm_cmd` is configured) runs the same ingest pass and lands the
+  drafts in the queue; success and per-draft drop counts surface as a notice.
+- company-brain template: `vouch init --template company-brain` declares
+  typed record kinds (contact, org, project-record, meeting-notes, followup,
+  decision-record, voice) as `page_kinds` config and seeds a cited guide
+  page. operator-declared kinds always win; the merge is additive and
+  idempotent. see `docs/company-brain.md`.
+- `vouch init --template <name>` dispatches the onboarding template registry
+  (starter stays the default; templates layer on top of it).
+- frontmatter filters on `kb.list_pages` across mcp/jsonl/cli: kind equality,
+  field equality, and inclusive ordered bounds (numbers, iso dates), plus the
+  `vouch pages` human mirror. a viewport over `store.list_pages()`, not a
+  query language.
+- `kb.digest` / `vouch digest`: read-only reviewer briefing — pending
+  proposals oldest-first, recent decisions, stale claims, followups due, and
+  citation coverage. `--format text|json|markdown`; writes nothing, so it is
+  safe to run from cron.
+- five company-brain slash commands in the claude-code adapter (mirrored to
+  the plugin skills list): `/vouch-ask`, `/vouch-remember`, `/vouch-record`,
+  `/vouch-followup`, `/vouch-standup`. every flow terminates at
+  `kb_propose_*` — none may call `kb_approve`.
+- `vouch source fetch <url>`: snapshot a url's exact bytes as a
+  content-addressed source so claims cite immutable evidence. conservative
+  intake: http/https only, redirects re-validated, private-network hosts
+  refused, 2 mib cap, `fetched_at` recorded in source metadata.
+- `vouch inbox --dir <path> [--watch]`: dropped `.md`/`.txt` files become a
+  registered source plus one pending page proposal each — mechanical, no
+  model in the loop, never approves. content-hash seen-state makes re-runs
+  idempotent; bounded stdlib poll, no daemon.
+- `vouch notify sweep|test`: config-declared reviewer webhooks
+  (`proposal.created`, `queue.backlogged`, `proposal.aged`) with optional
+  hmac-signed envelopes and `env:` secret refs. read-and-notify only;
+  best-effort delivery; idempotent per (event, proposal).
+- protected page kinds: `page_kinds.<kind>.protected: true` exempts a kind
+  from the `trusted-agent` self-approval opt-out — its pages always need a
+  reviewer other than the proposer. the template marks `voice` and
+  `decision-record` protected.
+- string-typed frontmatter schema fields now accept yaml's native
+  date/datetime scalars, fixing approve-time re-validation of pages whose
+  frontmatter round-tripped through disk (e.g. `due_at: 2026-07-01`).
+
+## [1.1.0] — 2026-07-03
 
 ### Added
 - auto-capture: claude code sessions are harvested via hooks and filed as a
@@ -37,6 +79,11 @@ All notable changes to vouch are documented here. Format follows
   strategy) instead of skipping it, so the capture / recall hooks land on
   projects that already have a settings file. idempotent; user entries are
   preserved.
+- `vouch new <kind>` — scaffold a typed page or entity proposal from the
+  page-kind registry: stubs required frontmatter fields, supports
+  `--field key=value`, `--interactive`, `--dry-run`, and `--json`; entity
+  kinds (`person`, `project`, …) route to `propose_entity`, with page kinds
+  taking precedence on name collisions unless `--entity` is set (#330).
 - GitHub PR auto-labeling: a pull-request metadata-only labeler workflow now
   applies vouch surface labels from `.github/labeler.yml`, keeps those labels
   in sync as files change, and adds OpenClaw-style `size: XS` through
@@ -49,6 +96,53 @@ All notable changes to vouch are documented here. Format follows
   one-shot propose-all and `--json` for machine-readable output. Configurable
   via `themes.min_sessions`, `themes.min_claims`, `themes.top_k`, and
   `themes.enabled` in `config.yaml` (#311).
+- dual-solve JSON, review-ui job, and choose responses now include
+  `changed_files` for each candidate and the kept branch, so desktop and browser
+  clients can show the resulting files without parsing unified diffs.
+
+### Changed
+- `vouch dual-solve --sandbox` default docker image is now
+  `vouch/coder:latest` (was `amika/coder:latest`).
+
+### Fixed
+- `vouch pending` (and every bulk `list_*` path) no longer crashes when a
+  single artifact file is unreadable — a corrupt or mojibake yaml is skipped
+  with a warning instead of aborting the whole listing.
+- all text-mode file i/o under `src/vouch/` now pins `encoding="utf-8"`, so a
+  non-utf-8 locale (e.g. latin-1) can no longer mangle non-ascii claim text
+  into raw control bytes that the yaml loader rejects, nor crash on write.
+
+### Packaging
+- restored the tag-triggered `release.yml` workflow that was accidentally
+  deleted alongside unrelated files in the #95 squash. It publishes to PyPI
+  via Trusted Publishing (OIDC) exactly as before, and now also creates the
+  GitHub release for the tag with the built sdist and wheel attached and the
+  matching CHANGELOG section as the release body.
+- restored the `vouch-kb` distribution name in `pyproject.toml` — the same
+  #95 squash had reverted it to `vouch`, which PyPI rejects (the name belongs
+  to an unrelated project, and the trusted publisher is registered for
+  `vouch-kb`). The installed command is still `vouch`.
+- container image: every release now also pushes `ghcr.io/vouchdev/vouch`
+  (linux/amd64 + linux/arm64, tagged `X.Y.Z`, `X.Y`, and `latest`). The
+  entrypoint is the `vouch` CLI with the stdio MCP server as the default
+  command; bind-mount the project root at `/data`. Built from the new
+  repo-root `Dockerfile`; installs the `web` extra, leaves embeddings out.
+- the `[1.0.0]` section below was restored: a merge after the release folded
+  its entries back under `[Unreleased]`, dropping the version header.
+
+### Docs
+- example KBs now carry their own screenshots: `examples/README.md` and the
+  `tiny/` + `decision-log/` READMEs embed terminal renders of `vouch status`,
+  `search`, `show`, `audit`, and a supersession `diff` against the shipped
+  fixtures, so a reader can see what vouch looks like before installing it.
+  Images live under `docs/img/examples/` and are generated deterministically
+  from the fixtures by `docs/img/examples/render.py` (`make
+  examples-screenshots`); `tests/test_example_screenshots.py` asserts the
+  committed SVGs stay reproducible (#286).
+
+## [1.0.0] — 2026-06-26
+
+### Added
 - `vouch dual-solve <issue-url>` — run claude + codex on one github issue in
   isolated git worktrees, compare the two diffs, keep the branch you pick, and
   propose the chosen solution's rationale into the KB. A sibling tool to
@@ -61,14 +155,11 @@ All notable changes to vouch are documented here. Format follows
   with elapsed time and diff size) reports progress to stderr while it works.
 - `vouch dual-solve --sandbox` and
   `vouch review-ui --dual-solve-sandbox` — run Claude Code and Codex inside a
-  Docker image (default `vouch/coder:latest`) while leaving git/GitHub commands
+  Docker image (default `amika/coder:latest`) while leaving git/GitHub commands
   on the host. The sandbox runner mounts only each candidate worktree plus a
   temporary copied home containing known Claude/Codex credential files, so agent
   writes stay in the throwaway dual-solve branches and host credential files are
   not modified.
-- dual-solve JSON, review-ui job, and choose responses now include
-  `changed_files` for each candidate and the kept branch, so desktop and browser
-  clients can show the resulting files without parsing unified diffs.
 - `vouch review-ui --allow-dual-solve` — a browser SPA that runs `dual-solve`
   on a github issue link, streams progress over the review-ui's websocket, shows
   both engines' diffs side by side, and lets you pick the winner. Off by default;
@@ -123,35 +214,6 @@ All notable changes to vouch are documented here. Format follows
   KB under `eval/fixture-kb/`, and an `eval` workflow gating retrieval changes
   (#226).
 ### Fixed
-- the OpenClaw plugin packaging now targets the current (2026.6) plugin
-  loader, verified against a real `openclaw plugins install --link` of the
-  repo: `openclaw.plugin.json` moved to the `id` + JSON-Schema `configSchema`
-  dialect (`kind: context-engine`, `skills` as SKILL.md directories under
-  `adapters/openclaw/skills/`), a root `package.json` now carries the
-  loader-facing `openclaw.extensions` entry-module pointer and the
-  `openclaw.compat.pluginApi` floor, and the engine id was renamed
-  `vouch-context` → `vouch` so it matches the plugin id — OpenClaw's
-  installer auto-binds the contextEngine slot to the *plugin* id and
-  resolves it by *engine* id, so distinct ids silently quarantined the
-  engine in favour of the legacy engine. The old dialect's `mcpServers`,
-  `contracts`, `family`, `shared_deps`, and `openclaw.*` fields were
-  silently ignored by current loaders and are gone; the kb.* MCP server is
-  deployment config (`openclaw mcp add vouch -- vouch serve`). A Tier-2
-  e2e suite (`tests/test_openclaw_plugin_load_real.py`, skipped when the
-  `openclaw` CLI is absent) now links the repo into an isolated profile and
-  asserts import, engine registration, slot auto-bind, skill publication,
-  and a clean plugins doctor.
-- `vouch openclaw-rpc` no longer crashes serializing `assemble` responses:
-  `contextPack.generated_at` is a `datetime`, which `json.dumps` rejected on
-  any turn that found a KB — OpenClaw quarantined the engine for the process
-  and silently fell back to its legacy engine. Found by running a real
-  OpenClaw agent turn against the linked plugin.
-- `vouch pending` (and every bulk `list_*` path) no longer crashes when a
-  single artifact file is unreadable — a corrupt or mojibake yaml is skipped
-  with a warning instead of aborting the whole listing.
-- all text-mode file i/o under `src/vouch/` now pins `encoding="utf-8"`, so a
-  non-utf-8 locale (e.g. latin-1) can no longer mangle non-ascii claim text
-  into raw control bytes that the yaml loader rejects, nor crash on write.
 - `parse_since` (the `--since` parser behind `vouch metrics`/`vouch audit`) now raises a clean `MetricsError` for a duration too large to represent (e.g. `--since 1000000000000d`), instead of letting an uncaught `OverflowError` traceback escape — restoring the documented "clean error, not a traceback" contract.
 - `sync_apply` now loads the sync source exactly once and passes the same `_SyncSource` instance into `sync_check`, closing a TOCTOU window where a bundle replaced on disk between the two `_load_source` calls could cause the validation and write phases to operate on different snapshots. Also eliminates redundant directory walks (KB sources) and triple tarball opens (bundle sources). Fixes #217.
 - `vault_to_kb` now passes `slug_hint=page_id` to `propose_page` so vault edit proposals target the existing page id from frontmatter instead of a slugified copy of the title (fixes #219).

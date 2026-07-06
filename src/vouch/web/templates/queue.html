@@ -10,7 +10,20 @@
     {% if pages > 1 %}
       <span class="page-indicator">page {{ page }} / {{ pages }}</span>
     {% endif %}
+    {% if compile_enabled %}
+      <form method="post" action="/compile" class="inline compile-form"
+            title="draft topic pages from approved claims via compile.llm_cmd — drafts land here as proposals">
+        <button type="submit" class="compile">compile wiki</button>
+      </form>
+    {% endif %}
   </header>
+
+  {% if compiled is not none %}
+    <p class="notice notice-ok">compiled {{ compiled }} page draft(s) into the queue{% if compile_dropped %} · {{ compile_dropped }} dropped by citation checks{% endif %}.</p>
+  {% endif %}
+  {% if compile_error %}
+    <p class="notice notice-err">compile failed: {{ compile_error }}</p>
+  {% endif %}
 
   {% if not items %}
     <p class="empty">no pending proposals — every agent write has been reviewed.</p>

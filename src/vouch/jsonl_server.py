@@ -31,7 +31,10 @@ import yaml
 
 from . import audit, bundle, health, volunteer_context
 from . import capture as capture_mod
+from . import compile as compile_mod
+from . import digest as digest_mod
 from . import lifecycle as life
+from . import metrics as metrics_mod
 from . import salience as salience_mod
 from . import sessions as sess_mod
 from . import summarize as summarize_mod
@@ -41,6 +44,7 @@ from .capabilities import capabilities as build_caps
 from .context import build_context_pack
 from .logging_config import configure_logging
 from .models import ProposalStatus
+from .page_filters import filter_pages
 from .proposals import (
     EXPIRE_ACTOR,
     ProposalError,
@@ -125,6 +129,16 @@ def _h_stats(p: dict) -> dict:
     days = int(p.get("days", 30))
     since = None if days == 0 else days
     return collect_stats(_store(), since_days=since)
+
+
+def _h_digest(p: dict) -> dict:
+    d = digest_mod.build(
+        _store(),
+        since=metrics_mod.parse_since(str(p.get("since", digest_mod.DEFAULT_SINCE_SPEC))),
+        stale_after_days=int(p.get("stale_days", metrics_mod.DEFAULT_STALE_DAYS)),
+        limit=int(p.get("limit", digest_mod.DEFAULT_LIMIT)),
+    )
+    return d.to_dict()
 
 
 def _h_search(p: dict) -> dict:
@@ -267,8 +281,15 @@ def _h_read_relation(p: dict) -> dict:
     return _store().get_relation(p["relation_id"]).model_dump(mode="json")
 
 
-def _h_list_pages(_: dict) -> list[dict]:
-    return [p.model_dump(mode="json") for p in _store().list_pages()]
+def _h_list_pages(p: dict) -> list[dict]:
+    pages = filter_pages(
+        _store().list_pages(),
+        kind=p.get("type"),
+        equals=p.get("meta"),
+        before=p.get("meta_before"),
+        after=p.get("meta_after"),
+    )
+    return [pg.model_dump(mode="json") for pg in pages]
 
 
 def _h_list_claims(p: dict) -> list[dict]:
@@ -384,6 +405,22 @@ def _h_propose_page(p: dict) -> dict:
         proposed_by=_agent(),
     )
     return {"proposal_id": pr.id, "status": pr.status.value, "kind": pr.kind.value}
+
+
+def _h_compile(p: dict) -> dict:
+    try:
+        report = compile_mod.compile_kb(
+            _store(), triggered_by=_agent(),
+            max_pages=p.get("max_pages"),
+            dry_run=bool(p.get("dry_run", False)),
+            session_id=p.get("session_id"),
+        )
+    except compile_mod.CompileError as e:
+        # config/LLM/output-shape failures are caller-visible conditions,
+        # not server faults — surface them on the ValueError path so the
+        # envelope carries a clean message instead of internal_error.
+        raise ValueError(str(e)) from e
+    return report.to_dict()
 
 
 def _h_propose_entity(p: dict) -> dict:
@@ -729,6 +766,7 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.capabilities": _h_capabilities,
     "kb.status": _h_status,
     "kb.stats": _h_stats,
+    "kb.digest": _h_digest,
     "kb.search": _h_search,
     "kb.neighbors": _h_neighbors,
     "kb.context": _h_context,
@@ -749,6 +787,7 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.register_source_from_path": _h_register_source_from_path,
     "kb.propose_claim": _h_propose_claim,
     "kb.propose_page": _h_propose_page,
+    "kb.compile": _h_compile,
     "kb.propose_entity": _h_propose_entity,
     "kb.propose_relation": _h_propose_relation,
     "kb.approve": _h_approve,
