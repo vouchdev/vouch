@@ -460,7 +460,7 @@ def _record_from_json(d: dict[str, Any]) -> PRRecord:
 def load_cache(path: Path) -> dict[str, PRRecord]:
     if not path.exists():
         return {}
-    raw = json.loads(path.read_text())
+    raw = json.loads(path.read_text(encoding="utf-8"))
     return {str(d["number"]): _record_from_json(d) for d in raw.get("prs", [])}
 
 
@@ -475,7 +475,7 @@ def save_cache(path: Path, repo: RepoRef, records: dict[str, PRRecord]) -> None:
         "prs": [_record_to_json(r) for r in prs_sorted],
     }
     tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(payload, indent=2, sort_keys=False))
+    tmp.write_text(json.dumps(payload, indent=2, sort_keys=False), encoding="utf-8")
     tmp.replace(path)
 
 

@@ -82,6 +82,18 @@ def _coerce_artifact_scope(value: object) -> object:
     return value
 
 
+def _require_non_empty(v: str, label: str) -> str:
+    """Reject empty / whitespace-only required text fields (#155).
+
+    Shared by the ``Claim.text`` / ``Entity.name`` / ``Page.title``
+    validators. Gates on emptiness only — non-blank values pass through
+    unchanged, so surrounding whitespace is preserved.
+    """
+    if not v.strip():
+        raise ValueError(f"{label} must not be empty")
+    return v
+
+
 class ArtifactScope(BaseModel):
     """Structured scope: visibility tier plus optional project/agent binding."""
 
@@ -135,6 +147,7 @@ class PageType(StrEnum):
     LOG = "log"
     REPORT = "report"
     SOURCE_SUMMARY = "source-summary"
+    THEME = "theme"
 
 
 class PageStatus(StrEnum):
@@ -231,6 +244,16 @@ class Claim(BaseModel):
                 "(README §'Object model'; CONTRIBUTING §'Things we won't merge')"
             )
         return v
+
+    @field_validator("text")
+    @classmethod
+    def _text_non_empty(cls, v: str) -> str:
+        # Same shape as _at_least_one_citation: the non-empty contract lived
+        # only in proposals.propose_claim, so store.put_claim,
+        # store.update_claim, and bundle.import_apply via _validate_content
+        # accepted text="" / whitespace and landed a claim carrying zero
+        # semantic content. Enforce on the model to close all paths at once.
+        return _require_non_empty(v, "claim text")
     entities: list[str] = Field(default_factory=list)
     supersedes: list[str] = Field(default_factory=list)
     superseded_by: str | None = None
@@ -265,6 +288,13 @@ class Entity(BaseModel):
     page: str | None = Field(default=None, description="Optional page id for this entity")
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
+
+    @field_validator("name")
+    @classmethod
+    def _name_non_empty(cls, v: str) -> str:
+        # See Claim._text_non_empty — the propose_entity check alone left
+        # store.put_entity and bundle import accepting name="" / whitespace.
+        return _require_non_empty(v, "entity name")
 
 
 class Relation(BaseModel):
@@ -313,6 +343,13 @@ class Page(BaseModel):
         if not isinstance(v, str) or not v.strip():
             raise ValueError("page type must be a non-empty string")
         return v.strip()
+
+    @field_validator("title")
+    @classmethod
+    def _title_non_empty(cls, v: str) -> str:
+        # See Claim._text_non_empty — the propose_page check alone left
+        # store.put_page and bundle import accepting title="" / whitespace.
+        return _require_non_empty(v, "page title")
 
 
 # --- audit + sessions -----------------------------------------------------
@@ -519,8 +556,8 @@ class Config(BaseModel):
     Known top-level sections are validated; unknown ones are preserved (not
     dropped) so `vouch doctor` can flag them as likely typos — see
     `unknown_keys()`. Sections owned by their own readers (`serve`,
-    `volunteer`, `mcp`) are kept loose here so they neither break nor trip
-    the unknown-key check.
+    `volunteer`, `mcp`, `capture`, `recall`, `compile`, `triage`) are kept
+    loose here so they neither break nor trip the unknown-key check.
     """
 
     model_config = ConfigDict(extra="allow")
@@ -533,6 +570,10 @@ class Config(BaseModel):
     serve: dict[str, Any] | None = None
     volunteer: dict[str, Any] | None = None
     mcp: dict[str, Any] | None = None
+    capture: dict[str, Any] | None = None
+    recall: dict[str, Any] | None = None
+    compile: dict[str, Any] | None = None
+    triage: dict[str, Any] | None = None
 
     @classmethod
     def load(cls, raw: Any) -> Config:

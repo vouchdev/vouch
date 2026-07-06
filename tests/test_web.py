@@ -269,3 +269,128 @@ def test_cli_review_ui_refuses_non_localhost_bind_without_auth(tmp_path: Path) -
     assert result.exit_code != 0
     assert "--auth" in result.output
     assert "non-loopback" in result.output.lower()
+
+
+# --- compile button + route ------------------------------------------------
+
+
+def _approved_claim(store: KBStore, text: str = "an approved fact") -> str:
+    from vouch.proposals import approve
+
+    src = store.put_source(text.encode())
+    pr = propose_claim(store, text=text, evidence=[src.id], proposed_by="agent-A")
+    return approve(store, pr.id, approved_by="human-B").id
+
+
+def _configure_compile(store: KBStore, tmp_path: Path, drafts: list | None) -> None:
+    """Point compile.llm_cmd at a stub that emits canned drafts (or fails)."""
+    import json as json_mod
+
+    if drafts is None:
+        cmd = "false"
+    else:
+        out = tmp_path / "web-drafts.json"
+        out.write_text(json_mod.dumps(drafts), encoding="utf-8")
+        cmd = f"cat {out}"
+    store.config_path.write_text(
+        store.config_path.read_text(encoding="utf-8")
+        + f"\ncompile:\n  llm_cmd: \"{cmd}\"\n",
+        encoding="utf-8",
+    )
+
+
+def test_compile_button_hidden_without_config(client: TestClient) -> None:
+    r = client.get("/")
+    assert r.status_code == 200
+    assert "compile wiki" not in r.text
+
+
+def test_compile_button_shown_when_configured(
+    client: TestClient, store: KBStore, tmp_path: Path,
+) -> None:
+    _configure_compile(store, tmp_path, [])
+    r = client.get("/")
+    assert r.status_code == 200
+    assert "compile wiki" in r.text
+
+
+def test_compile_post_unconfigured_is_400(client: TestClient) -> None:
+    r = client.post("/compile", follow_redirects=False)
+    assert r.status_code == 400
+
+
+def test_compile_post_lands_drafts_in_queue(
+    client: TestClient, store: KBStore, tmp_path: Path,
+) -> None:
+    """The button runs the ingest pass and its drafts appear as pending
+    page proposals in the same queue — proposed, never approved."""
+    cid = _approved_claim(store)
+    _configure_compile(store, tmp_path, [
+        {"title": "Compiled Topic", "type": "concept",
+         "body": f"x [claim: {cid}]", "claims": [cid]},
+    ])
+    r = client.post("/compile", follow_redirects=False)
+    assert r.status_code == 303
+    assert "compiled=1" in r.headers["location"]
+
+    pending = store.list_proposals(ProposalStatus.PENDING)
+    assert any(
+        p.kind.value == "page" and p.payload.get("title") == "Compiled Topic"
+        for p in pending
+    )
+    assert store.list_pages() == []  # still nothing durable
+
+    follow = client.get(r.headers["location"])
+    assert "compiled 1 page draft(s)" in follow.text
+
+
+def test_compile_post_failure_redirects_with_error(
+    client: TestClient, store: KBStore, tmp_path: Path,
+) -> None:
+    _approved_claim(store)
+    _configure_compile(store, tmp_path, None)  # llm_cmd = false
+    r = client.post("/compile", follow_redirects=False)
+    assert r.status_code == 303
+    assert "compile_error=" in r.headers["location"]
+    follow = client.get(r.headers["location"])
+    assert "compile failed" in follow.text
+
+
+def test_compile_post_while_running_redirects_busy(
+    client: TestClient, store: KBStore, tmp_path: Path,
+) -> None:
+    """One compile at a time per KB — a double-click must not stack LLM
+    runs on threadpool threads."""
+    import asyncio
+
+    _approved_claim(store)
+    _configure_compile(store, tmp_path, [])
+    lock = client.app.state.compile_lock
+    asyncio.run(lock.acquire())
+    try:
+        r = client.post("/compile", follow_redirects=False)
+        assert r.status_code == 303
+        assert "compile_error=" in r.headers["location"]
+        assert "already%20running" in r.headers["location"]
+    finally:
+        lock.release()
+
+
+def test_compile_run_attributed_in_audit_log(
+    client: TestClient, store: KBStore, tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A web-triggered compile must record who pressed the button, not just
+    the wiki-compiler proposer identity."""
+    monkeypatch.setenv("VOUCH_AGENT", "human-reviewer")
+    cid = _approved_claim(store)
+    _configure_compile(store, tmp_path, [
+        {"title": "Attributed", "type": "concept",
+         "body": f"x [claim: {cid}]", "claims": [cid]},
+    ])
+    r = client.post("/compile", follow_redirects=False)
+    assert r.status_code == 303
+    events = [e for e in audit_mod.read_events(store.kb_dir)
+              if e.event == "compile.run"]
+    assert len(events) == 1
+    assert events[0].actor == "human-reviewer"

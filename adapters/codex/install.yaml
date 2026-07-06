@@ -3,8 +3,38 @@
 # Codex reads `<project>/.codex/config.toml` (also `~/.codex/config.toml` for
 # user-global). We ship the project-local form so `vouch install-mcp codex`
 # doesn't touch home-directory state -- see issue #179 scope decision.
+#
+# `.codex/config.toml` is codex's *primary* config file (model, approval
+# policy, other MCP servers), so T1 deep-merges into an existing one instead
+# of skipping it -- see issue #384. Existing user values always win.
 host: codex
 pretty: OpenAI Codex CLI
+fence:
+  begin: "<!-- BEGIN vouch -->"
+  end: "<!-- END vouch -->"
 tiers:
   T1:
-    - { src: config.toml, dst: .codex/config.toml }
+    - { src: config.toml, dst: .codex/config.toml, toml_merge: true }
+  # T2 = AGENTS.md fenced snippet (codex reads AGENTS.md for project
+  # instructions the way cursor does -- see issue #385). Kept in lockstep
+  # with adapters/cursor/AGENTS.md.snippet modulo the host name.
+  T2:
+    - { src: AGENTS.md.snippet, dst: AGENTS.md, fenced_append: true }
+  # T3 = the vouch guided flows as codex *skills* under the project-local
+  # `.codex/skills/` -- see issue #386. Scope decision recorded here per
+  # that ticket: codex custom prompts load only from ~/.codex/prompts/
+  # (user-global) and are deprecated upstream in favour of skills, and the
+  # #179 rule forbids a project-scoped install from touching home-directory
+  # state, so prompts are out and project-local skills are in. The SKILL.md
+  # files are referenced from the openclaw mirror rather than duplicated;
+  # their bodies are sync-tested against the claude-code commands.
+  T3:
+    - { src: ../openclaw/skills/vouch-recall/SKILL.md, dst: .codex/skills/vouch-recall/SKILL.md }
+    - { src: ../openclaw/skills/vouch-status/SKILL.md, dst: .codex/skills/vouch-status/SKILL.md }
+    - { src: ../openclaw/skills/vouch-resolve-issue/SKILL.md, dst: .codex/skills/vouch-resolve-issue/SKILL.md }
+    - { src: ../openclaw/skills/vouch-propose-from-pr/SKILL.md, dst: .codex/skills/vouch-propose-from-pr/SKILL.md }
+    - { src: ../openclaw/skills/vouch-ask/SKILL.md, dst: .codex/skills/vouch-ask/SKILL.md }
+    - { src: ../openclaw/skills/vouch-remember/SKILL.md, dst: .codex/skills/vouch-remember/SKILL.md }
+    - { src: ../openclaw/skills/vouch-record/SKILL.md, dst: .codex/skills/vouch-record/SKILL.md }
+    - { src: ../openclaw/skills/vouch-followup/SKILL.md, dst: .codex/skills/vouch-followup/SKILL.md }
+    - { src: ../openclaw/skills/vouch-standup/SKILL.md, dst: .codex/skills/vouch-standup/SKILL.md }

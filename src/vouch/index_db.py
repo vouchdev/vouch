@@ -173,7 +173,7 @@ def _snippet_for(kb_dir: Path, kind: str, eid: str) -> str:
         path = kb_dir / kind / f"{eid}.md"
     if not path.exists():
         return eid
-    text = path.read_text()
+    text = path.read_text(encoding="utf-8")
     return text[:200].replace("\n", " ")
 
 

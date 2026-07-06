@@ -145,6 +145,14 @@ button.approve { border-color: var(--moss); color: var(--moss); }
 button.approve:hover { background: var(--moss); color: var(--paper); }
 button.reject { border-color: var(--vermillion); color: var(--vermillion); }
 button.reject:hover { background: var(--vermillion); color: var(--paper); }
+.compile-form { margin-left: auto; }
+button.compile { border-color: var(--ink); color: var(--ink); }
+button.compile:hover { background: var(--ink); color: var(--paper); }
+button.compile:active { opacity: 0.6; }
+.notice { font-family: var(--mono); font-size: 0.85rem; padding: 0.4rem 0.6rem;
+          border: 1px solid var(--rule); margin: 0.5rem 0; }
+.notice-ok { border-left: 3px solid var(--moss); }
+.notice-err { border-left: 3px solid var(--vermillion); color: var(--vermillion); }
 
 input[type="text"] {
   font-family: var(--sans);

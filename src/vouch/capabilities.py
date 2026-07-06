@@ -18,6 +18,7 @@ METHODS = [
     "kb.capabilities",
     "kb.status",
     "kb.stats",
+    "kb.digest",
     "kb.search",
     "kb.neighbors",
     "kb.context",
@@ -26,12 +27,14 @@ METHODS = [
     "kb.read_claim",
     "kb.read_entity",
     "kb.read_relation",
+    "kb.diff",
     "kb.list_pages",
     "kb.list_claims",
     "kb.list_entities",
     "kb.list_relations",
     "kb.list_sources",
     "kb.list_pending",
+    "kb.triage_pending",
     "kb.register_source",
     "kb.register_source_from_path",
     "kb.propose_claim",
@@ -69,6 +72,9 @@ METHODS = [
     "kb.impact",
     "kb.graph_export",
     "kb.provenance_rebuild",
+    "kb.detect_themes",
+    "kb.propose_theme",
+    "kb.compile",
 ]
 
 

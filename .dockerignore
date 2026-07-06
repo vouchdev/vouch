@@ -1,0 +1,19 @@
+# Keep the build context to what the Dockerfile actually copies
+# (pyproject.toml, README.md, src/, adapters/) plus room for local
+# experiments. adapters/ must stay in: the wheel force-includes it and
+# pip fails the build when the forced include is missing.
+.git
+.venv
+.vouch
+.claude
+desktop
+docs
+eval
+examples
+web
+tests
+benchmarks
+skills
+proposals
+**/__pycache__
+**/*.py[cod]

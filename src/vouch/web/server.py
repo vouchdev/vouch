@@ -41,6 +41,7 @@ import secrets
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from fastapi import (
     Depends,
@@ -57,6 +58,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
 
 from .. import audit as audit_mod
+from .. import compile as compile_mod
 from .. import lifecycle as life
 from .. import proposals as proposals_mod
 from ..models import Proposal, ProposalStatus
@@ -195,7 +197,7 @@ def _pending_page(store: KBStore, page: int, page_size: int
     proposals: list[Proposal] = []
     for p in paths[lo:hi]:
         try:
-            proposals.append(Proposal.model_validate(_yaml_load(p.read_text())))
+            proposals.append(Proposal.model_validate(_yaml_load(p.read_text(encoding="utf-8"))))
         except Exception as e:
             _log.warning("skipping unreadable proposal %s: %s", p.name, e)
     return proposals, page, pages, total
@@ -387,7 +389,13 @@ def build_app(
         }
 
     @app.get("/", response_class=HTMLResponse, dependencies=guarded)
-    def queue(request: Request, page: int = 1) -> Any:
+    def queue(
+        request: Request,
+        page: int = 1,
+        compiled: int | None = None,
+        dropped: int | None = None,
+        compile_error: str | None = None,
+    ) -> Any:
         proposals, page, pages, total = _pending_page(store, page, page_size)
         return _tmpl(request, "queue.html", {
             "items": [_row(p) for p in proposals],
@@ -396,6 +404,13 @@ def build_app(
             "pages": pages,
             "page_size": page_size,
             "active": "queue",
+            # compile is available only when the deployment configured an LLM
+            # command; re-read per request so a config.yaml edit shows up
+            # without restarting the server.
+            "compile_enabled": compile_mod.load_config(store).llm_cmd is not None,
+            "compiled": compiled,
+            "compile_dropped": dropped,
+            "compile_error": compile_error,
         })
 
     # --- claim detail ---
@@ -512,6 +527,48 @@ def build_app(
             raise HTTPException(status_code=400, detail=str(e)) from e
         await _notify("queue", action="reject", proposal_id=proposal_id)
         return RedirectResponse(url="/", status_code=303)
+
+    # One compile at a time per KB: each run holds a threadpool thread and a
+    # live LLM subprocess for up to compile.timeout_seconds, so an unguarded
+    # button (or a double-click) could exhaust the pool and run up LLM spend.
+    compile_lock = asyncio.Lock()
+    app.state.compile_lock = compile_lock
+
+    @app.post("/compile", dependencies=guarded)
+    async def compile_wiki() -> Any:
+        """Run the llm-wiki ingest pass and land its drafts in this queue.
+
+        Compile only *proposes* — the drafts appear as pending page proposals
+        for the reviewer to decide, so this button adds to the queue and never
+        writes a durable artifact. Synchronous by design: the reviewer clicked
+        it and is waiting for the drafts; the LLM call is offloaded to the
+        threadpool so other reviewers' requests aren't blocked meanwhile.
+        """
+        cfg = compile_mod.load_config(store)
+        if cfg.llm_cmd is None:
+            raise HTTPException(
+                status_code=400,
+                detail="compile.llm_cmd is not configured in .vouch/config.yaml",
+            )
+        if compile_lock.locked():
+            reason = quote("a compile is already running — refresh in a moment")
+            return RedirectResponse(url=f"/?compile_error={reason}", status_code=303)
+        async with compile_lock:
+            try:
+                report = await run_in_threadpool(
+                    compile_mod.compile_kb, store,
+                    config=cfg, triggered_by=reviewer(),
+                )
+            except compile_mod.CompileError as e:
+                reason = quote(str(e)[:200])
+                return RedirectResponse(
+                    url=f"/?compile_error={reason}", status_code=303,
+                )
+        await _notify("queue", action="compile", proposed=len(report.proposed))
+        return RedirectResponse(
+            url=f"/?compiled={len(report.proposed)}&dropped={len(report.dropped)}",
+            status_code=303,
+        )
 
     @app.post("/contradict/{claim_id}", dependencies=guarded)
     async def contradict(claim_id: str, against: str = Form(...)) -> Any:
