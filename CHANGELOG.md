@@ -6,6 +6,8 @@ All notable changes to vouch are documented here. Format follows
 
 ## [Unreleased]
 
+## [1.2.0] — 2026-07-06
+
 ### Added
 - `vouch compile` — the llm-wiki ingest pass: a deployment-configured LLM
   (`compile.llm_cmd` in `.vouch/config.yaml`) drafts topic pages from live
@@ -55,6 +57,28 @@ All notable changes to vouch are documented here. Format follows
 - string-typed frontmatter schema fields now accept yaml's native
   date/datetime scalars, fixing approve-time re-validation of pages whose
   frontmatter round-tripped through disk (e.g. `due_at: 2026-07-01`).
+
+### Fixed
+- installer: the curl one-liner no longer dead-ends on pep 668 hosts
+  (debian 12+, ubuntu 23.04+, homebrew python). when `pip install --user
+  pipx` is refused, pipx is hosted in a private venv under
+  `~/.local/share/vouch/pipx-venv` — still no sudo. re-runs recreate that
+  venv (brew pythons ship read-only activate scripts), an existing
+  `~/.local/bin/pipx` is preferred and never overwritten, and installer
+  failures now print the actual pip/venv errors instead of a guess.
+- cli: non-utf-8 locales (e.g. `LANG=en_US.ISO-8859-1`) crashed
+  `vouch status` / `vouch search` / `vouch --help` with UnicodeEncodeError
+  on the `•` / `…` / `—` output glyphs. stdio is reconfigured to utf-8
+  (`errors="replace"`) at module import — before click renders eager help —
+  covering the mcp/jsonl servers too; the last locale-dependent file i/o
+  sites (capture/themes config reads, the migration rewriter) pin
+  `encoding="utf-8"`.
+- `vouch install-mcp <host>`: works from pip/pipx installs. adapter
+  templates now ship inside the wheel (`vouch/adapters/`) and the resolver
+  falls back to that packaged copy when no repo checkout is present.
+  previously every installed copy failed with "unknown adapter …
+  (available: (none))"; source checkouts keep resolving the repo's
+  `adapters/` directory.
 
 ## [1.1.0] — 2026-07-03
 
