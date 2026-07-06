@@ -14,6 +14,9 @@ The writer is idempotent: files that already exist are left alone (the
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -402,3 +405,30 @@ def test_cli_install_mcp_default_tier_is_t4(tmp_path: Path) -> None:
     assert (tmp_path / ".mcp.json").is_file()
     assert (tmp_path / "CLAUDE.md").is_file()
     assert (tmp_path / ".claude" / "settings.json").is_file()
+
+
+# --- packaging --------------------------------------------------------------
+
+
+def test_wheel_ships_adapters(tmp_path: Path) -> None:
+    """1.1.0 regression: wheels shipped without adapters/, so every pip/pipx
+    install failed ``vouch install-mcp <host>`` with ``(available: (none))``
+    — the templates only existed in source checkouts. The wheel build must
+    force-include them at ``vouch/adapters/``.
+    """
+    pytest.importorskip("hatchling")
+    proc = subprocess.run(
+        [sys.executable, "-m", "hatchling", "build", "-t", "wheel", "-d", str(tmp_path)],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert proc.returncode == 0, proc.stderr
+    wheels = sorted(tmp_path.glob("*.whl"))
+    assert wheels, proc.stdout
+    with zipfile.ZipFile(wheels[-1]) as zf:
+        names = zf.namelist()
+    assert any(
+        n.endswith("vouch/adapters/claude-code/install.yaml") for n in names
+    ), "adapter templates missing from the wheel"

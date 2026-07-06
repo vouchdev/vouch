@@ -45,6 +45,8 @@ dev = [
     "ruff>=0.15.13",
     "types-pyyaml",
     "httpx>=0.28,<1",
+    # the wheel-contents regression test builds with the real backend
+    "hatchling>=1.21",
 ]
 embeddings-fast = [
     "fastembed>=0.3,<1",
@@ -69,6 +71,12 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/vouch"]
+
+# `vouch install-mcp <host>` copies templates out of adapters/. Ship them
+# inside the wheel so installed (pip/pipx) copies can find them; from a
+# checkout the repo-root adapters/ still wins (see install_adapter.py).
+[tool.hatch.build.targets.wheel.force-include]
+"adapters" = "vouch/adapters"
 
 [tool.ruff]
 line-length = 100
