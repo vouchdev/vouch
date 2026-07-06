@@ -202,6 +202,13 @@ def test_empty_kb_raises_before_running_llm(store: KBStore) -> None:
         compile_kb(store, config=_cfg("false"))
 
 
+def test_non_positive_max_pages_raises(store: KBStore) -> None:
+    # `false` as llm_cmd: the guard must fire before the LLM is spent
+    _approved_claim(store, "a fact")
+    with pytest.raises(CompileError, match="max_pages must be >= 1"):
+        compile_kb(store, config=_cfg("false"), max_pages=0)
+
+
 def test_llm_failure_raises(store: KBStore) -> None:
     _approved_claim(store, "a fact")
     with pytest.raises(CompileError, match="failed"):
