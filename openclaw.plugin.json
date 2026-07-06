@@ -1,7 +1,7 @@
 {
   "id": "vouch",
   "name": "Vouch",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Git-native, review-gated knowledge base. Registers vouch's context engine (cited retrieval + salience reflex + hot memory) and the vouch skills. The kb.* MCP server is deployment config: `openclaw mcp add vouch -- vouch serve`.",
   "kind": "context-engine",
   "skills": [

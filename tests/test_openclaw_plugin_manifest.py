@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+import vouch
 from vouch.openclaw.context_engine import ENGINE_ID
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -79,6 +80,9 @@ def test_manifest_versions_in_step(manifest: dict, package_json: dict) -> None:
     version = _pyproject_version()
     assert manifest["version"] == version
     assert package_json["version"] == version
+    # the fourth site: the in-package string `vouch --version` prints.
+    # 1.2.0 shipped to pypi self-reporting 1.1.0 because nothing tied it in.
+    assert vouch.__version__ == version
 
 
 def test_manifest_kind_is_context_engine(manifest: dict) -> None:

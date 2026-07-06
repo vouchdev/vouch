@@ -6,6 +6,21 @@ All notable changes to vouch are documented here. Format follows
 
 ## [Unreleased]
 
+## [1.2.1] — 2026-07-06
+
+### Fixed
+- `vouch --version` (and `__version__`) reported 1.1.0 from the released
+  1.2.0 wheel — `src/vouch/__init__.py` was a fourth version site nothing
+  kept in step. the manifest lockstep test now ties it to pyproject.toml,
+  openclaw.plugin.json and package.json. (pypi's 1.2.0 dists are immutable,
+  hence this patch release.)
+
+### Packaging
+- container image: the docker build context now carries `adapters/`
+  (dockerfile copy + dockerignore), which the wheel force-include requires
+  — without it `pip install` failed the 1.2.0 image build with "Forced
+  include not found", so no 1.2.0 images were published.
+
 ## [1.2.0] — 2026-07-06
 
 ### Added
