@@ -48,6 +48,53 @@ Two named prompts you might wire up:
 - `vouch.crystallize_session` — "summarise this session's proposals
   into a page"
 
+### How a host talks to vouch (end to end)
+
+What actually happens when an MCP host — Claude Code, Cursor, Codex — uses
+vouch over stdio:
+
+```
+host (e.g. Claude Code)                     vouch serve (child process)
+       │                                              │
+  1. spawn  ── command: vouch, args: [serve] ───────▶ │  one process per session;
+       │      env: VOUCH_AGENT=claude-code            │  stdin/stdout pipe stays open
+       │                                              │
+  2. handshake  ── initialize / tools/list ─────────▶ │  (owned by the MCP SDK —
+       │          ◀── kb_* tool list ─────────────────│   vouch writes no framing code)
+       │                                              │
+  3. tools/call kb_propose_claim ───────────────────▶ │  server.py (thin) → proposals.py
+       │          ◀── result + _meta.vouch_trust ──────│  → proposed/<id>.yaml + audit event
+       │                                              │
+  4. tools/call kb_approve ─────────────────────────▶ │  review gate: blocks self-approval
+       │          ◀── claim now durable ──────────────│  → claims/<id>.yaml + decided/<id>.yaml
+```
+
+The wire is **JSON-RPC 2.0, one message per line** over the child's
+stdin/stdout — no socket, no HTTP. The host owns the subprocess; the MCP SDK
+owns the `initialize → tools/list → tools/call` handshake. vouch only supplies
+the `kb_*` tool implementations.
+
+A few things worth knowing:
+
+- **The gate is on approve, not propose.** `kb_propose_claim` writes a *pending*
+  proposal under `proposed/` (gitignored); the claim becomes durable only when
+  `kb_approve` runs **and** the approver isn't the proposer (unless
+  `review.approver_role: trusted-agent`). Same gate on every transport.
+- **Identity rides in on `VOUCH_AGENT`** (see [Identity](#identity)). The adapter
+  sets it in the child's env; `claude mcp add vouch -- vouch serve` doesn't, so
+  the actor falls back to `unknown-agent` — add `-e VOUCH_AGENT=…` if you want
+  attribution.
+- **Reads carry provenance.** Every dict-shaped result gets a `_meta.vouch_trust`
+  block (`{remote, caller_kind, auth_subject}`) so the host can tell a local
+  stdio call from a remote one; `kb_context` also attaches a session-gated
+  `_meta.vouch_salience` sidebar.
+- **vouch can talk back.** `kb_session_start` registers a server→client push
+  channel, so vouch can proactively offer context during a session rather than
+  only answering calls.
+
+Tool errors come back through MCP's native error mechanism — the host surfaces
+them to the model as a failed tool call, not as a `kb.*` error envelope.
+
 ## JSONL (stdin/stdout)
 
 ```bash

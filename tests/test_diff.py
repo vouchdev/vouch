@@ -7,8 +7,11 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
+from vouch import audit
+from vouch.capabilities import capabilities
 from vouch.cli import cli
 from vouch.diff import ArtifactDiff, DiffError, diff_artifacts
+from vouch.jsonl_server import HANDLERS, handle_request
 from vouch.models import Claim, ClaimStatus, Page
 from vouch.storage import KBStore
 
@@ -80,6 +83,36 @@ def test_diff_mismatched_kinds_raises(store: KBStore) -> None:
         diff_artifacts(store, "c1", "p1")
 
 
+def test_diff_omitted_new_id_resolves_via_superseded_by(store: KBStore) -> None:
+    _claim(store, "c2", text="new wording")
+    _claim(store, "c1", text="old wording", superseded_by="c2")
+    d = diff_artifacts(store, "c1")
+    assert d.new_id == "c2"
+    assert any(line.startswith("+new wording") for line in d.text_diff)
+
+
+def test_diff_omitted_new_id_without_successor_raises(store: KBStore) -> None:
+    _claim(store, "c1")
+    with pytest.raises(DiffError, match="has not been superseded"):
+        diff_artifacts(store, "c1")
+
+
+def test_diff_omitted_new_id_for_page_raises(store: KBStore) -> None:
+    store.put_page(Page(id="p1", title="P", body="b"))
+    with pytest.raises(DiffError, match="pages have no successor pointer"):
+        diff_artifacts(store, "p1")
+
+
+def test_diff_read_only_writes_no_audit_event_or_proposal(store: KBStore) -> None:
+    _claim(store, "c1", text="old")
+    _claim(store, "c2", text="new")
+    before = list(audit.read_events(store.kb_dir))
+    diff_artifacts(store, "c1", "c2")
+    after = list(audit.read_events(store.kb_dir))
+    assert after == before
+    assert store.list_proposals() == []
+
+
 # --- CLI ------------------------------------------------------------------
 
 
@@ -127,3 +160,68 @@ def test_cli_diff_unknown_id_clean_error(
     assert res.exit_code != 0
     assert "Traceback" not in res.output
     assert "unknown artifact: nope" in res.output
+
+
+def test_cli_diff_omitted_new_id_resolves_successor(
+    store: KBStore, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(store.root)
+    _claim(store, "c2", text="new")
+    _claim(store, "c1", text="old", superseded_by="c2")
+    res = CliRunner().invoke(cli, ["diff", "c1"])
+    assert res.exit_code == 0, res.output
+    assert "diff claim c1 → c2" in res.output
+
+
+def test_cli_diff_omitted_new_id_clean_error(
+    store: KBStore, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(store.root)
+    _claim(store, "c1")
+    res = CliRunner().invoke(cli, ["diff", "c1"])
+    assert res.exit_code != 0
+    assert "Traceback" not in res.output
+    assert "has not been superseded" in res.output
+
+
+# --- kb.* RPC surface -------------------------------------------------------
+
+
+def test_diff_method_in_capabilities() -> None:
+    methods = set(capabilities().methods)
+    assert "kb.diff" in methods
+    assert set(capabilities().methods) == set(HANDLERS.keys())
+
+
+def test_kb_diff_over_jsonl(store: KBStore, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(store.root)
+    _claim(store, "c1", status=ClaimStatus.WORKING)
+    _claim(store, "c2", status=ClaimStatus.STABLE)
+    resp = handle_request(
+        {"id": "1", "method": "kb.diff", "params": {"old_id": "c1", "new_id": "c2"}}
+    )
+    assert resp["ok"] is True, resp
+    assert resp["result"]["kind"] == "claim"
+    changed = {c["field"]: (c["old"], c["new"]) for c in resp["result"]["changes"]}
+    assert changed["status"] == ("working", "stable")
+
+
+def test_kb_diff_missing_param_over_jsonl(
+    store: KBStore, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(store.root)
+    resp = handle_request({"id": "2", "method": "kb.diff", "params": {}})
+    assert resp["ok"] is False
+    assert resp["error"]["code"] == "missing_param"
+
+
+def test_kb_diff_unknown_id_over_jsonl(
+    store: KBStore, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(store.root)
+    _claim(store, "c1")
+    resp = handle_request(
+        {"id": "3", "method": "kb.diff", "params": {"old_id": "c1", "new_id": "nope"}}
+    )
+    assert resp["ok"] is False
+    assert resp["error"]["code"] == "invalid_request"

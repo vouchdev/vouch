@@ -1,0 +1,14 @@
+{
+  "name": "vouch",
+  "version": "1.2.1",
+  "private": true,
+  "description": "OpenClaw plugin packaging for vouch. The Python package lives in pyproject.toml; this file only tells OpenClaw's plugin loader which entry module to import and which plugin API range the plugin supports.",
+  "openclaw": {
+    "extensions": [
+      "./adapters/openclaw/vouch-context-engine.mjs"
+    ],
+    "compat": {
+      "pluginApi": ">=2026.6.0"
+    }
+  }
+}

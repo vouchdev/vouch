@@ -57,6 +57,72 @@ def test_undeclared_kind_is_rejected(store: KBStore) -> None:
     assert "unknown page kind" in str(exc.value)
 
 
+def test_string_schema_accepts_yaml_date_scalars(store: KBStore) -> None:
+    """A bare `due_at: 2026-07-01` loads as datetime.date from CLI --meta
+    parsing and from every frontmatter disk round-trip; a `type: string`
+    schema must accept it or pages fail re-validation at approve time."""
+    import datetime
+
+    _declare_kinds(
+        store,
+        {
+            "followup": {
+                "required_fields": ["due_at"],
+                "frontmatter_schema": {
+                    "type": "object",
+                    "properties": {"due_at": {"type": "string"}},
+                },
+            }
+        },
+    )
+    pr = propose_page(
+        store,
+        title="ping alice-example",
+        body="",
+        page_type="followup",
+        metadata={"due_at": datetime.date(2026, 7, 1)},
+        proposed_by="agent",
+    )
+    page = approve(store, pr.id, approved_by="reviewer")
+    assert isinstance(page, Page)
+    # a genuinely wrong type still fails
+    with pytest.raises(ProposalError):
+        propose_page(
+            store,
+            title="bad",
+            body="",
+            page_type="followup",
+            metadata={"due_at": ["not", "a", "date"]},
+            proposed_by="agent",
+        )
+
+
+def test_protected_kind_blocks_self_approval_despite_trusted_agent(store: KBStore) -> None:
+    cfg = yaml.safe_load(store.config_path.read_text())
+    cfg["review"] = {"approver_role": "trusted-agent"}
+    cfg["page_kinds"] = {
+        "voice": {"protected": True},
+        "meeting-notes": {},
+    }
+    store.config_path.write_text(yaml.safe_dump(cfg))
+
+    # unprotected kind: trusted-agent opt-out lets the proposer self-approve
+    open_pr = propose_page(
+        store, title="sync", body="b", page_type="meeting-notes", proposed_by="agent",
+    )
+    assert isinstance(approve(store, open_pr.id, approved_by="agent"), Page)
+
+    # protected kind: self-approval stays forbidden regardless of the opt-out
+    voice_pr = propose_page(
+        store, title="email voice", body="b", page_type="voice", proposed_by="agent",
+    )
+    with pytest.raises(ProposalError, match="protected"):
+        approve(store, voice_pr.id, approved_by="agent")
+
+    # a distinct reviewer can still approve it
+    assert isinstance(approve(store, voice_pr.id, approved_by="reviewer"), Page)
+
+
 # --- acceptance: per-field error on a missing required field ---------------
 
 

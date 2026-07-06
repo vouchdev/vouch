@@ -1,66 +1,25 @@
 {
-  "name": "vouch",
-  "version": "0.1.0",
-  "description": "Git-native, review-gated knowledge base for LLM agents. MCP server + JSONL tool server + CLI.",
-  "family": "bundle-plugin",
-  "homepage": "https://github.com/vouchdev/vouch",
+  "id": "vouch",
+  "name": "Vouch",
+  "version": "1.2.1",
+  "description": "Git-native, review-gated knowledge base. Registers vouch's context engine (cited retrieval + salience reflex + hot memory) and the vouch skills. The kb.* MCP server is deployment config: `openclaw mcp add vouch -- vouch serve`.",
+  "kind": "context-engine",
+  "skills": [
+    "adapters/openclaw/skills"
+  ],
   "configSchema": {
-    "kb_path": {
-      "type": "string",
-      "required": false,
-      "description": "Absolute path to the project root containing .vouch/. When unset, vouch walks up from cwd to find the nearest KB.",
-      "default": null
-    },
-    "agent": {
-      "type": "string",
-      "required": false,
-      "description": "Identity string recorded on every proposal + audit event when this plugin is the writer. Exported as VOUCH_AGENT to the child process.",
-      "default": "openclaw"
-    },
-    "transport": {
-      "type": "string",
-      "required": false,
-      "description": "MCP wire format. 'stdio' is the canonical surface; 'jsonl' is the AKBP-style newline-delimited fallback for harnesses that can't speak MCP.",
-      "default": "stdio",
-      "enum": ["stdio", "jsonl"]
-    }
-  },
-  "mcpServers": {
-    "vouch": {
-      "command": "vouch",
-      "args": ["serve"],
-      "env": {
-        "VOUCH_AGENT": "openclaw"
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "kb_path": {
+        "type": "string",
+        "description": "Absolute path to the project root containing .vouch/. When unset, vouch walks up from the workspace directory to find the nearest KB."
+      },
+      "agent": {
+        "type": "string",
+        "default": "openclaw",
+        "description": "Identity string recorded on every proposal + audit event when this plugin is the writer. Exported as VOUCH_AGENT to the child process."
       }
     }
-  },
-  "skills": [
-    "adapters/claude-code/.claude/commands/vouch-recall.md",
-    "adapters/claude-code/.claude/commands/vouch-status.md",
-    "adapters/claude-code/.claude/commands/vouch-resolve-issue.md",
-    "adapters/claude-code/.claude/commands/vouch-propose-from-pr.md"
-  ],
-  "shared_deps": [
-    "adapters/claude-code/CLAUDE.md.snippet",
-    "adapters/claude-code/install.yaml"
-  ],
-  "excluded_from_install": [],
-  "openclaw": {
-    "compat": {
-      "pluginApi": ">=2026.4.0"
-    },
-    "extensions": [
-      "./adapters/openclaw/vouch-context-engine.mjs"
-    ],
-    "trust_boundary": {
-      "remote_callers_filesystem": "confined",
-      "write_tools_review_gated": true,
-      "lifecycle_tools_audit_logged": true
-    }
-  },
-  "contracts": {
-    "reviewGatedKB": ["vouch-kb-0.1.0"],
-    "mcpMethods": ["kb.capabilities", "kb.status", "kb.search", "kb.context"],
-    "contextEngines": ["vouch-context"]
   }
 }

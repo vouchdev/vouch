@@ -14,6 +14,10 @@ The writer is idempotent: files that already exist are left alone (the
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -90,9 +94,14 @@ def test_install_claude_code_t4_writes_all_tiers(tmp_path: Path) -> None:
     assert (cmd_dir / "vouch-status.md").is_file()
     assert (cmd_dir / "vouch-resolve-issue.md").is_file()
     assert (cmd_dir / "vouch-propose-from-pr.md").is_file()
+    assert (cmd_dir / "vouch-ask.md").is_file()
+    assert (cmd_dir / "vouch-remember.md").is_file()
+    assert (cmd_dir / "vouch-record.md").is_file()
+    assert (cmd_dir / "vouch-followup.md").is_file()
+    assert (cmd_dir / "vouch-standup.md").is_file()
     assert (tmp_path / ".claude" / "settings.json").is_file()
-    # T1 .mcp.json + T2 CLAUDE.md + 4 T3 commands + T4 settings = 7 files.
-    assert len(result.written) == 7, result.written
+    # T1 .mcp.json + T2 CLAUDE.md + 9 T3 commands + T4 settings = 12 files.
+    assert len(result.written) == 12, result.written
 
 
 def test_install_claude_code_is_idempotent(tmp_path: Path) -> None:
@@ -109,8 +118,133 @@ def test_install_claude_code_is_idempotent(tmp_path: Path) -> None:
         ".claude/commands/vouch-status.md",
         ".claude/commands/vouch-resolve-issue.md",
         ".claude/commands/vouch-propose-from-pr.md",
+        ".claude/commands/vouch-ask.md",
+        ".claude/commands/vouch-remember.md",
+        ".claude/commands/vouch-record.md",
+        ".claude/commands/vouch-followup.md",
+        ".claude/commands/vouch-standup.md",
         ".claude/settings.json",
     }
+
+
+def test_settings_json_merges_into_existing(tmp_path: Path) -> None:
+    """User already has .claude/settings.json — vouch merges its hooks and
+    permission allowlist in without clobbering the user's content."""
+    settings_dir = tmp_path / ".claude"
+    settings_dir.mkdir()
+    (settings_dir / "settings.json").write_text(json.dumps({
+        "permissions": {"allow": ["Bash(ls:*)"]},
+        "hooks": {
+            "SessionStart": [
+                {"matcher": "*", "hooks": [{"type": "command", "command": "my-own-hook"}]}
+            ]
+        },
+    }))
+    result = install("claude-code", target=tmp_path, tier="T4")
+    merged = json.loads((settings_dir / "settings.json").read_text())
+
+    # user content preserved
+    assert "Bash(ls:*)" in merged["permissions"]["allow"]
+    start_cmds = [h["command"] for g in merged["hooks"]["SessionStart"] for h in g["hooks"]]
+    assert "my-own-hook" in start_cmds
+
+    # vouch content merged in
+    assert "mcp__vouch__kb_status" in merged["permissions"]["allow"]
+    assert any("capture banner" in c for c in start_cmds)
+    post = [h["command"] for g in merged["hooks"].get("PostToolUse", []) for h in g["hooks"]]
+    end = [h["command"] for g in merged["hooks"].get("SessionEnd", []) for h in g["hooks"]]
+    assert any("capture observe" in c for c in post)
+    assert any("capture finalize" in c for c in end)
+
+    assert ".claude/settings.json" in result.merged
+    assert ".claude/settings.json" not in result.skipped
+    assert ".claude/settings.json" not in result.written
+
+
+def test_settings_json_merge_is_idempotent(tmp_path: Path) -> None:
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / "settings.json").write_text(json.dumps({"hooks": {}}))
+    install("claude-code", target=tmp_path, tier="T4")
+    first = (tmp_path / ".claude" / "settings.json").read_text()
+    second = install("claude-code", target=tmp_path, tier="T4")
+    after = (tmp_path / ".claude" / "settings.json").read_text()
+
+    assert first == after  # no change on re-run
+    assert ".claude/settings.json" in second.skipped
+    assert ".claude/settings.json" not in second.merged
+
+    data = json.loads(after)
+    observe_cmds = [
+        h["command"]
+        for g in data["hooks"]["PostToolUse"]
+        for h in g["hooks"]
+        if "capture observe" in h["command"]
+    ]
+    assert len(observe_cmds) == 1  # not duplicated
+
+
+def test_settings_json_written_fresh_when_absent(tmp_path: Path) -> None:
+    result = install("claude-code", target=tmp_path, tier="T4")
+    assert ".claude/settings.json" in result.written
+    assert ".claude/settings.json" not in result.merged
+
+
+def test_settings_json_malformed_existing_is_skipped(tmp_path: Path) -> None:
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / "settings.json").write_text("{ not valid json ")
+    before = (tmp_path / ".claude" / "settings.json").read_text()
+    result = install("claude-code", target=tmp_path, tier="T4")
+    # unreadable user file is left untouched, not clobbered
+    assert (tmp_path / ".claude" / "settings.json").read_text() == before
+    assert ".claude/settings.json" in result.skipped
+    assert ".claude/settings.json" not in result.merged
+
+
+def test_settings_json_non_object_existing_is_skipped(tmp_path: Path) -> None:
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / "settings.json").write_text("[1, 2, 3]")
+    result = install("claude-code", target=tmp_path, tier="T4")
+    assert ".claude/settings.json" in result.skipped
+
+
+def test_merge_settings_coerces_non_dict_fields() -> None:
+    from vouch.install_adapter import _merge_settings
+
+    dst = {"permissions": "oops", "hooks": "also-oops"}
+    src = {
+        "permissions": {"allow": ["mcp__vouch__kb_status"]},
+        "hooks": {"PostToolUse": [
+            {"matcher": "*", "hooks": [{"type": "command", "command": "vouch capture observe"}]}
+        ]},
+    }
+    changed = _merge_settings(src, dst)
+    assert changed is True
+    assert "mcp__vouch__kb_status" in dst["permissions"]["allow"]
+    cmds = [h["command"] for g in dst["hooks"]["PostToolUse"] for h in g["hooks"]]
+    assert "vouch capture observe" in cmds
+
+
+def test_merge_settings_ignores_malformed_src_groups() -> None:
+    from vouch.install_adapter import _merge_settings
+
+    dst: dict = {}
+    # a non-list event value and a non-dict group are both skipped defensively
+    src = {"hooks": {"BadEvent": "not-a-list", "PostToolUse": ["not-a-dict"]}}
+    assert _merge_settings(src, dst) is False  # nothing addable → no change
+
+
+def test_merge_settings_new_matcher_group_when_none_matches() -> None:
+    from vouch.install_adapter import _merge_settings
+
+    dst = {"hooks": {"PostToolUse": [
+        {"matcher": "Edit", "hooks": [{"type": "command", "command": "user-hook"}]}
+    ]}}
+    src = {"hooks": {"PostToolUse": [
+        {"matcher": "*", "hooks": [{"type": "command", "command": "vouch capture observe"}]}
+    ]}}
+    assert _merge_settings(src, dst) is True
+    matchers = [g.get("matcher") for g in dst["hooks"]["PostToolUse"]]
+    assert "Edit" in matchers and "*" in matchers  # user group kept, ours added
 
 
 def test_install_claude_md_appends_when_existing_unfenced(tmp_path: Path) -> None:
@@ -272,3 +406,77 @@ def test_cli_install_mcp_default_tier_is_t4(tmp_path: Path) -> None:
     assert (tmp_path / ".mcp.json").is_file()
     assert (tmp_path / "CLAUDE.md").is_file()
     assert (tmp_path / ".claude" / "settings.json").is_file()
+
+
+# --- packaging --------------------------------------------------------------
+
+
+def test_wheel_ships_adapters(tmp_path: Path) -> None:
+    """1.1.0 regression: wheels shipped without adapters/, so every pip/pipx
+    install failed ``vouch install-mcp <host>`` with ``(available: (none))``
+    — the templates only existed in source checkouts. The wheel build must
+    force-include them at ``vouch/adapters/``.
+    """
+    pytest.importorskip("hatchling")
+    proc = subprocess.run(
+        [sys.executable, "-m", "hatchling", "build", "-t", "wheel", "-d", str(tmp_path)],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert proc.returncode == 0, proc.stderr
+    wheels = sorted(tmp_path.glob("*.whl"))
+    assert wheels, proc.stdout
+    with zipfile.ZipFile(wheels[-1]) as zf:
+        names = zf.namelist()
+    assert any(
+        n.endswith("vouch/adapters/claude-code/install.yaml") for n in names
+    ), "adapter templates missing from the wheel"
+
+
+def test_installed_wheel_resolves_adapters(tmp_path: Path) -> None:
+    """Follow-up to the wheel-contents test, which was not enough: 1.1.0's
+    ADAPTERS_DIR pointed three parents above the package, so an installed
+    wheel could *contain* the templates yet still report
+    "(available: (none))". Import the wheel's own copy of the package (no
+    repo checkout in sight) and assert the resolver finds the packaged
+    templates.
+    """
+    pytest.importorskip("hatchling")
+    proc = subprocess.run(
+        [sys.executable, "-m", "hatchling", "build", "-t", "wheel", "-d", str(tmp_path)],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert proc.returncode == 0, proc.stderr
+    wheel = sorted(tmp_path.glob("*.whl"))[-1]
+    site = tmp_path / "site"
+    with zipfile.ZipFile(wheel) as zf:
+        zf.extractall(site)
+    env = dict(os.environ)
+    # The unpacked wheel must shadow the repo checkout; deps still resolve
+    # from the test venv further down sys.path.
+    env["PYTHONPATH"] = str(site)
+    probe = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import vouch.install_adapter as ia; import json, sys; "
+            "print(json.dumps({'file': ia.__file__, "
+            "'hosts': ia.available_adapters()}))",
+        ],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert probe.returncode == 0, probe.stderr
+    result = json.loads(probe.stdout)
+    assert str(site) in result["file"], result  # really the wheel's copy
+    assert "claude-code" in result["hosts"], (
+        f"installed copy can't resolve adapters: {result}"
+    )

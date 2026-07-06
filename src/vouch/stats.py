@@ -50,7 +50,7 @@ def _list_decided(store: KBStore) -> list[Proposal]:
         return []
     out: list[Proposal] = []
     for path in sorted(ddir.glob("*.yaml")):
-        out.append(Proposal.model_validate(_yaml_load(path.read_text())))
+        out.append(Proposal.model_validate(_yaml_load(path.read_text(encoding="utf-8"))))
     return out
 
 

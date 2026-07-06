@@ -1,0 +1,19 @@
+id: 20260703-091452-063145f6
+kind: claim
+proposed_by: a
+session_id: null
+proposed_at: '2026-07-03T09:14:52.632800Z'
+payload:
+  id: use-postgresql-15-for-enhanced-replication-and-monitoring-fe
+  text: Use PostgreSQL 15 for enhanced replication and monitoring features.
+  type: decision
+  confidence: 0.98
+  evidence:
+  - 1f8ef21996a0f59eeb5174071f5293fc3b864defe928b9ce7879022a8230dbc8
+  entities: []
+  tags: []
+rationale: null
+status: approved
+decided_at: '2026-07-03T09:15:19.456729Z'
+decided_by: a
+decision_reason: approved in Q1 decision review

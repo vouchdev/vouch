@@ -3,11 +3,15 @@
 Two different things both go by "the OpenClaw integration":
 
 1. **Loading vouch into an OpenClaw deployment.** That's the repo-root
-   [`openclaw.plugin.json`](../../openclaw.plugin.json) manifest — drop
-   the vouch repo into a deployment that vendors plugin repos and the
-   loader picks up the MCP server, the four slash commands, and the
-   trust-boundary declaration automatically. See the README section
-   "Running vouch as an OpenClaw plugin".
+   [`openclaw.plugin.json`](../../openclaw.plugin.json) manifest plus
+   [`package.json`](../../package.json) (the loader-facing
+   `openclaw.extensions` pointer at
+   [`vouch-context-engine.mjs`](./vouch-context-engine.mjs)) —
+   `openclaw plugins install --link <repo>` registers the context engine
+   (auto-bound to `plugins.slots.contextEngine`) and publishes the four
+   skills under [`skills/`](./skills/) as slash commands. The kb.* MCP
+   server is deployment config: `openclaw mcp add vouch -- vouch serve`.
+   See the README section "Running vouch as an OpenClaw plugin".
 2. **Enabling vouch in one OpenClaw-managed project.** That's this
    adapter, run with `vouch install-mcp openclaw --path <project>`.
 

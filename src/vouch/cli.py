@@ -8,26 +8,35 @@ same storage + audit + index layer.
 from __future__ import annotations
 
 import getpass
+import io
 import json
 import os
 import sys
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import asdict
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import click
 import yaml
 
 from . import __version__, bundle, health, volunteer_context
 from . import audit as audit_mod
+from . import capture as capture_mod
+from . import compile as compile_mod
+from . import digest as digest_mod
+from . import fetch as fetch_mod
+from . import inbox as inbox_mod
 from . import install_adapter as install_mod
 from . import lifecycle as life
 from . import metrics as metrics_mod
 from . import migrations as migrations_mod
+from . import notify as notify_mod
 from . import pr_cache as prc_mod
 from . import provenance as prov_mod
+from . import recall as recall_mod
 from . import sessions as sess_mod
 from . import stats as stats_mod
 from . import sync as sync_mod
@@ -40,7 +49,13 @@ from .context import build_context_pack
 from .lifecycle import LifecycleError
 from .logging_config import configure_logging
 from .models import Proposal, ProposalKind, ProposalStatus
-from .onboarding import seed_starter_kb
+from .onboarding import (
+    DEFAULT_TEMPLATE,
+    TEMPLATES,
+    available_templates,
+    seed_starter_kb,
+)
+from .page_filters import filter_pages, parse_kv
 from .page_kinds import PageKindError, load_page_kind_registry
 from .proposals import (
     EXPIRE_ACTOR,
@@ -133,6 +148,28 @@ def _echo(message: str = "", *, err: bool = False) -> None:
     click.echo(message, err=err, color=_color_enabled())
 
 
+def _force_utf8_stdio() -> None:
+    # On non-UTF-8 locales (e.g. LANG=en_US.ISO-8859-1) Python encodes stdio
+    # with the locale codec, so the '•' / '…' in CLI output — and any
+    # non-ASCII KB content flowing through the stdio servers — raises
+    # UnicodeEncodeError. Artifacts are UTF-8 on disk; speak UTF-8 on the
+    # wire too, replacing rather than crashing for terminals that can't.
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        if (
+            isinstance(stream, io.TextIOWrapper)
+            and (stream.encoding or "").lower().replace("-", "") != "utf8"
+        ):
+            with suppress(ValueError, OSError):
+                stream.reconfigure(encoding="utf-8", errors="replace")
+
+
+# At import, not in the cli() callback: click renders eager --help /
+# --version output during argument parsing, before any group callback
+# runs — and the group docstring's em dash already crashes a latin-1
+# stdout. Idempotent and a no-op on utf-8 streams.
+_force_utf8_stdio()
+
+
 @click.group()
 @click.version_option(__version__, prog_name="vouch")
 def cli() -> None:
@@ -145,12 +182,22 @@ def cli() -> None:
 
 @cli.command()
 @click.option("--path", default=".", type=click.Path(file_okay=False), show_default=True)
-def init(path: str) -> None:
+@click.option(
+    "--template",
+    default=DEFAULT_TEMPLATE,
+    show_default=True,
+    type=click.Choice(available_templates()),
+    help="Seed preset applied on top of the starter KB.",
+)
+def init(path: str, template: str) -> None:
     """Initialise a .vouch/ knowledge base at PATH."""
     root = Path(path).resolve()
     root.mkdir(parents=True, exist_ok=True)
     store = KBStore.init(root)
     seed = seed_starter_kb(store, approved_by=_whoami())
+    template_result = None
+    if template != DEFAULT_TEMPLATE:
+        template_result = TEMPLATES[template](store, approved_by=_whoami())
     health.rebuild_index(store)
     audit_mod.log_event(store.kb_dir, event="kb.init", actor=_whoami())
     click.echo(f"Initialised KB at {store.kb_dir}")
@@ -158,6 +205,14 @@ def init(path: str) -> None:
         click.echo(f"Seeded starter claim: {seed.claim_id}")
     else:
         click.echo("Starter claim already present.")
+    if template_result is not None:
+        if template_result.created_anything:
+            click.echo(
+                f"Applied template '{template_result.template}': "
+                f"{len(template_result.created)} item(s) created"
+            )
+        else:
+            click.echo(f"Template '{template_result.template}' already applied.")
     click.echo("Next steps:")
     click.echo("  vouch status")
     click.echo("  vouch search agent")
@@ -259,6 +314,53 @@ def stats(days: int, as_json: bool) -> None:
     )
     if cites["invalid_claim"] or cites["broken_citation"]:
         _echo(f"    invalid: {cites['invalid_claim']}, broken: {cites['broken_citation']}")
+
+
+@cli.command(name="digest")
+@click.option(
+    "--since",
+    default=digest_mod.DEFAULT_SINCE_SPEC,
+    show_default=True,
+    help="Window: a duration (7d, 12h), an ISO date, or 'all'.",
+)
+@click.option(
+    "--stale-days",
+    default=metrics_mod.DEFAULT_STALE_DAYS,
+    show_default=True,
+    type=int,
+    help="Freshness threshold for the stale-claims section.",
+)
+@click.option(
+    "--limit",
+    default=digest_mod.DEFAULT_LIMIT,
+    show_default=True,
+    type=int,
+    help="Cap per section (pending, decisions, stale, followups).",
+)
+@click.option(
+    "--format",
+    "fmt",
+    default="text",
+    show_default=True,
+    type=click.Choice(["text", "json", "markdown"]),
+)
+def digest_cmd(since: str, stale_days: int, limit: int, fmt: str) -> None:
+    """Read-only briefing: pending queue, recent decisions, stale claims,
+    followups due. Writes nothing — safe to run from cron."""
+    store = _load_store()
+    try:
+        since_dt = metrics_mod.parse_since(since)
+    except metrics_mod.MetricsError as e:
+        raise click.UsageError(str(e)) from e
+    d = digest_mod.build(
+        store, since=since_dt, stale_after_days=stale_days, limit=limit,
+    )
+    if fmt == "json":
+        _emit_json(d.to_dict())
+    elif fmt == "markdown":
+        click.echo(digest_mod.render_markdown(d))
+    else:
+        click.echo(digest_mod.render_text(d))
 
 
 def _findings_json(report) -> list[dict[str, Any]]:
@@ -655,6 +757,63 @@ def metrics(
     )
 
 
+# --- pages ------------------------------------------------------------------
+
+
+@cli.command(name="pages")
+@click.option("--kind", default=None, help="Filter by page kind (built-in or config-declared).")
+@click.option(
+    "--meta", "meta", multiple=True, metavar="K=V",
+    help="Frontmatter equality filter (repeatable).",
+)
+@click.option(
+    "--before", multiple=True, metavar="K=V",
+    help="Inclusive upper bound on a frontmatter field (dates/numbers).",
+)
+@click.option(
+    "--after", multiple=True, metavar="K=V",
+    help="Inclusive lower bound on a frontmatter field (dates/numbers).",
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON instead of text.")
+def pages_cmd(
+    kind: str | None,
+    meta: tuple[str, ...],
+    before: tuple[str, ...],
+    after: tuple[str, ...],
+    as_json: bool,
+) -> None:
+    """List pages, optionally filtered by kind and frontmatter.
+
+    Examples: `vouch pages --kind followup --meta followup_status=open
+    --before due_at=2026-07-10` lists open followups due by july 10.
+    """
+    store = _load_store()
+    try:
+        equals, lo, hi = parse_kv(meta), parse_kv(after), parse_kv(before)
+    except ValueError as e:
+        raise click.UsageError(str(e)) from e
+    hits = filter_pages(
+        store.list_pages(), kind=kind, equals=equals, before=hi, after=lo,
+    )
+    if as_json:
+        _emit_json(
+            [
+                {
+                    "id": p.id, "title": p.title, "type": p.type,
+                    "tags": p.tags, "metadata": p.metadata,
+                }
+                for p in hits
+            ]
+        )
+        return
+    for p in hits:
+        extras = " ".join(f"{k}={v}" for k, v in sorted(p.metadata.items()))
+        suffix = f"  ({extras})" if extras else ""
+        click.echo(f"{p.id}  [{p.type}]  {p.title}{suffix}")
+    if not hits:
+        click.echo("no matching pages")
+
+
 # --- proposals ------------------------------------------------------------
 
 
@@ -779,6 +938,142 @@ def show(proposal_id: str) -> None:
     with _cli_errors():
         pr = store.get_proposal(proposal_id)
     click.echo(yaml.safe_dump(pr.model_dump(mode="json"), sort_keys=False))
+
+
+@cli.command(name="read-claim")
+@click.argument("claim_id")
+def read_claim(claim_id: str) -> None:
+    """Read an approved claim by id."""
+    store = _load_store()
+    with _cli_errors():
+        claim = store.get_claim(claim_id)
+    click.echo(yaml.safe_dump(claim.model_dump(mode="json"), sort_keys=False))
+
+
+@cli.command(name="read-page")
+@click.argument("page_id")
+def read_page(page_id: str) -> None:
+    """Read an approved page by id."""
+    store = _load_store()
+    with _cli_errors():
+        page = store.get_page(page_id)
+    click.echo(yaml.safe_dump(page.model_dump(mode="json"), sort_keys=False))
+
+
+@cli.command(name="read-entity")
+@click.argument("entity_id")
+def read_entity(entity_id: str) -> None:
+    """Read an approved entity by id."""
+    store = _load_store()
+    with _cli_errors():
+        entity = store.get_entity(entity_id)
+    click.echo(yaml.safe_dump(entity.model_dump(mode="json"), sort_keys=False))
+
+
+@cli.command(name="read-relation")
+@click.argument("relation_id")
+def read_relation(relation_id: str) -> None:
+    """Read an approved relation by id."""
+    store = _load_store()
+    with _cli_errors():
+        relation = store.get_relation(relation_id)
+    click.echo(yaml.safe_dump(relation.model_dump(mode="json"), sort_keys=False))
+
+
+@cli.command(name="list-claims")
+def list_claims() -> None:
+    """List all approved claims."""
+    store = _load_store()
+    claims = store.list_claims()
+    if not claims:
+        click.echo("no claims found")
+        return
+    for claim in claims:
+        click.echo(f"{claim.id:50} {claim.text}")
+
+
+@cli.command(name="list-pages")
+def list_pages() -> None:
+    """List all approved pages."""
+    store = _load_store()
+    pages = store.list_pages()
+    if not pages:
+        click.echo("no pages found")
+        return
+    for page in pages:
+        click.echo(f"{page.id:50} {page.title}")
+
+
+@cli.command(name="list-entities")
+def list_entities() -> None:
+    """List all approved entities."""
+    store = _load_store()
+    entities = store.list_entities()
+    if not entities:
+        click.echo("no entities found")
+        return
+    for entity in entities:
+        click.echo(f"{entity.id:50} {entity.name} ({entity.type})")
+
+
+@cli.command(name="list-relations")
+def list_relations() -> None:
+    """List all approved relations."""
+    store = _load_store()
+    relations = store.list_relations()
+    if not relations:
+        click.echo("no relations found")
+        return
+    for relation in relations:
+        output = f"{relation.id:50} {relation.source} -> {relation.relation} -> "
+        output += relation.target
+        click.echo(output)
+
+
+@cli.command()
+@click.argument("proposal_ids", nargs=-1)
+@click.option(
+    "--json", "as_json", is_flag=True,
+    help="Emit machine-readable _meta.vouch_triage blocks.",
+)
+@click.option(
+    "--reverse", is_flag=True,
+    help="Ascending order (worst-first) instead of the default descending (best-first).",
+)
+def triage(proposal_ids: tuple[str, ...], as_json: bool, reverse: bool) -> None:
+    """Advisory triage scoring over pending proposals (opt-in: triage.enabled).
+
+    Scores each proposal on fit, citation quality, duplication risk, and
+    contradiction risk, then prints a ranked table. Never approves or
+    rejects — a human still decides via `vouch approve` / `vouch reject`.
+    """
+    from . import triage as triage_mod
+
+    store = _load_store()
+    with _cli_errors():
+        results = triage_mod.triage_pending(store, proposal_ids=list(proposal_ids) or None)
+    results.sort(key=lambda r: r["_meta"]["vouch_triage"]["score"], reverse=not reverse)
+
+    if as_json:
+        _emit_json(results)
+        return
+    if not results:
+        click.echo("no pending proposals to triage")
+        return
+    for r in results:
+        block = r["_meta"]["vouch_triage"]
+        preview = (
+            r["payload"].get("text")
+            or r["payload"].get("title")
+            or r["payload"].get("name")
+            or r["payload"].get("id")
+            or "-"
+        )
+        click.echo(
+            f"{block['score']:.2f}  [{block['recommendation']:>11}]  "
+            f"{r['id']}  [{r['kind']}]  {str(preview).strip()[:80]}"
+        )
+        click.echo(f"    {block['rationale']}")
 
 
 @cli.command()
@@ -1015,8 +1310,8 @@ def propose_page_cmd(
     click.echo(pr.id)
 
 
-def _parse_meta(pairs: tuple[str, ...]) -> dict[str, Any]:
-    """Parse repeated ``--meta key=value`` pairs into a frontmatter dict.
+def _parse_meta(pairs: tuple[str, ...], *, flag: str = "--meta") -> dict[str, Any]:
+    """Parse repeated ``key=value`` pairs into a frontmatter dict.
 
     Values run through ``yaml.safe_load`` so ``attendees=[a, b]`` and
     ``count=3`` arrive as a list / int rather than strings.
@@ -1024,10 +1319,255 @@ def _parse_meta(pairs: tuple[str, ...]) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for pair in pairs:
         if "=" not in pair:
-            raise click.BadParameter(f"--meta expects key=value, got {pair!r}")
+            raise click.BadParameter(f"{flag} expects key=value, got {pair!r}")
         key, _, raw = pair.partition("=")
-        out[key.strip()] = yaml.safe_load(raw)
+        key = key.strip()
+        try:
+            out[key] = yaml.safe_load(raw)
+        except yaml.YAMLError as e:
+            raise click.BadParameter(
+                f"{flag} value for {key!r} is invalid YAML: {e}",
+            ) from e
     return out
+
+
+# Keep entity scaffolding intentionally narrow because `propose_entity` accepts
+# arbitrary type strings; only well-known EntityType names are routed here.
+_SCAFFOLD_ENTITY_TYPES: frozenset[str] = frozenset(
+    {"person", "project", "repo", "company", "concept", "decision", "workflow"}
+)
+
+_CITATION_REMINDER = (
+    "\n\n<!-- citations required: attach at least one claim or source "
+    "(--claim <id> / --source <id> on vouch new) -->\n"
+)
+
+
+def _field_missing(value: Any) -> bool:
+    return value is None or value == "" or value == [] or value == {}
+
+
+def _resolve_new_kind(
+    kind: str,
+    registry: Any,
+    *,
+    force_entity: bool,
+) -> tuple[Literal["page", "entity"], str]:
+    if force_entity:
+        if kind not in _SCAFFOLD_ENTITY_TYPES:
+            known = ", ".join(sorted(_SCAFFOLD_ENTITY_TYPES))
+            raise click.ClickException(f"unknown entity type {kind!r} (known: {known})")
+        return "entity", kind
+    if registry.is_known(kind):
+        return "page", kind
+    if kind in _SCAFFOLD_ENTITY_TYPES:
+        return "entity", kind
+    page_kinds = ", ".join(sorted(registry.known()))
+    entity_kinds = ", ".join(sorted(_SCAFFOLD_ENTITY_TYPES))
+    raise click.ClickException(
+        f"unknown kind {kind!r}; page kinds: {page_kinds}; entity kinds: {entity_kinds}"
+    )
+
+
+def _stub_page_frontmatter(
+    registry: Any,
+    kind: str,
+    prefilled: dict[str, Any],
+) -> tuple[dict[str, Any], list[str], bool]:
+    required, _schema, required_citations = registry.resolve(kind)
+    metadata = dict(prefilled)
+    for field in required:
+        metadata.setdefault(field, "")
+    missing = [f for f in required if _field_missing(metadata.get(f))]
+    return metadata, missing, required_citations
+
+
+def _prompt_missing_fields(
+    missing: list[str],
+    metadata: dict[str, Any],
+) -> list[str]:
+    still_missing: list[str] = []
+    for field in missing:
+        raw = click.prompt(field, default="", show_default=False)
+        if raw:
+            try:
+                metadata[field] = yaml.safe_load(raw)
+            except yaml.YAMLError as e:
+                raise click.BadParameter(
+                    f"interactive value for {field!r} is invalid YAML: {e}",
+                ) from e
+        else:
+            metadata[field] = ""
+        if _field_missing(metadata.get(field)):
+            still_missing.append(field)
+    return still_missing
+
+
+def _print_new_page_draft(draft: dict[str, Any]) -> None:
+    click.echo(f"kind: {draft['kind']} (page)")
+    click.echo(f"title: {draft['title']}")
+    fm = yaml.safe_dump(draft["frontmatter"], default_flow_style=True).strip()
+    click.echo(f"frontmatter: {fm}")
+    missing = draft["missing_required_fields"]
+    if missing:
+        click.echo(f"missing required fields: {', '.join(missing)}")
+    else:
+        click.echo("missing required fields: (none)")
+    if draft["citation_reminder"]:
+        click.echo("citations: required (reminder appended to body)")
+    if draft.get("body"):
+        click.echo(f"body:\n{draft['body']}")
+    if draft.get("id"):
+        click.echo(f"proposal id (dry-run): {draft['id']}")
+
+
+def _print_new_entity_draft(draft: dict[str, Any]) -> None:
+    click.echo(f"kind: {draft['kind']} (entity)")
+    click.echo(f"name: {draft['name']}")
+    if draft.get("id"):
+        click.echo(f"proposal id (dry-run): {draft['id']}")
+
+
+@cli.command(name="new")
+@click.argument("kind")
+@click.option("--title", default=None, help="Page title (required for page kinds).")
+@click.option("--name", default=None, help="Entity name (required for entity kinds).")
+@click.option(
+    "--field",
+    "fields",
+    multiple=True,
+    help="Pre-fill a frontmatter field as key=value (repeatable). Value parsed as YAML.",
+)
+@click.option("--interactive", "-i", is_flag=True, help="Prompt for unfilled required fields.")
+@click.option("--body", default="", help="Page body. Use `-` to read from stdin.")
+@click.option("--claim", "claims", multiple=True)
+@click.option("--source", "sources", multiple=True)
+@click.option("--entity", "force_entity", is_flag=True, help="Force entity scaffold path.")
+@click.option("--dry-run", is_flag=True, help="Print assembled draft without creating a proposal.")
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON.")
+def new_cmd(
+    kind: str,
+    title: str | None,
+    name: str | None,
+    fields: tuple[str, ...],
+    interactive: bool,
+    body: str,
+    claims: tuple[str, ...],
+    sources: tuple[str, ...],
+    force_entity: bool,
+    dry_run: bool,
+    as_json: bool,
+) -> None:
+    """Scaffold a typed page or entity proposal from the page-kind registry."""
+    store = _load_store()
+    registry = load_page_kind_registry(store)
+    target, resolved_kind = _resolve_new_kind(kind, registry, force_entity=force_entity)
+
+    if target == "entity":
+        if not name or not name.strip():
+            raise click.ClickException("--name is required for entity kinds")
+        draft: dict[str, Any] = {
+            "dry_run": dry_run,
+            "target": "entity",
+            "kind": resolved_kind,
+            "name": name.strip(),
+        }
+        if dry_run:
+            with _cli_errors():
+                pr = propose_entity(
+                    store,
+                    name=name,
+                    entity_type=resolved_kind,
+                    proposed_by=_whoami(),
+                    dry_run=True,
+                )
+            draft["id"] = pr.id
+            if as_json:
+                _emit_json(draft)
+            else:
+                _print_new_entity_draft(draft)
+            return
+        with _cli_errors():
+            pr = propose_entity(
+                store,
+                name=name,
+                entity_type=resolved_kind,
+                proposed_by=_whoami(),
+            )
+        if as_json:
+            _emit_json({"id": pr.id})
+            return
+        click.echo(pr.id)
+        return
+
+    if not title or not title.strip():
+        raise click.ClickException("--title is required for page kinds")
+    if body == "-":
+        body = sys.stdin.read()
+
+    metadata = _parse_meta(fields, flag="--field")
+    metadata, missing, requires_citations = _stub_page_frontmatter(
+        registry, resolved_kind, metadata,
+    )
+    if interactive and missing:
+        missing = _prompt_missing_fields(missing, metadata)
+
+    citation_reminder = requires_citations and not (claims or sources)
+    if citation_reminder and not dry_run:
+        raise click.ClickException(
+            "this page kind requires citations; pass --claim/--source, "
+            "or rerun with --dry-run to print a draft with the citation reminder"
+        )
+    if citation_reminder:
+        body = body + _CITATION_REMINDER
+
+    page_draft: dict[str, Any] = {
+        "dry_run": dry_run,
+        "target": "page",
+        "kind": resolved_kind,
+        "title": title.strip(),
+        "frontmatter": metadata,
+        "body": body,
+        "missing_required_fields": missing,
+        "citation_reminder": citation_reminder,
+    }
+
+    if dry_run:
+        if not missing and not (requires_citations and not (claims or sources)):
+            with _cli_errors():
+                pr = propose_page(
+                    store,
+                    title=title,
+                    body=body,
+                    page_type=resolved_kind,
+                    claim_ids=list(claims),
+                    source_ids=list(sources),
+                    metadata=metadata,
+                    proposed_by=_whoami(),
+                    dry_run=True,
+                )
+            page_draft["id"] = pr.id
+        if as_json:
+            _emit_json(page_draft)
+        else:
+            _print_new_page_draft(page_draft)
+        return
+
+    with _cli_errors():
+        pr = propose_page(
+            store,
+            title=title,
+            body=body,
+            page_type=resolved_kind,
+            claim_ids=list(claims),
+            source_ids=list(sources),
+            metadata=metadata,
+            proposed_by=_whoami(),
+        )
+    if as_json:
+        _emit_json({"id": pr.id})
+        return
+    click.echo(pr.id)
 
 
 @cli.group(name="schema")
@@ -1051,6 +1591,7 @@ def schema_list_cmd(as_json: bool) -> None:
                 "required_fields": required,
                 "required_citations": citations,
                 "has_frontmatter_schema": bool(fm_schema),
+                "protected": registry.is_protected(name),
             }
         )
         extras: list[str] = []
@@ -1060,6 +1601,8 @@ def schema_list_cmd(as_json: bool) -> None:
             extras.append("citations-required")
         if fm_schema:
             extras.append("schema")
+        if registry.is_protected(name):
+            extras.append("protected")
         suffix = f"  ({'; '.join(extras)})" if extras else ""
         lines.append(f"{name}{suffix}")
     if as_json:
@@ -1179,6 +1722,47 @@ def source_add(path: str, title: str | None, url: str | None, source_type: str) 
     click.echo(src.id)
 
 
+@source.command("fetch")
+@click.argument("url")
+@click.option("--title", default=None)
+@click.option(
+    "--max-bytes",
+    default=fetch_mod.DEFAULT_MAX_BYTES,
+    show_default=True,
+    type=int,
+    help="Snapshot size cap.",
+)
+@click.option("--timeout", default=fetch_mod.DEFAULT_TIMEOUT, show_default=True, type=float)
+@click.option("--tag", "tags", multiple=True)
+def source_fetch(
+    url: str, title: str | None, max_bytes: int, timeout: float, tags: tuple[str, ...],
+) -> None:
+    """Fetch URL and register the exact bytes as a content-addressed Source.
+
+    Claims cite the immutable snapshot id, so the evidence a reviewer
+    approved against survives the live page drifting. http/https only;
+    hosts must resolve to public addresses; redirects are re-validated.
+    """
+    store = _load_store()
+    with _cli_errors():
+        src = fetch_mod.snapshot_url(
+            store,
+            url,
+            title=title,
+            tags=list(tags) or None,
+            max_bytes=max_bytes,
+            timeout=timeout,
+        )
+    audit_mod.log_event(
+        store.kb_dir,
+        event="source.fetch",
+        actor=_whoami(),
+        object_ids=[src.id],
+        data={"url": url},
+    )
+    click.echo(src.id)
+
+
 @source.command("verify")
 @click.option("--fail-on-issue", is_flag=True)
 def source_verify(fail_on_issue: bool) -> None:
@@ -1194,6 +1778,77 @@ def source_verify(fail_on_issue: bool) -> None:
             f"external={vr.external_status}  {vr.source.locator}"
         )
     if fail_on_issue and bad:
+        sys.exit(1)
+
+
+@cli.command(name="inbox")
+@click.option(
+    "--dir", "directory", required=True,
+    type=click.Path(exists=True, file_okay=False),
+    help="Folder to scan (must live under the project root).",
+)
+@click.option("--watch", "watch_mode", is_flag=True, help="Poll instead of a single pass.")
+@click.option(
+    "--poll-interval",
+    default=inbox_mod.DEFAULT_POLL_INTERVAL,
+    show_default=True,
+    type=float,
+)
+@click.option("--once", is_flag=True, help="Single tick even under --watch (test/ci bound).")
+def inbox_cmd(directory: str, watch_mode: bool, poll_interval: float, once: bool) -> None:
+    """Scan an inbox folder: each new file becomes a registered source plus
+    one pending page proposal. Proposes only — a human still approves."""
+    store = _load_store()
+    path = Path(directory)
+    with _cli_errors():
+        if watch_mode and not once:
+            def _report(res: inbox_mod.ScanResult) -> None:
+                if res.proposed:
+                    click.echo(f"filed {len(res.proposed)} proposal(s): {', '.join(res.proposed)}")
+
+            with suppress(KeyboardInterrupt):
+                inbox_mod.watch(
+                    store, path, poll_interval=poll_interval, on_result=_report,
+                )
+            return
+        res = inbox_mod.scan(store, path)
+    click.echo(f"filed {len(res.proposed)} proposal(s); skipped {len(res.skipped)} file(s)")
+    for pid in res.proposed:
+        click.echo(f"  {pid}")
+
+
+@cli.group()
+def notify() -> None:
+    """Outbound reviewer notification webhooks (config: notify.webhooks)."""
+
+
+@notify.command("sweep")
+def notify_sweep() -> None:
+    """Evaluate pending-queue triggers and fire configured webhooks.
+
+    Idempotent per (event, proposal) — safe to run from cron. Read-and-
+    notify only: nothing here can propose, approve, or edit."""
+    store = _load_store()
+    with _cli_errors():
+        fired = notify_mod.sweep(store)
+    if fired:
+        click.echo(f"fired {len(fired)} event(s): {', '.join(fired)}")
+    else:
+        click.echo("nothing to fire")
+
+
+@notify.command("test")
+@click.option("--url", required=True)
+@click.option("--secret", default=None, help="Optional hmac secret (or env:VAR).")
+def notify_test(url: str, secret: str | None) -> None:
+    """Send a synthetic event to URL and report delivery."""
+    resolved = None
+    if secret:
+        with _cli_errors():
+            resolved = notify_mod._resolve_env(secret, what="--secret")
+    ok = notify_mod.send_test(url, secret=resolved)
+    click.echo("delivered" if ok else "delivery failed")
+    if not ok:
         sys.exit(1)
 
 
@@ -1309,6 +1964,176 @@ def session_end_cmd(session_id: str, note: str | None) -> None:
     with _cli_errors():
         sess = sess_mod.session_end(store, session_id, note=note)
     _emit_json({"session": sess.id, "proposals": sess.proposal_ids})
+
+
+@cli.group()
+def capture() -> None:
+    """Automatic session capture (driven by claude code hooks)."""
+
+
+def _capture_store() -> KBStore | None:
+    """Locate the KB without the sys.exit(2) that _load_store does — hooks
+    must never abort the host."""
+    try:
+        return KBStore(discover_root())
+    except KBNotFoundError:
+        return None
+
+
+@capture.command("observe")
+def capture_observe_cmd() -> None:
+    """Append one observation from a PostToolUse hook payload (stdin JSON)."""
+    if sys.stdin.isatty():
+        return
+    try:
+        raw = sys.stdin.read()
+        payload = json.loads(raw) if raw.strip() else {}
+        if not isinstance(payload, dict):
+            return
+        session_id = str(payload.get("session_id") or "")
+        if not session_id:
+            return
+        tool_input = payload.get("tool_input")
+        obs = capture_mod.summarize_tool(
+            payload.get("tool_name"),
+            tool_input if isinstance(tool_input, dict) else {},
+            payload.get("tool_response"),
+        )
+        if obs is None:
+            return
+        store = _capture_store()
+        if store is None:
+            return
+        capture_mod.observe(
+            store, session_id,
+            tool=obs["tool"], summary=obs["summary"],
+            files=obs.get("files"), cmd=obs.get("cmd"),
+        )
+    except Exception:
+        # a capture failure must never break the user's tool call.
+        return
+
+
+@capture.command("finalize")
+@click.option("--session-id", default=None, help="Session id (else read from stdin payload).")
+def capture_finalize_cmd(session_id: str | None) -> None:
+    """Roll a session buffer into a PENDING summary (SessionEnd hook payload on stdin)."""
+    payload: dict[str, Any] = {}
+    if not sys.stdin.isatty():
+        raw = sys.stdin.read()
+        if raw.strip():
+            try:
+                loaded = json.loads(raw)
+                if isinstance(loaded, dict):
+                    payload = loaded
+            except json.JSONDecodeError:
+                payload = {}
+    sid = session_id or str(payload.get("session_id") or "")
+    if not sid:
+        return
+    store = _capture_store()
+    if store is None:
+        return
+    cwd = Path(str(payload.get("cwd") or ".")).resolve()
+    transcript_raw = payload.get("transcript_path")
+    transcript = Path(str(transcript_raw)) if transcript_raw else None
+    result = capture_mod.finalize(
+        store, sid, cwd=cwd, project=cwd.name,
+        generated_at=datetime.now(UTC).isoformat(),
+        transcript_path=transcript,
+    )
+    _emit_json(result)
+
+
+@capture.command("finalize-all")
+@click.option("--session-id", default=None, help="Current session id (else env VOUCH_SESSION_ID).")
+@click.option("--max-age-seconds", type=float, default=3600.0, help="Max age in seconds.")
+def capture_finalize_all_cmd(session_id: str | None, max_age_seconds: float) -> None:
+    """Finalize all capture buffers except current session (SessionStart cleanup)."""
+    sid = session_id or os.environ.get("VOUCH_SESSION_ID") or ""
+    if not sid:
+        # No session ID provided; silently succeed
+        _emit_json({"finalized": [], "skipped_recent": [], "skipped_current": []})
+        return
+
+    store = _capture_store()
+    if store is None:
+        # No KB; silently succeed
+        _emit_json({"finalized": [], "skipped_recent": [], "skipped_current": []})
+        return
+
+    result = capture_mod.finalize_all_except(
+        store, sid, max_age_seconds=max_age_seconds,
+    )
+    _emit_json(result)
+
+
+@capture.command("banner")
+def capture_banner_cmd() -> None:
+    """Emit a SessionStart nudge if captured summaries await review."""
+    store = _capture_store()
+    if store is None:
+        return
+    n = capture_mod.pending_count(store)
+    if n:
+        click.echo(
+            f"🔔 {n} auto-captured session summary(ies) awaiting review — "
+            f"run `vouch review`."
+        )
+
+
+@cli.command(name="recall")
+def recall_cmd() -> None:
+    """Emit a digest of all approved knowledge for session-start injection."""
+    store = _capture_store()
+    if store is None:
+        return
+    cfg = recall_mod.load_config(store)
+    if not cfg.enabled:
+        return
+    digest = recall_mod.build_digest(store, max_chars=cfg.max_chars)
+    if digest.strip():
+        click.echo(digest)
+
+
+@cli.command(name="compile")
+@click.option("--dry-run", is_flag=True, help="Draft and validate; file nothing.")
+@click.option("--max-pages", type=int, default=None,
+              help="Cap drafted pages (default: compile.max_pages, 5).")
+@click.option("--llm-cmd", default=None,
+              help="Override compile.llm_cmd from config.yaml for this run.")
+@click.option("--json", "as_json", is_flag=True, help="Machine-readable report.")
+def compile_cmd(dry_run: bool, max_pages: int | None,
+                llm_cmd: str | None, as_json: bool) -> None:
+    """Compile approved claims into topic-page proposals (llm-wiki ingest).
+
+    Runs the deployment-configured LLM (compile.llm_cmd) over the live
+    approved claims, validates every citation in the drafts, and files the
+    survivors as pending page proposals. Approval stays a separate human
+    step (`vouch review`).
+    """
+    store = _load_store()
+    actor = os.environ.get("VOUCH_AGENT") or compile_mod.COMPILE_ACTOR
+    try:
+        report = compile_mod.compile_kb(
+            store, actor=actor, triggered_by=_whoami(), llm_cmd=llm_cmd,
+            max_pages=max_pages, dry_run=dry_run,
+        )
+    except compile_mod.CompileError as e:
+        raise click.ClickException(str(e)) from e
+    if as_json:
+        _emit_json(report.to_dict())
+        return
+    verb = "would propose" if dry_run else "proposed"
+    _echo(f"{verb} {len(report.proposed)} page draft(s):")
+    for row in report.proposed:
+        _echo(f"  • {row['proposal_id']}  {row['title']}")
+    if report.dropped:
+        _echo(f"dropped {len(report.dropped)}:")
+        for row in report.dropped:
+            _echo(f"  • {row['title']} — {row['reason']}")
+    if report.proposed and not dry_run:
+        _echo("run `vouch review` to decide.")
 
 
 @cli.command()
@@ -1815,6 +2640,81 @@ def audit(tail: int, as_json: bool, project: str | None, agent: str | None) -> N
         )
 
 
+# --- cross-session themes -------------------------------------------------
+
+
+@cli.command(name="detect-themes")
+@click.option("--min-sessions", default=None, type=int, help="Minimum sessions for a cluster.")
+@click.option("--min-claims", default=None, type=int, help="Minimum claims for a cluster.")
+@click.option("--top-k", default=None, type=int, help="Max clusters to return.")
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON.")
+@click.option("--propose", is_flag=True, help="Propose theme pages for each cluster.")
+@click.option("--agent", default=None, help="Agent name for proposals.")
+def detect_themes_cmd(
+    min_sessions: int | None,
+    min_claims: int | None,
+    top_k: int | None,
+    as_json: bool,
+    propose: bool,
+    agent: str | None,
+) -> None:
+    """Detect recurring entity clusters across completed sessions."""
+    from . import themes
+
+    store = _load_store()
+    result = themes.detect_themes(
+        store,
+        min_sessions=min_sessions,
+        min_claims=min_claims,
+        top_k=top_k,
+    )
+    if as_json and not propose:
+        _emit_json({
+            "clusters": [
+                {
+                    "entities": c.entities,
+                    "claim_ids": c.claim_ids,
+                    "session_ids": c.session_ids,
+                    "score": c.score,
+                    "session_count": c.session_count,
+                    "claim_count": c.claim_count,
+                }
+                for c in result.clusters
+            ],
+            "config": result.config_used,
+        })
+        return
+    if not result.clusters:
+        click.echo("no themes detected")
+        return
+    if propose:
+        actor = agent or _whoami()
+        proposed: list[dict] = []
+        for cluster in result.clusters:
+            try:
+                p = themes.propose_theme(store, cluster, proposed_by=actor)
+                proposed.append(p)
+                if not as_json:
+                    click.echo(
+                        f"proposed: {p['theme_page_id']} "
+                        f"({p['claim_count']} claims, "
+                        f"{p['session_count']} sessions)"
+                    )
+            except Exception as e:
+                click.echo(
+                    f"skip: {', '.join(cluster.entities)} — {e}",
+                    err=True,
+                )
+        if as_json:
+            _emit_json({"proposed": proposed})
+        return
+    for i, c in enumerate(result.clusters, 1):
+        click.echo(
+            f"{i}. {', '.join(c.entities)}  "
+            f"score={c.score}  sessions={c.session_count}  claims={c.claim_count}"
+        )
+
+
 # --- export / import ------------------------------------------------------
 
 
@@ -2125,10 +3025,14 @@ def sync_apply_cmd(source_path: str, on_conflict: str) -> None:
 
 @cli.command()
 @click.argument("old_id")
-@click.argument("new_id")
+@click.argument("new_id", required=False)
 @click.option("--json", "as_json", is_flag=True, default=False, help="Emit the diff as JSON.")
-def diff(old_id: str, new_id: str, as_json: bool) -> None:
-    """Show what changed between two claim or two page revisions."""
+def diff(old_id: str, new_id: str | None, as_json: bool) -> None:
+    """Show what changed between two claim or two page revisions.
+
+    NEW_ID is optional for a claim that has been superseded: it resolves to
+    ``superseded_by`` automatically.
+    """
     from .diff import diff_artifacts
 
     store = _load_store()
@@ -2536,11 +3440,14 @@ def install_mcp(
         click.echo(f"  + {f}")
     for f in result.appended:
         click.echo(f"  ~ {f}  (appended fenced block)")
+    for f in result.merged:
+        click.echo(f"  ~ {f}  (merged into existing)")
     for f in result.skipped:
         click.echo(f"  · {f}  (already present)")
     click.echo(
         f"Done — {len(result.written)} written, "
-        f"{len(result.appended)} appended, {len(result.skipped)} skipped "
+        f"{len(result.appended)} appended, {len(result.merged)} merged, "
+        f"{len(result.skipped)} skipped "
         f"under {target}"
     )
 
@@ -2797,7 +3704,7 @@ def review_ui(
     auth_note = " (Bearer auth on)" if token else ""
     if open_browser and is_loopback:
         # Lazy-import webbrowser; some CI envs (headless) don't have a default
-        # browser configured and webbrowser.open() returns False rather than
+        # browser configured and webbrowser.open(encoding="utf-8") returns False rather than
         # raising — that's fine, the URL is also printed to stdout. When auth
         # is on, hand the browser the token once via ?token= so it can stash it.
         import threading

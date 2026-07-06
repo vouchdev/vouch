@@ -3,7 +3,7 @@
 **Git-native, review-gated knowledge base for LLM agents. MCP server + JSONL tool server + CLI.**
 
 <p align="center">
-  <img src="docs/banner.svg" alt="vouch — propose → review → commit → retrieve" width="100%"/>
+  <img src="docs/banner.svg" alt="vouch — sessions auto-capture into a review-gated knowledge base: propose or capture → review → commit → retrieve" width="100%"/>
 </p>
 
 <p align="center">
@@ -11,40 +11,22 @@
   <a href="https://pypi.org/project/vouch-kb/"><img src="https://img.shields.io/pypi/v/vouch-kb.svg" alt="PyPI"></a>
   <a href="https://pypi.org/project/vouch-kb/"><img src="https://img.shields.io/pypi/pyversions/vouch-kb.svg" alt="Python versions"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/vouchdev/vouch.svg" alt="MIT licensed"></a>
+  <a href="https://x.com/vouch_dev"><img src="https://img.shields.io/badge/follow-%40vouch__dev-000000?logo=x&logoColor=white" alt="Follow @vouch_dev on X"></a>
 </p>
 
 > Agents should not start every session with amnesia — but they shouldn't get to write whatever they want either.
 
-`vouch` is a knowledge base for LLM agents with an explicit **review gate**: agents *propose* writes; humans *approve* them with `vouch approve`. Approved artifacts are plain files on disk — YAML for claims, markdown for pages — so the KB lives in your repo, is reviewed in PRs, diffs cleanly, and can be exported as a portable bundle.
+`vouch` gives LLM agents durable memory with an explicit **review gate**: sessions capture themselves, agents *propose* writes, and nothing becomes durable knowledge until you approve it. Approved artifacts are plain files under `.vouch/` — YAML claims, markdown pages — so the KB lives in your repo, is reviewed like code, diffs cleanly, and travels with `git clone`.
 
-Still alpha — surface is small on purpose; expect breaking changes pre-1.0.
+The destination is the one [Andrej Karpathy's llm-wiki idea file](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) sketches: stop using LLMs as search engines that rediscover your documents on every question — use them as tireless knowledge engineers that compile, cross-reference, and maintain a living wiki, while humans curate and think. vouch is that idea with the write path made trustworthy. `vouch compile` has an LLM draft the topic pages, but every page cites approved claims, every `[claim: …]` citation is machine-verified before the draft is filed, and the drafts pass through the same review gate as every other write. The LLM compiles; the human approves; the wiki compounds.
 
-> **Featured for Gittensor (SN74).** vouch ships a one-command starter pack for **Gittensor** — Bittensor subnet 74. `vouch init --template gittensor` seeds a cited, already-approved decision-memory of SN74's scoring model: merged-PR rewards, PAT verification, sybil-resistance, the repo allow-list, the issue multiplier, and the emission split. It's the durable *why* behind each rule — reviewed, cited, and committed alongside your code. → **[docs/gittensor.md](docs/gittensor.md)**
+## Watch it work (110 seconds)
 
-## Why this exists
+[![vouch demo — capture, summarize, approve, compile, recall](docs/img/how-it-works-preview.gif)](docs/vouch-how-it-works.mp4)
 
-Three opinionated choices distinguish vouch from the neighbours:
+**capture → summarize → approve → compile → recall.** Captured live from the review console, no mockups — the preview above is muted and 3× speed; the full cut is **[▶ docs/vouch-how-it-works.mp4](docs/vouch-how-it-works.mp4)**. A Claude Code session captures itself, an LLM summarizes what the session *meant*, a human approves it at the gate, **`vouch compile`** distills the approved claims into cited topic pages (every `[claim: …]` citation machine-verified, still gated), and the film closes on real `vouch recall` output — the wiki the video just built, injected into the next session's first turn.
 
-1. **The KB is a folder in your repo.** Git is your audit log, your backup, and your sync mechanism. PRs are your review UI.
-2. **Writes require approval.** Agents file *proposals*; a human (or trusted approving agent) explicitly accepts them. `proposed/` is gitignored, so rejected drafts never pollute history.
-3. **Claims must cite sources.** A claim without at least one Source / Evidence id is a validation error, not a warning. Sources are content-hashed; the same evidence registered twice de-duplicates.
-
-## When to use vouch
-
-Worth it when:
-
-- **You run or contribute to a Gittensor (SN74) repo.** Scoring weights, the repo allow-list, anti-sybil thresholds, and emission splits get debated across PRs, Discord, and validator changes — then settle into nobody's notes. `vouch init --template gittensor` gives you a cited, reviewed record of *why* each rule exists and what it superseded. See [docs/gittensor.md](docs/gittensor.md).
-- **Multiple agents share a repo** (Claude Code + Cursor + a CI bot). Per-agent attribution in the audit log makes "which agent claimed what" answerable.
-- **Sessions keep re-explaining the same context.** Curated, cited claims let new sessions start from your team's agreed answer instead of re-grepping.
-- **You want decision records without the ADR ceremony.** `vouch crystallize` promotes a session's durable parts into proposals; one approve and they're permanent.
-- **You'd review agent-stated facts the way you review agent-written code.** Vouch is a PR queue for claimed knowledge.
-- **Compliance / audit trails matter.** Required citations + append-only audit log give you "who decided X, citing what, when" for free.
-
-Skip it if:
-
-- Solo hobby project where context fits in your head.
-- Short-lived branches with no compounding context.
-- Your team won't actually review proposals — without the gate, vouch is a worse note app.
+Everything below exists to reproduce that loop on your own project.
 
 ## Install
 
@@ -54,319 +36,114 @@ curl -fsSL https://raw.githubusercontent.com/vouchdev/vouch/main/install.sh | sh
 
 # …or directly via pipx (vouch-kb on PyPI; the command stays `vouch`)
 pipx install vouch-kb
-
-# …or from the cloned repo, in a venv
-pip install -e '.[dev]'
 ```
 
-The one-liner is POSIX `sh`, never needs `sudo`, and detects an existing
-Claude Code install to point you at the next step (`vouch install-mcp
-claude-code`). Inspect it first if you'd like — it's [`install.sh`](install.sh)
-at the repo root.
-
-## Quick start
+The one-liner is POSIX `sh` and never needs `sudo` — inspect [`install.sh`](install.sh) first if you'd like. Prefer containers? The released image runs the same CLI and MCP server ([`ghcr.io/vouchdev/vouch`](https://github.com/vouchdev/vouch/pkgs/container/vouch)):
 
 ```bash
-# 1. set up a KB at your project root
+docker run -i --rm -v "$PWD:/data" ghcr.io/vouchdev/vouch:latest          # stdio MCP server
+docker run --rm -v "$PWD:/data" ghcr.io/vouchdev/vouch:latest status      # any CLI command
+```
+
+## Reproduce the loop on your project
+
+**1. Set up the KB and wire Claude Code** (one-time, per repo):
+
+```bash
+cd /path/to/your/project
 vouch init
-
-# 2. as agent, register evidence + propose claims (via MCP/JSONL server)
-vouch serve                      # MCP over stdio  (Claude Code, Cursor, Codex)
-vouch serve --transport jsonl    # newline-delimited JSON over stdin/stdout
-
-# 3. as human, review and decide
-vouch status                     # one-line summary
-vouch pending                    # list pending proposals
-vouch show <id>                  # full details
-vouch approve <id>               # → durable artifact
-vouch reject <id> --reason "..."
-vouch expire --apply                  # optional: clear stale pending proposals
-
-# 4. commit
-git add .vouch/ && git commit -m "kb: approve auth-uses-jwt"
+vouch install-mcp claude-code
 ```
 
-## 30-second tour
+`init` creates `.vouch/` with a starter config; `install-mcp` writes `.mcp.json` (the `kb.*` MCP tools), the `/vouch-*` slash commands, and three hooks — `PostToolUse` capture, `SessionEnd` rollup, `SessionStart` recall. Restart Claude Code so they load.
 
-`vouch init` now creates a starter config plus one cited example claim, so
-you can try the loop before wiring an agent:
+**2. Point `compile` at an LLM** — the only step that needs a model. In `.vouch/config.yaml`:
+
+```yaml
+compile:
+  llm_cmd: "claude -p --model sonnet"
+```
+
+**3. Work a session — it captures itself.** Use Claude Code normally. Each tool call is harvested into a gitignored scratch buffer, and at session end the buffer rolls up — mechanically, no LLM — into **one pending session-summary page**. Never auto-approved: the next session greets you with
+
+```text
+🔔 1 auto-captured session summary(ies) awaiting review — run `vouch review`.
+```
+
+**4. Approve at the gate.**
 
 ```bash
-mkdir vouch-demo && cd vouch-demo
-vouch init
-vouch status
-vouch search agent
-vouch cite vouch-starter-reviewed-knowledge
+vouch review                    # walk pending proposals one at a time
 ```
 
-The starter claim is already durable and cites the starter source. Replace it
-with your project's first real source and claim when you are ready.
-
-![vouch end-to-end demo](docs/demo.gif)
-
-The full captured walkthrough lives at [docs/example-session.md](docs/example-session.md); re-render the GIF from [docs/demo.tape](docs/demo.tape) with `vhs docs/demo.tape`.
-
-## Gittensor (SN74)
-
-vouch's first domain template targets **Gittensor** — Bittensor subnet 74, which rewards open-source contribution by rule. Its scoring model evolves across PRs, Discord, and validator changes, and the rationale usually lives in people's heads. vouch is the durable, cited memory for it:
+The browser console in the video is the **[vouch webapp](https://github.com/vouchdev/webApp)** — chat, review, pending queue, claims, and stats over a running KB. Connect it in two commands:
 
 ```bash
-cd your-gittensor-repo
-vouch init --template gittensor   # seeds 1 source, 1 entity, 7 cited claims about SN74 scoring
-vouch status                      #   durable: 7 claims · 1 source · 1 entity
-vouch search "emission split"
-git add .vouch && git commit -m "chore: add vouch decision-memory KB"
+vouch serve --transport http    # serves the kb.* surface on 127.0.0.1:8731
+# then, in a clone of the vouch webapp:
+npm install && npm run dev      # opens http://localhost:5173 — point the
+                                # connect dialog at http://127.0.0.1:8731
 ```
 
-The seeded pack covers merged-PR rewards, PAT verification, scoring factors, sybil-resistance, the repo allow-list, the issue-solving multiplier, and the emission split — each a cited, approved, supersede-able claim. When a rule changes, `vouch supersede` the old claim with the new one so the history of *what changed* stays queryable.
+Lighter alternatives ship with vouch itself: `vouch review-ui` (a built-in browser queue; `pipx install 'vouch-kb[web]'` for the extra), or piecemeal `vouch pending`, `vouch show <id>`, `vouch approve <id>`, `vouch reject <id> --reason "…"`.
 
-vouch stores **no** live signals — it is not a validator or miner client and never reads on-chain scores. It is the institutional memory that sits beside the live layer (Gittensory). The seeded claims are starter-grade; `vouch supersede` them with the real spec or PR once you confirm the live rule.
-
-Full adoption guide — install, seed, wire the MCP server, capture decisions as cited claims: **[docs/gittensor.md](docs/gittensor.md)**.
-
-## Object model
-
-```
-Source     immutable input material (file, URL, transcript, commit, …)
-           content-addressed by sha256
-
-Evidence   span pointer into a Source (line range, timestamp, quote)
-
-Claim      atomic durable assertion
-           type: fact | decision | preference | workflow | observation | question | warning
-           status: working | actionable | stable | contested | superseded | archived | redacted
-           confidence: 0.0–1.0
-           cites: list of Source / Evidence ids
-
-Entity     typed thing (person | project | repo | concept | decision | system | …)
-Relation   typed edge (uses | depends_on | supersedes | contradicts | implements | …)
-
-Page       maintained markdown — entity write-up, decision record, session summary
-
-Session    work block opened by an agent; bundles its proposals
-AuditEvent append-only log record for every mutation
-```
-
-## File layout
-
-After `vouch init`, your repo contains:
-
-```
-.vouch/
-├── config.yaml                 # KB settings
-├── .gitignore                  # ignores proposed/, state.db
-├── audit.log.jsonl             # append-only audit (committed)
-├── state.db                    # SQLite FTS5 index (derived; not committed)
-├── claims/<id>.yaml            # reviewed claims (init seeds vouch-starter-*.yaml)
-├── pages/<id>.md               # markdown pages with YAML frontmatter
-├── sources/<sha>/{meta.yaml,content}
-├── entities/<id>.yaml          # graph nodes
-├── relations/<id>.yaml         # graph edges
-├── evidence/<id>.yaml          # span pointers into sources
-├── sessions/<id>.yaml          # agent session records
-├── proposed/<id>.yaml          # pending (gitignored, local-only)
-└── decided/<id>.yaml           # approved/rejected (committed for audit)
-```
-
-The files are the source of truth; `state.db` is a derivable cache (`vouch index` rebuilds it).
-
-## CLI surface
-
-```
-vouch init                                  # set up .vouch/ at PATH
-vouch discover [--path P]                   # find the nearest .vouch/ root
-vouch capabilities                          # emit the JSON capabilities descriptor
-vouch status [--json]                       # KB counts + pending proposals
-vouch stats [--days N] [--json]             # observability: queue, review rates, citations
-vouch lint [--stale-days N]                 # user-actionable problems
-vouch doctor                                # full sweep incl. source verification
-vouch fsck                                  # deep consistency: indexes, lifecycle, decided
-vouch migrate [--check] [--dry-run]         # upgrade .vouch/ format safely
-
-vouch pending                               # list pending proposals
-vouch review [--limit N] [--type KIND]      # guided proposal review queue
-vouch show <proposal-id>
-vouch approve <proposal-id> [--reason ...]
-vouch reject <proposal-id> --reason "..."
-vouch expire [--apply] [--days N] [--json]   # GC stale pending proposals
-
-vouch propose-claim --text ... --source ... [--type ...] [--confidence X]
-vouch propose-page --title ... [--body -] [--claim ID ...]
-vouch propose-entity --name ... --type ...
-vouch propose-relation --from ID --rel uses --to ID
-
-vouch source add PATH [--title ...] [--url ...]
-vouch source verify [--fail-on-issue]
-
-vouch supersede OLD_ID NEW_ID
-vouch contradict CLAIM_A CLAIM_B
-vouch archive CLAIM_ID
-vouch confirm CLAIM_ID
-vouch cite CLAIM_ID
-
-vouch session start [--task ...] [--note ...]
-vouch session end SESSION_ID
-vouch crystallize SESSION_ID [--no-page]
-
-vouch search QUERY [--limit N]
-vouch context TASK [--max-chars N] [--min-items N] [--require-citations]
-vouch index
-vouch audit [--tail N] [--json]
-
-vouch export --out path.tar.gz
-vouch export-check path.tar.gz
-vouch import-check path.tar.gz
-vouch import-apply path.tar.gz [--on-conflict skip|overwrite|fail]
-vouch sync-check PATH_OR_BUNDLE
-vouch sync-apply PATH_OR_BUNDLE [--on-conflict fail|skip|propose]
-
-vouch serve [--transport stdio|jsonl]
-```
-
-## MCP tools / JSONL methods (same surface, two transports)
-
-Read (unrestricted): `kb.capabilities`, `kb.status`, `kb.search`, `kb.context`, `kb.read_{page,claim,entity,relation}`, `kb.list_{pages,claims,entities,relations,sources,pending}`
-
-Source intake (not gated — evidence is harmless and de-duplicates): `kb.register_source`, `kb.register_source_from_path`, `kb.source_verify`
-
-Write (gated → produce proposals): `kb.propose_{claim,page,entity,relation}` (with `dry_run:true` for preview-only)
-
-Decisions: `kb.approve`, `kb.reject` (host trust required)
-
-Lifecycle (metadata about reviewed knowledge — direct mutation, audited): `kb.supersede`, `kb.contradict`, `kb.archive`, `kb.confirm`, `kb.cite`
-
-Sessions: `kb.session_start`, `kb.session_end`, `kb.crystallize`
-
-Maintenance: `kb.index_rebuild`, `kb.lint`, `kb.doctor`, `kb.audit`, `kb.export`, `kb.export_check`, `kb.import_check`, `kb.import_apply`
-
-## Wiring into Claude Code
-
-In your project's `.mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "vouch": {
-      "command": "vouch",
-      "args": ["serve"],
-      "env": { "VOUCH_AGENT": "claude-code" }
-    }
-  }
-}
-```
-
-`VOUCH_AGENT` is recorded as `proposed_by` and as the actor on every audit event, so multi-agent setups can attribute writes correctly.
-
-## Running vouch as an OpenClaw plugin
-
-Vouch ships an [OpenClaw](https://github.com/dripsmvcp/openclaw) plugin manifest at the
-repo root — [`openclaw.plugin.json`](openclaw.plugin.json). Drop the vouch repo
-into an OpenClaw deployment and the plugin loader picks it up automatically:
-the MCP server, the four slash commands (`/vouch-recall`, `/vouch-status`,
-`/vouch-resolve-issue`, `/vouch-propose-from-pr`), and the CLAUDE.md fenced
-snippet become available as one bundle.
-
-The manifest declares vouch's trust boundary explicitly — remote callers'
-filesystem access is confined, every write tool routes through the review
-gate, every lifecycle op is audit-logged. The `configSchema` exposes only
-`kb_path`, `agent`, and `transport` — no API keys, no secrets; vouch is
-local-first.
+**5. Compile the wiki.**
 
 ```bash
-# Inside an OpenClaw deployment that vendors plugin repos:
-openclaw plugin add vouchdev/vouch
-openclaw plugin enable vouch
+vouch compile                   # LLM drafts cited topic pages from approved claims
+vouch review                    # drafts land in the same gate — approve the keepers
 ```
 
-The plugin's `mcpServers.vouch` block matches the same `.mcp.json` shape
-Claude Code uses — both platforms drive the same `vouch serve` process,
-so the kb.* surface is identical regardless of host.
+Every `[claim: …]` marker and `[[wikilink]]` in a draft is verified mechanically against the store; drafts whose citations don't hold are dropped before they reach you. See [docs/compile.md](docs/compile.md).
 
-## JSONL request/response shape
+**6. Start the next session — it already knows.** The `SessionStart` hook runs `vouch recall`, injecting every approved claim and page title into the first turn, so the session starts from your reviewed knowledge instead of re-discovering it.
 
-The JSONL transport reads one envelope per line on stdin, writes one per line on stdout:
+Detection is Claude Code's hook contract: whatever a `SessionStart` hook prints becomes context in the session's opening turn. `vouch recall` prints the digest the video closes on — claims with their full text, pages by id and title:
 
-```jsonl
-{"id":"r1","method":"kb.search","params":{"query":"jwt","limit":5}}
-{"id":"r1","ok":true,"result":[{"kind":"claim","id":"auth-uses-jwt","snippet":"…","score":1.2,"backend":"fts5"}]}
+```text
+<vouch-approved-knowledge>
+# approved KB knowledge for this repo — 2 claim(s), 1 page(s). reviewed,
+# cited, durable. use kb_read_page / kb_search for detail; kb_propose_*
+# (human-approved) to add more.
+
+## claims
+- [auth-uses-jwt] Auth uses JWT tokens — decision from the design note.
+- [vouch-starter-reviewed-knowledge] Vouch stores reviewed, cited knowledge
+  in the repository so future agent sessions can retrieve agreed project
+  context.
+
+## pages
+- [edit-in-obsidian] Edit in Obsidian
+</vouch-approved-knowledge>
 ```
 
-Errors come back with `ok:false` and a structured `error.code` (`method_not_found`, `missing_param`, `invalid_request`, `internal_error`).
+Only approved artifacts are ever emitted — archived, superseded, and still-pending items are excluded — and the digest is size-guarded (`recall.max_chars`) with an explicit truncation notice.
 
-Every successful `kb.*` result that is object-shaped carries read-only trust metadata so clients can detect remote confinement:
+How the approved pages actually get used from there: recall carries the *titles*, and the session pulls full content on demand through the `kb.*` MCP tools — `kb_search` matches page bodies, `kb_read_page` returns a page's markdown plus the claims it cites, and `kb_context` bundles the most relevant claims and pages for a stated task. To pull a topic in explicitly, use the `/vouch-recall <topic>` slash command, or just ask Claude to check the KB. One thing to know: pages still sitting in `vouch review` are invisible to all of this — the gate applies to retrieval too, so a compiled page only starts informing sessions once you approve it.
 
-```json
-{
-  "id": "r1",
-  "ok": true,
-  "result": {
-    "backend": "fts5",
-    "hits": [],
-    "_meta": {
-      "vouch_trust": {
-        "remote": false,
-        "caller_kind": "jsonl",
-        "auth_subject": null
-      }
-    }
-  }
-}
-```
-
-| Transport | `remote` | `caller_kind` | `auth_subject` |
-|-----------|----------|---------------|----------------|
-| JSONL stdio | `false` | `jsonl` | `null` |
-| HTTP `/rpc` | `true` | `jsonl_http` | bearer fingerprint when authenticated |
-| MCP stdio | `false` | `mcp_stdio` | `null` |
-| HTTP `/mcp` | `true` | `mcp_http` | bearer fingerprint when authenticated |
-| CLI `--json` | `false` | `cli` | `null` |
-
-The block is server-attached metadata — client mutations are ignored. Array-shaped read results (e.g. `kb.list_claims`) pass through unchanged; trust rides on dict-shaped responses only (#233).
-
-## Portable bundles
+**7. Commit the knowledge with the code.**
 
 ```bash
-vouch export --out kb.tar.gz                     # tar.gz + manifest.json with per-file sha256
-vouch export-check kb.tar.gz                     # verify every file against the manifest
-vouch import-check kb.tar.gz                     # diff against destination — new / conflict / identical
-vouch import-apply kb.tar.gz --on-conflict skip  # apply (default skip; never destructive without overwrite)
+git add .vouch/ && git commit -m "kb: approve session summary"
 ```
 
-`proposed/`, `state.db`, and `audit.log.jsonl` are excluded from bundles — only committable artifacts travel.
+Pending drafts (`proposed/`) and the derived search index (`state.db`) are gitignored — what lands in history is exactly what passed review.
 
-## Compared to neighbours
+## The rules underneath
 
-| | mem0 / Letta | LLM-Wiki tools | **vouch** |
-|---|---|---|---|
-| Knowledge lives in | a service | filesystem | your **repo** |
-| Review of writes | none | none | **explicit `approve`** |
-| Evidence required | no | optional | **enforced** |
-| Per-agent attribution | partial | none | **yes** (audit log) |
-| Graph (entities + relations) | no | no | **yes** |
-| FTS5 search | no | varies | **yes** |
-| Portable bundle | no | no | **yes** |
-| Transports | SDK / HTTP | none | **MCP + JSONL** |
+* **Writes require approval.** Agents file *proposals* via the `kb.*` MCP tools (or `vouch serve --transport jsonl`); approval is the only path to a durable artifact, and the approver must differ from the proposer unless you opt out.
+* **Claims must cite sources.** A claim without evidence is a validation error, not a warning. Sources are content-hashed; the same evidence registered twice de-duplicates.
+* **History is append-only.** Every mutation lands in a committed audit log — who proposed, who approved, citing what, when.
 
-## What ships today
+## Going further
 
-| Area | Current support |
-|------|-----------------|
-| Knowledge base | `.vouch/` folder, YAML claims/entities/relations/evidence/sessions, markdown pages with frontmatter, JSONL audit log, content-addressed sources |
-| CLI | `init`, `discover`, `capabilities`, `status`, `lint`, `doctor`, `fsck`, `pending`, `show`, `approve`, `reject`, `propose-{claim,page,entity,relation}`, `source add`, `source verify`, `supersede`, `contradict`, `archive`, `confirm`, `cite`, `session {start,end}`, `crystallize`, `search`, `context`, `index`, `audit`, `export`, `export-check`, `import-check`, `import-apply`, `serve` |
-| Tool servers | MCP over stdio + JSONL over stdin/stdout, same `kb.*` surface across both transports, capabilities + knowledge-capability descriptor |
-| Schemas | 13 JSON Schemas (Draft 2020-12) generated from pydantic in [schemas/](schemas/), plus hand-maintained `bundle.manifest` and `jsonl-envelope` schemas |
-| Write safety | review-gated writes via [proposed/](spec/review-gate.md), `dry_run:true` previews, host trust required for `approve`/`reject`, atomic exclusive-create storage, path-traversal blocked on source intake and bundle import |
-| Retrieval | `retrieval.backend` in `config.yaml` selects the path: `auto` (default — embedding → FTS5 → substring), `embedding`, `fts5`, or `substring`. Semantic backends (`all-mpnet-base-v2`, `MiniLM-L6`, fastembed-BGE) ship behind install extras; `auto` degrades to FTS5 when they aren't installed. Context packs with citations + quality gate |
-| Lifecycle | `supersede`, `contradict`, `archive`, `confirm`, `cite` — direct mutations, all audited |
-| Portability | tar.gz bundles with per-file sha256 `manifest.json`, `export-check`, `import-check`, `import-apply` with skip/overwrite/fail conflict modes |
-| Audit | append-only `audit.log.jsonl`, per-event actor (`VOUCH_AGENT`), object ids, dry-run flag, reversible flag |
-| Adapters | Claude Code wiring documented via `.mcp.json` + `VOUCH_AGENT` env; per-runtime adapter templates not yet shipped |
-| Validation | pytest suite (storage, FTS5, audit, source-verify, review-gate, bundle, JSONL), ruff + mypy gates, GitHub CI |
-| Specification | dated snapshots under [spec/](spec/), JSON Schemas in [schemas/](schemas/), generator script at [scripts/gen_schemas.py](scripts/gen_schemas.py) |
-
-## Status
-
-Pre-1.0. What's *not* in this implementation: per-runtime adapter templates, benchmark fixtures, multi-agent sync, scopes beyond a single field on Claim/Source. If a hole matters to you, file an issue.
+* [docs/example-session.md](docs/example-session.md) — the full capture→approve→recall walkthrough with real output
+* [docs/getting-started.md](docs/getting-started.md) — the agent-side flow
+* [SPEC.md](SPEC.md) — the protocol contract (object model, JSONL envelopes, trust metadata)
+* `vouch --help` / `vouch capabilities` — the full CLI and machine-readable method surface
+* `vouch install-mcp <host>` also wires cursor, codex, zed, windsurf, openclaw and friends ([adapters/](adapters/))
+* [vouch webapp](https://github.com/vouchdev/webApp) — the chat-first browser console from the video; [vouch-desktop](https://github.com/vouchdev/vouch-desktop) wraps the same loop as a desktop app
+* [CONTRIBUTING.md](CONTRIBUTING.md) — development setup and the test gate
 
 ## License
 

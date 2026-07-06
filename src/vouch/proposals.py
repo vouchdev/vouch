@@ -25,7 +25,7 @@ from .models import (
     ProposalStatus,
     Relation,
 )
-from .page_kinds import PageKindError, validate_page
+from .page_kinds import PageKindError, load_page_kind_registry, validate_page
 from .storage import ArtifactNotFoundError, KBStore
 
 
@@ -331,9 +331,20 @@ def _approval_block_reason(
     if proposal.status != ProposalStatus.PENDING:
         return f"proposal {proposal.id} is {proposal.status.value}, not pending"
     if approved_by == proposal.proposed_by:
+        # Protected page kinds are exempt from the trusted-agent opt-out:
+        # policy-bearing pages (voice, decision records) always need a
+        # reviewer other than the proposer, whatever review.approver_role
+        # says. Checked first so the opt-out below can never widen it.
+        if proposal.kind == ProposalKind.PAGE:
+            page_type = str(proposal.payload.get("type", ""))
+            if page_type and load_page_kind_registry(store).is_protected(page_type):
+                return (
+                    f"forbidden_self_approval: page kind '{page_type}' is protected — "
+                    "it always requires a reviewer other than the proposer"
+                )
         cfg: dict[str, Any] = {}
         try:
-            loaded = yaml.safe_load((store.kb_dir / "config.yaml").read_text())
+            loaded = yaml.safe_load((store.kb_dir / "config.yaml").read_text(encoding="utf-8"))
             if isinstance(loaded, dict):
                 cfg = loaded
         except Exception:
@@ -577,7 +588,7 @@ def expire_pending_after_days(store: KBStore, *, override: int | None = None) ->
     if override is not None:
         return override
     try:
-        loaded = yaml.safe_load(store.config_path.read_text())
+        loaded = yaml.safe_load(store.config_path.read_text(encoding="utf-8"))
     except Exception:
         return _DEFAULT_EXPIRE_PENDING_DAYS
     if not isinstance(loaded, dict):

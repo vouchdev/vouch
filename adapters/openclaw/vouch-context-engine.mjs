@@ -1,17 +1,24 @@
 /**
  * OpenClaw plugin entry for the vouch-context engine (#228).
  *
- * The host loads this module via openclaw.plugin.json → openclaw.extensions.
+ * The host loads this module via package.json → openclaw.extensions; the
+ * plugin id below must match the `id` in openclaw.plugin.json or the loader
+ * rejects the import ("plugin id mismatch").
  * Runtime assembly delegates to the Python engine through `vouch openclaw-rpc`
  * so the cited synthesis path stays identical to unit tests and kb.context.
  *
- * Enable in openclaw.json:
- *   plugins.slots.contextEngine: "vouch-context"
+ * Enable in openclaw.json (the installer auto-binds this on install):
+ *   plugins.slots.contextEngine: "vouch"
+ *
+ * The engine id equals the plugin id on purpose — OpenClaw's installer,
+ * doctor, and gateway-startup paths all treat the contextEngine slot value
+ * as a plugin id, so distinct ids would quarantine the engine at resolve
+ * time and silently fall back to the legacy engine.
  */
 
 import { spawnSync } from 'node:child_process';
 
-export const ENGINE_ID = 'vouch-context';
+export const ENGINE_ID = 'vouch';
 export const ENGINE_NAME = 'Vouch Context Engine';
 
 /** @typedef {import('node:child_process').SpawnSyncReturns<string>} SpawnResult */
@@ -56,12 +63,13 @@ function callPythonEngine(method, params) {
   return parsed.result;
 }
 
-/** @type {{ id: string; name: string; description: string; register: (api: any) => void }} */
+/** @type {{ id: string; name: string; description: string; kind: string; register: (api: any) => void }} */
 const entry = {
-  id: 'vouch-context-engine',
+  id: 'vouch',
   name: 'Vouch Context Engine',
   description:
     'Review-gated KB context: cited retrieval + salience reflex + hot memory on every assemble()',
+  kind: 'context-engine',
 
   register(api) {
     api.registerContextEngine(ENGINE_ID, (ctx) => {

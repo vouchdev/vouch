@@ -23,7 +23,14 @@ field. Read-only: no writes, no proposals, no audit events.
   `last_confirmed_at`, `approved_by`).
 - **Line-diff the long text.** `claim.text` / `page.body` render as a
   `difflib` unified diff; everything else as `field: old → new`.
-- **CLI-only.** Read-only inspection; does not touch the `kb.*` capability set.
+- **Full `kb.*` parity.** Registered as `kb.diff` at all four sites (MCP tool,
+  JSONL handler, `capabilities.METHODS`, CLI) like any other read method —
+  see "MCP/JSONL parity" under Non-goals below for the superseded original
+  call on this.
+- **Omitted `new_id` resolves via `superseded_by`.** For a claim, `new_id` is
+  optional; when omitted it resolves to `old_claim.superseded_by`, erroring
+  clearly if that's unset. Pages have no successor pointer, so `new_id` is
+  required for a page.
 
 ## Components — `src/vouch/diff.py`
 
@@ -37,7 +44,10 @@ Raised for unknown ids and mismatched kinds.
 `kind: str, old_id: str, new_id: str, changes: list[FieldChange],
 text_diff: list[str]`.
 
-### `diff_artifacts(store, old_id, new_id) -> ArtifactDiff`
+### `diff_artifacts(store, old_id, new_id=None) -> ArtifactDiff`
+- **`new_id` resolution:** if omitted, `old_id` must resolve to a claim with
+  `superseded_by` set — that becomes `new_id`. A page, or a claim without a
+  successor, raises `DiffError` naming the id.
 - **Kind resolution:** try `store.get_claim` on both ids → both succeed ⇒
   `kind="claim"`. Otherwise try `store.get_page` on both → `kind="page"`. If an
   id resolves to neither, raise `DiffError("unknown artifact: <id>")`. If one is
@@ -55,7 +65,7 @@ Field sets (long text field rendered as `text_diff`, the rest as changes):
 - **Page** — body *(diff)*; title, type, status, claims, entities, sources,
   tags.
 
-## CLI — `vouch diff OLD NEW [--json]`
+## CLI — `vouch diff OLD [NEW] [--json]`
 
 Follows existing patterns (`_load_store`, `_cli_errors`, `_emit_json`).
 
@@ -74,6 +84,20 @@ diff claim <old> → <new>
 - `--json` → `_emit_json` of the `ArtifactDiff` as a dict.
 - No differences → prints `no differences`.
 
+## `kb.diff` — MCP + JSONL
+
+Same read as the CLI, exposed for agents:
+
+- **MCP** `kb_diff(old_id, new_id=None) -> dict` in `server.py`, next to
+  `kb_read_claim`/`kb_read_page` in the unrestricted-read section.
+- **JSONL** `_h_diff` reads `params["old_id"]` (required) and
+  `params["new_id"]` (optional) — `kb.diff` in `HANDLERS`.
+- **capabilities** `kb.diff` in `METHODS`, next to `kb.read_relation`.
+- Both return `dataclasses.asdict(ArtifactDiff)`.
+- Unrestricted like the other by-id read tools (`kb_read_claim`,
+  `kb_read_page`) — no `ViewerContext`/scope filtering, since resolving a
+  *specific known id* carries the same exposure either way.
+
 ## Error handling
 
 - Unknown id (neither claim nor page) → `DiffError` → clean CLI `Error:` line.
@@ -90,6 +114,14 @@ diff claim <old> → <new>
 
 ## Non-goals
 
-- Following supersede chains automatically (caller passes both ids).
+- Following supersede chains more than one hop (omitted `new_id` resolves one
+  `superseded_by` link, not the full chain to the latest revision).
 - Diffing entities/relations/sources (claims and pages only, per ROADMAP).
-- MCP/JSONL parity (`kb.*` surface unchanged).
+- `ViewerContext` scope filtering on `kb.diff` (see "MCP + JSONL" above —
+  matches the other by-id read tools).
+
+Superseded decision from the original design: "MCP/JSONL parity" was
+initially scoped out ("CLI-only... does not touch the `kb.*` capability
+set"). Issue #327 pointed out this leaves `kb.diff` as the only read method
+skipping the four-site registration convention (`CLAUDE.md` §"When you add a
+new kb.* method"), so it was added — see "MCP + JSONL" above.

@@ -70,7 +70,7 @@ def _validate_transforms(transforms: Any, where: str) -> list[dict[str, Any]]:
 
 def parse_manifest(path: Path) -> Manifest:
     try:
-        data = yaml.safe_load(path.read_text())
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
     except yaml.YAMLError as e:
         raise ManifestError(f"{path.name}: invalid yaml: {e}") from e
     if not isinstance(data, dict):
