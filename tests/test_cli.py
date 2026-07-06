@@ -11,6 +11,9 @@ which slipped past the except and surfaced as a traceback.
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -602,3 +605,35 @@ def test_new_pending_not_approved(store: KBStore) -> None:
     assert len(store.list_pages()) == 0
     pending = store.list_proposals(ProposalStatus.PENDING)
     assert len(pending) == 1
+
+
+# --- non-utf-8 stdio --------------------------------------------------------
+
+
+def test_status_survives_non_utf8_stdio(tmp_path: Path) -> None:
+    """1.1.0 regression: under a non-utf-8 locale (LANG=en_US.ISO-8859-1)
+    click encoded stdout with the locale codec, so the ``•`` separators in
+    ``vouch status`` raised UnicodeEncodeError. The CLI entry now forces
+    utf-8 stdio (replacing where the stream can't), so the command must
+    exit 0 with its summary intact.
+    """
+    KBStore.init(tmp_path)
+    env = {
+        k: v for k, v in os.environ.items() if k not in ("PYTHONUTF8", "PYTHONIOENCODING")
+    }
+    # PYTHONIOENCODING pins the stream codec no matter which locales the
+    # host has generated — same failure mode as LANG=en_US.ISO-8859-1.
+    env["PYTHONIOENCODING"] = "latin-1"
+    proc = subprocess.run(
+        [sys.executable, "-m", "vouch", "status"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=120,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "UnicodeEncodeError" not in proc.stderr, proc.stderr
+    assert "durable" in proc.stdout, proc.stdout

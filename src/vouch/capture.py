@@ -41,7 +41,7 @@ class CaptureConfig:
 def load_config(store: KBStore) -> CaptureConfig:
     """Read ``capture:`` from config.yaml; fall back to defaults."""
     try:
-        loaded = yaml.safe_load(store.config_path.read_text())
+        loaded = yaml.safe_load(store.config_path.read_text(encoding="utf-8"))
     except (OSError, yaml.YAMLError):
         return CaptureConfig()
     if not isinstance(loaded, dict):

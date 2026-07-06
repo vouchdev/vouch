@@ -8,6 +8,7 @@ same storage + audit + index layer.
 from __future__ import annotations
 
 import getpass
+import io
 import json
 import os
 import sys
@@ -147,10 +148,26 @@ def _echo(message: str = "", *, err: bool = False) -> None:
     click.echo(message, err=err, color=_color_enabled())
 
 
+def _force_utf8_stdio() -> None:
+    # On non-UTF-8 locales (e.g. LANG=en_US.ISO-8859-1) Python encodes stdio
+    # with the locale codec, so the '•' / '…' in CLI output — and any
+    # non-ASCII KB content flowing through the stdio servers — raises
+    # UnicodeEncodeError. Artifacts are UTF-8 on disk; speak UTF-8 on the
+    # wire too, replacing rather than crashing for terminals that can't.
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        if (
+            isinstance(stream, io.TextIOWrapper)
+            and (stream.encoding or "").lower().replace("-", "") != "utf8"
+        ):
+            with suppress(ValueError, OSError):
+                stream.reconfigure(encoding="utf-8", errors="replace")
+
+
 @click.group()
 @click.version_option(__version__, prog_name="vouch")
 def cli() -> None:
     """vouch — git-native, review-gated knowledge base for LLM agents."""
+    _force_utf8_stdio()
     configure_logging()
 
 
