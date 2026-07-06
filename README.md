@@ -11,6 +11,7 @@
   <a href="https://pypi.org/project/vouch-kb/"><img src="https://img.shields.io/pypi/v/vouch-kb.svg" alt="PyPI"></a>
   <a href="https://pypi.org/project/vouch-kb/"><img src="https://img.shields.io/pypi/pyversions/vouch-kb.svg" alt="Python versions"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/vouchdev/vouch.svg" alt="MIT licensed"></a>
+  <a href="https://x.com/vouch_dev"><img src="https://img.shields.io/badge/follow-%40vouch__dev-000000?logo=x&logoColor=white" alt="Follow @vouch_dev on X"></a>
 </p>
 
 > Agents should not start every session with amnesia — but they shouldn't get to write whatever they want either.
@@ -103,6 +104,7 @@ vouch init
 # 2. as agent, register evidence + propose claims (via MCP/JSONL server)
 vouch serve                      # MCP over stdio  (Claude Code, Cursor, Codex)
 vouch serve --transport jsonl    # newline-delimited JSON over stdin/stdout
+vouch serve --transport http     # /mcp + /rpc + /health on 127.0.0.1:8731
 
 # 3. as human, review and decide
 vouch status                     # one-line summary
@@ -283,7 +285,7 @@ vouch import-apply path.tar.gz [--on-conflict skip|overwrite|fail]
 vouch sync-check PATH_OR_BUNDLE
 vouch sync-apply PATH_OR_BUNDLE [--on-conflict fail|skip|propose]
 
-vouch serve [--transport stdio|jsonl]
+vouch serve [--transport stdio|jsonl|http] [--host HOST] [--port PORT] [--token TOKEN]
 ```
 
 ## MCP tools / JSONL methods (same surface, two transports)
@@ -339,8 +341,8 @@ automatically:
 * the **vouch context engine** — registered as `vouch` and auto-bound to
   `plugins.slots.contextEngine` on install, it injects cited KB context
   (retrieval + salience reflex + hot memory) into every agent turn, and
-* the **four skills / slash commands** (`/vouch-recall`, `/vouch-status`,
-  `/vouch-resolve-issue`, `/vouch-propose-from-pr`).
+* the **five skills / slash commands** (`/vouch-recall`, `/vouch-status`,
+  `/vouch-resolve-issue`, `/vouch-propose-from-pr`, `/vouch-start`).
 
 ```bash
 openclaw plugins install --link /path/to/vouch

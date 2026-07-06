@@ -40,7 +40,7 @@
   // 1 · SCROLL-REVEAL
   // ----------------------------------------------------------
   function initReveal() {
-    var sections = $all(".plate, .masthead");
+    var sections = $all(".plate, .masthead, .sect");
     if (REDUCE || !("IntersectionObserver" in window)) {
       sections.forEach(function (s) { s.classList.add("revealed"); });
       return;
@@ -405,12 +405,38 @@
   }
 
   // ----------------------------------------------------------
+  // 6 · COPY BUTTONS — [data-copy="#selector"] copies textContent
+  // ----------------------------------------------------------
+  function initCopy() {
+    $all("[data-copy]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var src = $(btn.getAttribute("data-copy"));
+        if (!src || !navigator.clipboard) return;
+        var text = $all(".cmd", src)
+          .map(function (line) {
+            var dim = $(".dim", line);
+            var t = line.textContent.replace(/^\$\s*/, "");
+            if (dim) t = t.replace(dim.textContent, "");
+            return t.trim();
+          })
+          .join("\n");
+        navigator.clipboard.writeText(text || src.textContent.trim()).then(function () {
+          var was = btn.textContent;
+          btn.textContent = "copied";
+          setTimeout(function () { btn.textContent = was; }, 1400);
+        });
+      });
+    });
+  }
+
+  // ----------------------------------------------------------
   function boot() {
     initReveal();
     initRail();
     initTerminal();
     initGate();
     initCatalogue();
+    initCopy();
   }
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", boot);

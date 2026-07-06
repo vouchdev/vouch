@@ -1,0 +1,419 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>vouch × claude code — a live session</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@700;800;900&family=Inter:wght@400;600&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ctext x='1' y='13' font-size='14' fill='%23ff5a3d'%3E%E2%9F%A9%3C/text%3E%3C/svg%3E">
+<style>
+:root{
+  --paper:#0d0a09; --paper-2:#161110; --paper-3:#201917;
+  --ink:#f5efe8; --ink-2:#c9bfb5; --sepia:#93887c;
+  --verm:#ff5a3d; --verm-2:#ff7c60;
+  --ok:#86c06c; --pend:#e0b45c;
+  --rule:#2a2320;
+  --fd:'Archivo','Inter',system-ui,sans-serif;
+  --fb:'Inter',system-ui,sans-serif;
+  --fm:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:var(--paper);color:var(--ink);font-family:var(--fb);font-size:16px;line-height:1.55;-webkit-font-smoothing:antialiased}
+::selection{background:var(--verm);color:var(--paper)}
+b,strong{font-weight:600}
+button:focus-visible{outline:2px solid var(--verm);outline-offset:3px;border-radius:4px}
+
+/* ---------- deck chrome ---------- */
+#bar{position:fixed;top:0;left:0;height:3px;background:var(--verm);width:0;z-index:9;transition:width .25s ease}
+#foot{position:fixed;left:0;right:0;bottom:0;display:flex;justify-content:space-between;align-items:center;
+  padding:10px 28px;font-family:var(--fm);font-size:11.5px;color:var(--sepia);z-index:9;
+  background:linear-gradient(transparent,rgba(13,10,9,.9) 40%)}
+#foot .ev b{color:var(--verm);font-weight:400}
+#foot .ev i{font-style:normal;color:var(--ink-2)}
+#nav{display:flex;gap:8px}
+#nav button{background:var(--paper-2);border:1px solid var(--rule);color:var(--ink-2);
+  font-family:var(--fm);font-size:14px;width:34px;height:30px;border-radius:8px;cursor:pointer}
+#nav button:hover{color:var(--verm);border-color:var(--verm)}
+
+/* ---------- slides ---------- */
+.slide{display:none;min-height:100vh;padding:48px 6vw 76px;position:relative}
+.slide.on{display:grid;align-content:center;gap:22px;max-width:1220px;margin:0 auto;
+  animation:rise .4s ease both}
+@keyframes rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion: reduce){.slide.on{animation:none}#bar{transition:none}}
+
+.eyebrow{font-family:var(--fm);font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:var(--verm)}
+.eyebrow::before{content:"⟩ ";font-weight:700}
+h1{font-family:var(--fd);font-weight:900;font-size:clamp(44px,7.2vw,96px);line-height:.95;letter-spacing:-.04em;margin:0}
+h2{font-family:var(--fd);font-weight:800;font-size:clamp(28px,4vw,50px);line-height:1.02;letter-spacing:-.025em;margin:0;max-width:22ch}
+h1 .a,h2 .a{color:var(--verm)}
+.lede{font-size:clamp(16px,1.5vw,19.5px);color:var(--ink-2);max-width:62ch;margin:0}
+.lede b{color:var(--ink)}
+.note{font-size:14px;color:var(--sepia);max-width:70ch;margin:0}
+.note a{color:var(--verm);text-decoration:none;border-bottom:1px solid rgba(255,90,61,.35)}
+
+/* cards + terminals */
+.row{display:grid;gap:18px}
+.row.c2{grid-template-columns:1fr 1fr}
+.row.c3{grid-template-columns:repeat(3,1fr)}
+.row.c4{grid-template-columns:repeat(4,1fr)}
+@media (max-width:900px){.row.c2,.row.c3,.row.c4{grid-template-columns:1fr}}
+.card{background:var(--paper-2);border:1px solid var(--rule);border-radius:14px;padding:20px 22px}
+.card h3{font-family:var(--fd);font-weight:700;font-size:17px;margin:0 0 6px;letter-spacing:-.01em}
+.card p{margin:0;font-size:14.5px;color:var(--ink-2)}
+
+.term{background:#0a0807;border:1px solid var(--rule);border-radius:14px;overflow:hidden;min-width:0}
+.term header{display:flex;align-items:center;gap:10px;padding:9px 16px;border-bottom:1px solid var(--rule);
+  font-family:var(--fm);font-size:11.5px;color:var(--sepia);letter-spacing:.06em}
+.term header .dot{width:9px;height:9px;border-radius:50%;background:var(--rule)}
+.term.agent header .dot{background:var(--verm)}
+.term.human header .dot{background:var(--ok)}
+.term header .who{margin-left:auto;color:var(--ink-2)}
+.term pre{margin:0;padding:16px 18px;font-family:var(--fm);font-size:12.5px;line-height:1.62;color:var(--ink-2);
+  overflow-x:auto;white-space:pre}
+.term pre .k{color:var(--sepia)}          /* json keys / yaml keys */
+.term pre .s{color:var(--ink)}            /* strings */
+.term pre .hl{color:var(--verm-2);font-weight:700}
+.term pre .ok{color:var(--ok);font-weight:700}
+.term pre .pd{color:var(--pend);font-weight:700}
+.term pre .dim{color:#5c534b}
+.term pre .cmd{color:var(--ink)}
+.term pre .cmd::before{content:"$ ";color:var(--verm)}
+
+.chip{display:inline-block;font-family:var(--fm);font-size:10.5px;letter-spacing:.14em;padding:3px 10px;
+  border-radius:999px;border:1px solid currentColor;text-transform:uppercase}
+.chip.pend{color:var(--pend)} .chip.ok{color:var(--ok)} .chip.rej{color:var(--verm)}
+
+/* the gate diagram */
+.gate{display:grid;grid-template-columns:1fr 60px 1fr;gap:18px;align-items:stretch}
+.gate .rail{position:relative}
+.gate .rail::before{content:"";position:absolute;left:50%;top:-8px;bottom:-8px;width:3px;
+  background:var(--verm);box-shadow:0 0 22px rgba(255,90,61,.55);border-radius:2px}
+.gate .rail span{position:absolute;top:-30px;left:50%;transform:translateX(-50%);
+  font-family:var(--fm);font-size:10.5px;letter-spacing:.16em;color:var(--verm);
+  border:1px solid var(--verm);border-radius:999px;padding:3px 10px;background:var(--paper);white-space:nowrap}
+.gate .lane{display:grid;gap:12px;align-content:start}
+.gate .lane .lab{font-family:var(--fm);font-size:11px;letter-spacing:.16em;color:var(--sepia);text-transform:uppercase}
+.mini{background:var(--paper-2);border:1px dashed var(--rule);border-radius:12px;padding:13px 15px;font-family:var(--fm);font-size:12px}
+.mini b{display:block;color:var(--ink);font-weight:700;margin-bottom:3px}
+.mini i{font-style:normal;color:var(--sepia)}
+.mini .chip{margin-top:8px}
+.mini.solid{border-style:solid;background:var(--paper-3)}
+@media (max-width:900px){.gate{grid-template-columns:1fr}.gate .rail{min-height:46px}.gate .rail::before{left:0;right:0;top:50%;bottom:auto;height:3px;width:auto}.gate .rail span{top:50%;transform:translate(-50%,-50%)}}
+
+.quote{border-left:3px solid var(--verm);padding:6px 0 6px 22px;font-size:clamp(17px,2vw,22px);color:var(--ink);max-width:56ch;font-style:italic}
+.quote small{display:block;margin-top:8px;font-style:normal;font-family:var(--fm);font-size:11.5px;color:var(--sepia)}
+
+.kv{display:flex;flex-wrap:wrap;gap:10px 26px;font-family:var(--fm);font-size:12.5px;color:var(--sepia)}
+.kv b{color:var(--ink-2);font-weight:400}
+
+@media print{
+  #bar,#foot,#nav{display:none}
+  .slide{display:grid !important;min-height:auto;page-break-after:always;padding:40px}
+  body{background:var(--paper)}
+}
+</style>
+</head>
+<body>
+
+<div id="bar"></div>
+
+<!-- 1 ─ title -->
+<section class="slide" data-ev="session.start · by <b>claude-code</b>">
+  <p class="eyebrow">vouch × claude code — recorded live in the vouch repo · 2026-07-02</p>
+  <h1>vouch<span class="a">.</span></h1>
+  <h2 style="font-weight:800;font-size:clamp(22px,3vw,38px);max-width:none">git-native, review-gated memory for coding agents</h2>
+  <p class="lede">every terminal line, id, hash, and timestamp in this deck comes from <b>one real session</b>:
+  claude code proposing knowledge over the <b>kb.* tool surface</b>, and a human deciding what survives.</p>
+  <p class="note">navigate with ← → · print to pdf with ctrl-p</p>
+</section>
+
+<!-- 2 ─ problem -->
+<section class="slide" data-ev="observation · every session starts from zero">
+  <p class="eyebrow">the problem</p>
+  <h2>your agent forgets everything — or remembers <span class="a">anything</span>.</h2>
+  <div class="row c3">
+    <div class="card"><h3>amnesia</h3><p>every session re-greps the repo, re-asks the same questions, re-learns the same conventions. you pay for the onboarding again and again.</p></div>
+    <div class="card"><h3>unsupervised memory</h3><p>auto-memory tools fix amnesia by letting the agent write down whatever it concluded — right or wrong. a hallucination stored today is a confident "fact" next month.</p></div>
+    <div class="card"><h3>no provenance</h3><p>six weeks later nobody can answer "why do we believe this?" — no source, no reviewer, no record of what it replaced.</p></div>
+  </div>
+  <blockquote class="quote">agents should not start every session with amnesia — but they shouldn't get to write whatever they want either.<small>README.md, vouchdev/vouch</small></blockquote>
+</section>
+
+<!-- 3 ─ idea -->
+<section class="slide" data-ev="design invariant · writes must be reviewed">
+  <p class="eyebrow">the idea</p>
+  <h2>review agent-claimed <span class="a">facts</span> like you review agent-written code.</h2>
+  <p class="lede">agents <b>propose</b>; humans <b>approve</b>. a claim without cited evidence is a validation error, not a warning. nothing becomes durable knowledge without passing the gate.</p>
+  <div class="gate" style="margin-top:26px">
+    <div class="lane">
+      <div class="lab">proposed — by the agent</div>
+      <div class="mini"><b>openclaw-manifest-version-lockstep</b><i>claim · workflow · cites CLAUDE.md</i><br><span class="chip pend">pending</span></div>
+      <div class="mini"><b>state-db-must-be-committed</b><i>claim · fact · a misreading</i><br><span class="chip pend">pending</span></div>
+    </div>
+    <div class="rail"><span>the gate</span></div>
+    <div class="lane">
+      <div class="lab">decided — by a human</div>
+      <div class="mini solid"><b>openclaw-manifest-version-lockstep</b><i>durable claim · approved_by: a</i><br><span class="chip ok">approved</span></div>
+      <div class="mini"><b>state-db-must-be-committed</b><i>never entered the kb · reason on record</i><br><span class="chip rej">rejected</span></div>
+    </div>
+  </div>
+  <p class="note">these four are not mockups — they are the proposals from this deck's live session. the next slides replay it.</p>
+</section>
+
+<!-- 4 ─ what it is -->
+<section class="slide" data-ev="storage · plain files, committed">
+  <p class="eyebrow">what it is, concretely</p>
+  <h2>a folder in your repo. <span class="a">plaintext</span> all the way down.</h2>
+  <div class="row c2">
+    <div class="term"><header><span class="dot"></span>.vouch/ — after vouch init</header><pre>
+.vouch/
+├── config.yaml            <span class="dim"># kb settings</span>
+├── audit.log.jsonl        <span class="dim"># append-only audit (committed)</span>
+├── claims/&lt;id&gt;.yaml       <span class="dim"># reviewed claims</span>
+├── pages/&lt;id&gt;.md          <span class="dim"># markdown pages</span>
+├── sources/&lt;sha256&gt;/      <span class="dim"># content-addressed evidence</span>
+├── proposed/&lt;id&gt;.yaml     <span class="dim"># pending (gitignored)</span>
+├── decided/&lt;id&gt;.yaml      <span class="dim"># approvals + rejections (committed)</span>
+└── state.db               <span class="dim"># derived fts5 index (not committed)</span></pre></div>
+    <div style="display:grid;gap:14px;align-content:center">
+      <div class="card"><h3>git is the infrastructure</h3><p>the kb diffs in prs, travels with clones, and needs no service. rejected drafts are gitignored, so they never pollute history.</p></div>
+      <div class="card"><h3>the audit log is the history</h3><p>every mutation is an append-only event with an actor. <span style="font-family:var(--fm);font-size:12px">decided/</span> is the queryable summary of every approve and reject.</p></div>
+      <div class="card"><h3>search is derived, never authoritative</h3><p>state.db is an fts5 (optionally embedding) index rebuilt from the files. the yaml is the source of truth.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- 5 ─ wiring -->
+<section class="slide" data-ev="kb.status · by <b>claude-code</b> · <i>ok:true</i>">
+  <p class="eyebrow">wiring — one block of json</p>
+  <h2>claude code drives it as an <span class="a">mcp server</span>.</h2>
+  <div class="row c2">
+    <div class="term"><header><span class="dot"></span>.mcp.json<span class="who">your project root</span></header><pre>
+{
+  <span class="k">"mcpServers"</span>: {
+    <span class="k">"vouch"</span>: {
+      <span class="k">"command"</span>: <span class="s">"vouch"</span>,
+      <span class="k">"args"</span>: [<span class="s">"serve"</span>],
+      <span class="k">"env"</span>: { <span class="k">"VOUCH_AGENT"</span>: <span class="hl">"claude-code"</span> }
+    }
+  }
+}</pre></div>
+    <div class="term agent"><header><span class="dot"></span>kb.status<span class="who">live response</span></header><pre>
+{
+  <span class="k">"kb_dir"</span>: <span class="s">"~/Dev/…/vouch/.vouch"</span>,
+  <span class="k">"claims"</span>: 3,  <span class="k">"pages"</span>: 5,  <span class="k">"sources"</span>: 5,
+  <span class="k">"pending_proposals"</span>: <span class="pd">12</span>,
+  <span class="k">"audit_events"</span>: 11,
+  <span class="k">"index_present"</span>: true,
+  <span class="k">"_meta"</span>: { <span class="k">"vouch_trust"</span>: {
+    <span class="k">"remote"</span>: false, <span class="k">"caller_kind"</span>: <span class="s">"jsonl"</span> } }
+}</pre></div>
+  </div>
+  <p class="note"><b style="color:var(--ink-2)">VOUCH_AGENT</b> becomes the actor on every proposal and audit event — with several agents in one repo, attribution stays exact. the same kb.* methods ride mcp, jsonl, and the cli.</p>
+</section>
+
+<!-- 6 ─ demo: recall -->
+<section class="slide" data-ev="kb.context · by <b>claude-code</b> · <i>quality.ok: true</i>">
+  <p class="eyebrow">live — the agent recalls before it works</p>
+  <h2>reviewed answers, <span class="a">citations attached</span>.</h2>
+  <div class="term agent"><header><span class="dot"></span>kb.context<span class="who">proposed_by: claude-code</span></header><pre>
+<span class="dim">→ request</span>   { <span class="k">"task"</span>: <span class="s">"reproduce the CI checks locally before pushing a branch"</span>,
+              <span class="k">"require_citations"</span>: true }
+
+<span class="dim">← response</span>  { <span class="k">"id"</span>: <span class="hl">"reproduce-ci-locally"</span>, <span class="k">"type"</span>: <span class="s">"claim"</span>, <span class="k">"backend"</span>: <span class="s">"fts5"</span>,
+              <span class="k">"summary"</span>: <span class="s">"to reproduce vouch's CI \"test\" job locally, install
+                          `.[dev,web]` (NOT the `[embeddings]` extra) and…"</span>,
+              <span class="k">"citations"</span>: [<span class="s">"98e3f546…9017f6ad9b"</span>] }
+            <span class="k">"quality"</span>: { <span class="k">"ok"</span>: <span class="ok">true</span>, <span class="k">"uncited_items"</span>: [] }   <span class="dim">(+ 2 page hits omitted)</span></pre></div>
+  <p class="lede">this claim was approved by a human on <b>2026-07-01</b> after actually running the ci commands. today's session starts from that reviewed answer — with the evidence hash — instead of re-deriving it or trusting a stale note.</p>
+</section>
+
+<!-- 7 ─ demo: propose -->
+<section class="slide" data-ev="proposal.claim.create · by <b>claude-code</b> · <i>status: pending</i>">
+  <p class="eyebrow">live — the agent learns something new</p>
+  <h2>writes don't land. they <span class="a">queue</span>.</h2>
+  <div class="row c2">
+    <div class="term agent"><header><span class="dot"></span>kb.register_source_from_path<span class="who">evidence first</span></header><pre>
+<span class="dim">→</span> { <span class="k">"path"</span>: <span class="s">"CLAUDE.md"</span> }
+
+<span class="dim">←</span> { <span class="k">"id"</span>: <span class="hl">"d3367f22…efa76e4ed"</span>,
+    <span class="k">"title"</span>: <span class="s">"vouch contributor guide"</span>,
+    <span class="k">"immutable"</span>: true,
+    <span class="k">"byte_size"</span>: 11501 }
+
+<span class="dim">sources are content-addressed —
+registering the same file twice
+de-duplicates by sha256.</span></pre></div>
+    <div class="term agent"><header><span class="dot"></span>kb.propose_claim<span class="who">proposed_by: claude-code</span></header><pre>
+<span class="dim">→</span> { <span class="k">"text"</span>: <span class="s">"when bumping the package version in
+      pyproject.toml, update the version field in
+      openclaw.plugin.json in the same change …"</span>,
+    <span class="k">"claim_type"</span>: <span class="s">"workflow"</span>, <span class="k">"confidence"</span>: 0.9,
+    <span class="k">"evidence"</span>: [<span class="hl">"d3367f22…efa76e4ed"</span>] }
+
+<span class="dim">←</span> { <span class="k">"proposal_id"</span>: <span class="hl">"20260702-064343-a1de146e"</span>,
+    <span class="k">"status"</span>: <span class="pd">"pending"</span> }</pre></div>
+  </div>
+  <p class="lede">a claim <b>must cite registered evidence</b> or it fails validation. and the agent cannot approve its own proposal — self-approval is refused by the gate.</p>
+</section>
+
+<!-- 8 ─ demo: queue -->
+<section class="slide" data-ev="kb.list_pending · 2 proposals by <b>claude-code</b> in queue">
+  <p class="eyebrow">live — meanwhile, in the human's terminal</p>
+  <h2>one of these proposals is <span class="a">wrong</span>.</h2>
+  <div class="term human"><header><span class="dot"></span>review queue<span class="who">a@dev · vouch cli</span></header><pre>
+<span class="cmd">vouch pending</span>
+• 20260702-052637-f57ed657  [page]   by vouch-capture
+    session summary: vouch (7e297581-a66c-43d5-a869-7ed0b67ed9b2)
+• 20260702-064343-25517027  [claim]  by <span class="hl">claude-code</span>
+    <span class="pd">vouch stores approved claims in the sqlite database state.db, so state.db
+    must be committed to git alongside the audit l…</span>
+• 20260702-064343-a1de146e  [claim]  by <span class="hl">claude-code</span>
+    when bumping the package version in pyproject.toml, update the version
+    field in openclaw.plugin.json in the same change…
+<span class="dim">… 11 earlier proposals trimmed</span></pre></div>
+  <p class="lede">the second claim misreads the architecture — <b>state.db is a derived cache, not the store</b>. in an unsupervised memory system it would already be a "fact". here it's just a line in a queue.</p>
+</section>
+
+<!-- 9 ─ demo: decide -->
+<section class="slide" data-ev="proposal.claim.approve + reject · by <b>a</b>">
+  <p class="eyebrow">live — the gate, exercised</p>
+  <h2>one command to <span style="color:var(--ok)">keep</span>. one to <span class="a">kill</span>.</h2>
+  <div class="row c2">
+    <div class="term human"><header><span class="dot"></span>approve<span class="who">decided_by: a</span></header><pre>
+<span class="cmd">vouch approve 20260702-064343-a1de146e \
+    --reason "matches CLAUDE.md and the manifest;
+              verified openclaw.plugin.json carries a
+              version field that mirrors pyproject.toml"</span>
+
+<span class="ok">Approved → claim/openclaw-manifest-version-lockstep</span></pre></div>
+    <div class="term human"><header><span class="dot"></span>reject<span class="who">decided_by: a</span></header><pre>
+<span class="cmd">vouch reject 20260702-064343-25517027 \
+    --reason "wrong: state.db is a derived fts5 cache
+              and is gitignored by vouch init; the
+              yaml/markdown files are the source of
+              truth. vouch index rebuilds it."</span>
+
+<span class="hl">Rejected 20260702-064343-25517027</span></pre></div>
+  </div>
+  <p class="lede">the wrong claim <b>never touched the kb</b> — but the rejection and its reason are recorded in <span style="font-family:var(--fm);font-size:14px">decided/</span>, so no future session re-proposes it in ignorance.</p>
+</section>
+
+<!-- 10 ─ on disk -->
+<section class="slide" data-ev="claim/openclaw-manifest-version-lockstep · durable">
+  <p class="eyebrow">live — what actually landed on disk</p>
+  <h2>a yaml file you could <span class="a">code-review</span>.</h2>
+  <div class="row c2">
+    <div class="term"><header><span class="dot"></span>.vouch/claims/openclaw-manifest-version-lockstep.yaml</header><pre>
+<span class="k">id:</span> <span class="hl">openclaw-manifest-version-lockstep</span>
+<span class="k">text:</span> <span class="s">when bumping the package version in pyproject.toml,
+  update the version field in openclaw.plugin.json in the
+  same change - the plugin manifest at the repo root must
+  stay in step with pyproject.toml. …</span>
+<span class="k">type:</span> workflow
+<span class="k">confidence:</span> 0.9
+<span class="k">evidence:</span>
+<span class="k">-</span> <span class="hl">d3367f223366182ba5690b1fdaa974b3181f3e14a10a212697…</span>
+<span class="k">tags:</span> [release, openclaw, manifest]
+<span class="k">created_at:</span> <span class="s">'2026-07-02T06:44:10.257478Z'</span>
+<span class="k">approved_by:</span> <span class="ok">a</span></pre></div>
+    <div style="display:grid;gap:14px;align-content:center">
+      <div class="term human"><header><span class="dot"></span>citations resolve<span class="who">vouch cite</span></header><pre>
+<span class="cmd">vouch cite openclaw-manifest-version-lockstep</span>
+[ { <span class="k">"kind"</span>: <span class="s">"source"</span>,
+    <span class="k">"locator"</span>: <span class="s">"…/vouch/CLAUDE.md"</span>,
+    <span class="k">"title"</span>: <span class="s">"vouch contributor guide"</span> } ]</pre></div>
+      <div class="card"><h3>every field is an answer</h3><p>what do we believe (<i>text</i>), how sure are we (<i>confidence</i>), based on what (<i>evidence</i> — a content hash), and who signed off (<i>approved_by</i>). committed, diffable, supersede-able.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- 11 ─ audit -->
+<section class="slide" data-ev="kb.audit · append-only · committed">
+  <p class="eyebrow">live — the whole exchange, on the record</p>
+  <h2>"who decided x, citing what, when" — <span class="a">for free</span>.</h2>
+  <div class="term human"><header><span class="dot"></span>audit trail<span class="who">vouch audit --tail 5</span></header><pre>
+2026-07-02T06:43:23  source.add             by <span class="hl">claude-code</span>  ['d3367f22…efa76e4ed']
+2026-07-02T06:43:43  proposal.claim.create  by <span class="hl">claude-code</span>  ['20260702-064343-a1de146e']
+2026-07-02T06:43:43  proposal.claim.create  by <span class="hl">claude-code</span>  ['20260702-064343-25517027']
+2026-07-02T06:44:10  proposal.claim.approve by <span class="ok">a</span>            ['20260702-064343-a1de146e',
+                                                            '<span class="ok">openclaw-manifest-version-lockstep</span>']
+2026-07-02T06:44:10  proposal.claim.reject  by <span class="ok">a</span>            ['20260702-064343-25517027']</pre></div>
+  <p class="lede">agent actions and human decisions, interleaved and attributed, in an append-only log that lives in git. when a rule changes later, <b>supersede</b> keeps the old claim queryable — history is never rewritten.</p>
+</section>
+
+<!-- 12 ─ why -->
+<section class="slide" data-ev="synthesis · why the gate pays for itself">
+  <p class="eyebrow">why devs keep it</p>
+  <h2>trust the recall, because you <span class="a">gated the writes</span>.</h2>
+  <div class="row c4">
+    <div class="card"><h3>recall you can trust</h3><p>kb.context serves only reviewed, cited claims — so injecting it into a fresh session raises quality instead of laundering old hallucinations.</p></div>
+    <div class="card"><h3>bad writes die young</h3><p>the state.db misreading lived four minutes and never entered the kb. its rejection reason is permanent documentation.</p></div>
+    <div class="card"><h3>multi-agent attribution</h3><p>claude code, cursor, a ci bot — each proposal and event carries its actor. "which agent claimed what" has an exact answer.</p></div>
+    <div class="card"><h3>zero new infrastructure</h3><p>no service, no db to host. yaml + markdown + git you already have. prs are the review ui for knowledge, too.</p></div>
+  </div>
+  <p class="note">honest counter-cases, straight from the readme: skip vouch for solo throwaway projects, or if your team won't actually review proposals — without the gate it's a worse note app.</p>
+</section>
+
+<!-- 13 ─ start -->
+<section class="slide" data-ev="session.end · kb: 4 claims · queue: clean">
+  <p class="eyebrow">get started — before your agent's next session</p>
+  <h2>ten minutes to a <span class="a">gated</span> memory.</h2>
+  <div class="row c2">
+    <div class="term"><header><span class="dot"></span>install + init</header><pre>
+<span class="cmd">pipx install vouch-kb</span>
+<span class="cmd">cd your-project && vouch init</span>
+<span class="dim"># creates .vouch/ with a starter config
+# and one cited example claim</span>
+
+<span class="cmd">vouch install-mcp claude-code</span>
+<span class="dim"># or paste the .mcp.json block from slide 5</span></pre></div>
+    <div class="term human"><header><span class="dot"></span>your daily loop</header><pre>
+<span class="cmd">vouch pending</span>          <span class="dim"># what did the agents learn?</span>
+<span class="cmd">vouch show &lt;id&gt;</span>        <span class="dim"># read one proposal</span>
+<span class="cmd">vouch approve &lt;id&gt;</span>     <span class="dim"># → durable, cited claim</span>
+<span class="cmd">vouch reject &lt;id&gt; --reason "…"</span>
+<span class="cmd">git add .vouch/ && git commit</span></pre></div>
+  </div>
+  <div class="kv">
+    <span>repo <b>github.com/vouchdev/vouch</b></span>
+    <span>package <b>pypi: vouch-kb</b></span>
+    <span>license <b>mit</b></span>
+    <span>this deck's session <b>2026-07-02 · audit events 11 → 16</b></span>
+  </div>
+</section>
+
+<footer id="foot">
+  <span class="ev" id="ev"></span>
+  <span style="display:flex;align-items:center;gap:16px">
+    <span id="pos"></span>
+    <span id="nav"><button id="prev" aria-label="previous slide">⟨</button><button id="next" aria-label="next slide">⟩</button></span>
+  </span>
+</footer>
+
+<script>
+const slides=[...document.querySelectorAll('.slide')];let i=0;
+function go(n){
+  i=Math.max(0,Math.min(slides.length-1,n));
+  slides.forEach((s,j)=>s.classList.toggle('on',j===i));
+  document.getElementById('bar').style.width=((i+1)/slides.length*100)+'%';
+  document.getElementById('pos').textContent=String(i+1).padStart(2,'0')+' / '+slides.length;
+  document.getElementById('ev').innerHTML='⟩ '+slides[i].dataset.ev;
+  history.replaceState(null,'','#'+(i+1));
+}
+addEventListener('keydown',e=>{
+  if(e.repeat)return;
+  if(['ArrowRight','PageDown',' '].includes(e.key)){e.preventDefault();go(i+1)}
+  if(['ArrowLeft','PageUp'].includes(e.key)){e.preventDefault();go(i-1)}
+  if(e.key==='Home')go(0); if(e.key==='End')go(slides.length-1);
+});
+document.getElementById('prev').onclick=()=>go(i-1);
+document.getElementById('next').onclick=()=>go(i+1);
+go(parseInt(location.hash.slice(1))-1||0);
+</script>
+</body>
+</html>
