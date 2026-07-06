@@ -1,0 +1,51 @@
+name: Create Auto-Merge PR
+description: Creates or updates a PR branch and enables auto-merge via CI_PAT.
+
+inputs:
+  token:
+    description: PAT with repo + PR permissions (use secrets.CI_PAT)
+    required: true
+  add-paths:
+    description: Glob or newline-separated paths to stage (passed to create-pull-request)
+    required: true
+  commit-message:
+    description: Commit message for the staged changes
+    required: true
+  branch:
+    description: Head branch name for the PR
+    required: true
+  title:
+    description: PR title
+    required: true
+  body:
+    description: PR body text
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Create or update PR
+      id: pr
+      uses: peter-evans/create-pull-request@v7
+      with:
+        token: ${{ inputs.token }}
+        add-paths: ${{ inputs.add-paths }}
+        commit-message: ${{ inputs.commit-message }}
+        branch: ${{ inputs.branch }}
+        title: ${{ inputs.title }}
+        body: ${{ inputs.body }}
+        delete-branch: true
+
+    - name: Enable auto-merge
+      if: steps.pr.outputs.pull-request-number
+      shell: bash
+      run: gh pr merge ${{ steps.pr.outputs.pull-request-number }} --squash --auto
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+
+    - name: Update branch to base
+      if: steps.pr.outputs.pull-request-number
+      shell: bash
+      run: gh pr update-branch ${{ steps.pr.outputs.pull-request-number }} || true
+      env:
+        GH_TOKEN: ${{ inputs.token }}

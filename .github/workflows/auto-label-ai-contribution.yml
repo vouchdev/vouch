@@ -1,0 +1,96 @@
+name: Auto-label AI contribution triage
+
+# Detect-only labeler for PRs opened by AI contributors.
+#
+# Uses `pull_request_target` so fork PRs can be labeled (write perms come
+# from the base repo, not the fork). Only reads PR metadata from the event
+# payload — never checks out the PR's code.
+#
+# Prerequisite: the label must already exist in the repo:
+#
+#   gh label create needs-maintainer \
+#     --color d93f0b \
+#     --description "AI contribution PR requires human triage"
+
+on:
+  pull_request_target:
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  label:
+    name: Apply AI contribution triage labels
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Detect and apply labels
+        continue-on-error: true
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const head = pr.head?.ref ?? '';
+            const body = pr.body ?? '';
+
+            // detect AI contributions by branch prefix or template signature
+            const isAiBranch = /^(ai|bot)\//.test(head);
+            const hasTemplateSignature =
+              /^##\s+AI contributor/mi.test(body) ||
+              (/^##\s+Track/m.test(body) && /^##\s+Verification/m.test(body));
+            const isAiContribution = isAiBranch || hasTemplateSignature;
+
+            if (!isAiContribution) {
+              core.info('Not an AI contribution PR; nothing to triage.');
+              return;
+            }
+
+            // track line — "## Track\nDeveloper" or inline "Track: Developer"
+            const trackMatch = body.match(/(?:^|\n)(?:##\s+Track\s*\n+|Track:\s*)([^\n]+)/i);
+            const track = trackMatch ? trackMatch[1].trim() : '';
+            const isNonDev = /non[-\s]?developer/i.test(track);
+            const isDev = !isNonDev && /developer/i.test(track);
+
+            const sectionBody = (heading) => {
+              const re = new RegExp(
+                String.raw`##\s+${heading}\s*\n+([\s\S]*?)(?=\n##\s+|\n*$)`,
+                'i'
+              );
+              const m = body.match(re);
+              return m ? m[1] : null;
+            };
+
+            const isAbsent = (raw) => {
+              if (raw === null) return true;
+              const stripped = raw.replace(/<!--[\s\S]*?-->/g, '').trim();
+              if (!stripped) return true;
+              return /^(none|n\/a)\.?$/i.test(stripped);
+            };
+
+            const hasPopulated = (heading) => !isAbsent(sectionBody(heading));
+
+            // verification missing on a developer-track PR is a triage signal
+            const verificationMissing = isDev && isAbsent(sectionBody('Verification'));
+
+            const needsMaintainer =
+              isNonDev ||
+              hasPopulated('Scope Expansion') ||
+              hasPopulated('Validation Failures') ||
+              hasPopulated('CI Failures') ||
+              verificationMissing;
+
+            if (!needsMaintainer) {
+              core.info('AI contribution PR does not need maintainer triage.');
+              return;
+            }
+
+            core.info('Applying label: needs-maintainer');
+
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr.number,
+              labels: ['needs-maintainer'],
+            });
