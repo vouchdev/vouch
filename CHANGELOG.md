@@ -6,6 +6,17 @@ All notable changes to vouch are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+- `kb.enrich_page` / `vouch enrich-page` / `vouch enrich-pages` — thin-page
+  enrichment: scores a page against `enrichment.min_body_chars` /
+  `enrichment.min_citations` in `.vouch/config.yaml`, and drafts an addition
+  synthesized strictly from approved, non-retracted claims already in the KB
+  (reusing `kb.synthesize`'s machinery) appended to the page's existing body.
+  Never writes durably — the enriched revision is filed as a pending page
+  proposal (`slug_hint` targets the existing page id) for a human to clear
+  with `vouch review`. `--dry-run`, `--min-body-chars`, `--min-citations`,
+  `--limit` (batch only), `--json`. see `docs/enrich.md`.
+
 ## [1.2.2] — 2026-07-07
 
 ### Packaging

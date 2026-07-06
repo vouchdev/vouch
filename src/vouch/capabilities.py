@@ -88,6 +88,7 @@ METHODS = [
     "kb.detect_themes",
     "kb.propose_theme",
     "kb.compile",
+    "kb.enrich_page",
 ]
 
 

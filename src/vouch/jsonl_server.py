@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from . import audit, bundle, health
+from . import enrich as enrich_mod
 from . import lifecycle as life
 from . import sessions as sess_mod
 from . import verify as verify_mod
@@ -259,6 +260,17 @@ def _h_propose_page(p: dict) -> dict:
     return {"proposal_id": pr.id, "status": pr.status.value, "kind": pr.kind.value}
 
 
+def _h_enrich_page(p: dict) -> dict:
+    result = enrich_mod.enrich_page(
+        _store(), p["page_id"],
+        min_body_chars=p.get("min_body_chars"),
+        min_citations=p.get("min_citations"),
+        session_id=p.get("session_id"),
+        dry_run=bool(p.get("dry_run", False)),
+    )
+    return result.to_dict()
+
+
 def _h_propose_entity(p: dict) -> dict:
     pr = propose_entity(
         _store(),
@@ -443,6 +455,7 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.register_source_from_path": _h_register_source_from_path,
     "kb.propose_claim": _h_propose_claim,
     "kb.propose_page": _h_propose_page,
+    "kb.enrich_page": _h_enrich_page,
     "kb.propose_entity": _h_propose_entity,
     "kb.propose_relation": _h_propose_relation,
     "kb.approve": _h_approve,

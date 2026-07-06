@@ -20,6 +20,7 @@ import yaml
 
 from . import __version__, bundle, health
 from . import audit as audit_mod
+from . import enrich as enrich_mod
 from . import lifecycle as life
 from . import sessions as sess_mod
 from . import verify as verify_mod
@@ -444,6 +445,87 @@ def session_end_cmd(session_id: str, note: str | None) -> None:
     with _cli_errors():
         sess = sess_mod.session_end(store, session_id, note=note)
     _emit_json({"session": sess.id, "proposals": sess.proposal_ids})
+
+
+@cli.command(name="enrich-page")
+@click.argument("page_id")
+@click.option("--min-body-chars", type=int, default=None,
+              help="Override enrichment.min_body_chars for this run.")
+@click.option("--min-citations", type=int, default=None,
+              help="Override enrichment.min_citations for this run.")
+@click.option("--dry-run", is_flag=True, help="Score and draft; file nothing.")
+@click.option("--json", "as_json", is_flag=True, help="Machine-readable report.")
+def enrich_page_cmd(
+    page_id: str, min_body_chars: int | None, min_citations: int | None,
+    dry_run: bool, as_json: bool,
+) -> None:
+    """Draft an enriched revision of one thin page (a page proposal).
+
+    Scores PAGE_ID against the thin-page thresholds and, if it qualifies,
+    synthesizes an addition strictly from approved claims already in the KB
+    and files it as a pending page proposal. Approval stays a separate
+    human step (`vouch review`).
+    """
+    store = _load_store()
+    actor = os.environ.get("VOUCH_AGENT") or enrich_mod.ENRICH_ACTOR
+    with _cli_errors():
+        result = enrich_mod.enrich_page(
+            store, page_id, actor=actor,
+            min_body_chars=min_body_chars, min_citations=min_citations,
+            dry_run=dry_run,
+        )
+    if as_json:
+        _emit_json(result.to_dict())
+        return
+    if result.skipped_reason:
+        _echo(f"skipped {page_id}: {result.skipped_reason}")
+        return
+    verb = "would propose" if dry_run else "proposed"
+    _echo(f"{verb} enrichment of {page_id} citing {len(result.claim_ids)} claim(s)"
+          f"{'' if dry_run else f': {result.proposal_id}'}")
+    if not dry_run:
+        _echo("run `vouch review` to decide.")
+
+
+@cli.command(name="enrich-pages")
+@click.option("--min-body-chars", type=int, default=None,
+              help="Override enrichment.min_body_chars for this run.")
+@click.option("--min-citations", type=int, default=None,
+              help="Override enrichment.min_citations for this run.")
+@click.option("--limit", type=int, default=None,
+              help="Cap how many thin pages are processed this run.")
+@click.option("--dry-run", is_flag=True,
+              help="Report qualifying pages and candidate claims; file nothing.")
+@click.option("--json", "as_json", is_flag=True, help="Machine-readable report.")
+def enrich_pages_cmd(
+    min_body_chars: int | None, min_citations: int | None, limit: int | None,
+    dry_run: bool, as_json: bool,
+) -> None:
+    """Scan pages for thin ones and file an enrichment proposal for each.
+
+    `--dry-run` lists the qualifying pages and their candidate claim ids
+    without filing anything.
+    """
+    store = _load_store()
+    actor = os.environ.get("VOUCH_AGENT") or enrich_mod.ENRICH_ACTOR
+    report = enrich_mod.enrich_pages(
+        store, actor=actor, triggered_by=_whoami(),
+        min_body_chars=min_body_chars, min_citations=min_citations,
+        limit=limit, dry_run=dry_run,
+    )
+    if as_json:
+        _emit_json(report.to_dict())
+        return
+    verb = "would propose" if dry_run else "proposed"
+    _echo(f"{verb} enrichment for {len(report.proposed)} page(s):")
+    for row in report.proposed:
+        _echo(f"  • {row['page_id']}  {row['proposal_id']}")
+    if report.skipped:
+        _echo(f"skipped {len(report.skipped)}:")
+        for row in report.skipped:
+            _echo(f"  • {row['page_id']} — {row['reason']}")
+    if report.proposed and not dry_run:
+        _echo("run `vouch review` to decide.")
 
 
 @cli.command()

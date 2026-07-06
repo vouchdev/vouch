@@ -18,6 +18,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 from . import audit, bundle, health
+from . import enrich as enrich_mod
 from . import lifecycle as life
 from . import sessions as sess_mod
 from . import verify as verify_mod
@@ -335,6 +336,35 @@ def kb_propose_page(
     except (ProposalError, ArtifactNotFoundError, ValueError) as e:
         raise ValueError(str(e)) from e
     return _proposal_response(pr, dry_run)
+
+
+@mcp.tool()
+def kb_enrich_page(
+    page_id: str,
+    min_body_chars: int | None = None,
+    min_citations: int | None = None,
+    session_id: str | None = None,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Draft an enriched revision of a thin page and file it as a proposal.
+
+    Scores `page_id` against the thin-page thresholds (`enrichment.*` in
+    config.yaml, overridable here). If it qualifies, the addition is
+    synthesized strictly from approved, non-retracted claims already in the
+    KB (reusing `kb_synthesize`'s machinery) and filed as a PENDING page
+    proposal. Skips (files nothing) when the page is already above the
+    thresholds, or when no related approved claim exists to cite. Never
+    approves — a human clears the proposal with `kb_approve`.
+    """
+    try:
+        result = enrich_mod.enrich_page(
+            _store(), page_id,
+            min_body_chars=min_body_chars, min_citations=min_citations,
+            session_id=session_id, dry_run=dry_run,
+        )
+    except (ProposalError, ArtifactNotFoundError, ValueError) as e:
+        raise ValueError(str(e)) from e
+    return result.to_dict()
 
 
 @mcp.tool()

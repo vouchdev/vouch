@@ -125,6 +125,13 @@ def _starter_config() -> dict[str, Any]:
             ],
         },
         "page_kinds": {},
+        "enrichment": {
+            # A page is "thin" (eligible for kb.enrich_page) when its body is
+            # shorter than min_body_chars OR its combined claims+sources
+            # citation count is below min_citations. See enrich.py.
+            "min_body_chars": 200,
+            "min_citations": 2,
+        },
     }
 
 
