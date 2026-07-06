@@ -1031,6 +1031,52 @@ def list_relations() -> None:
 
 
 @cli.command()
+@click.argument("proposal_ids", nargs=-1)
+@click.option(
+    "--json", "as_json", is_flag=True,
+    help="Emit machine-readable _meta.vouch_triage blocks.",
+)
+@click.option(
+    "--reverse", is_flag=True,
+    help="Ascending order (worst-first) instead of the default descending (best-first).",
+)
+def triage(proposal_ids: tuple[str, ...], as_json: bool, reverse: bool) -> None:
+    """Advisory triage scoring over pending proposals (opt-in: triage.enabled).
+
+    Scores each proposal on fit, citation quality, duplication risk, and
+    contradiction risk, then prints a ranked table. Never approves or
+    rejects — a human still decides via `vouch approve` / `vouch reject`.
+    """
+    from . import triage as triage_mod
+
+    store = _load_store()
+    with _cli_errors():
+        results = triage_mod.triage_pending(store, proposal_ids=list(proposal_ids) or None)
+    results.sort(key=lambda r: r["_meta"]["vouch_triage"]["score"], reverse=not reverse)
+
+    if as_json:
+        _emit_json(results)
+        return
+    if not results:
+        click.echo("no pending proposals to triage")
+        return
+    for r in results:
+        block = r["_meta"]["vouch_triage"]
+        preview = (
+            r["payload"].get("text")
+            or r["payload"].get("title")
+            or r["payload"].get("name")
+            or r["payload"].get("id")
+            or "-"
+        )
+        click.echo(
+            f"{block['score']:.2f}  [{block['recommendation']:>11}]  "
+            f"{r['id']}  [{r['kind']}]  {str(preview).strip()[:80]}"
+        )
+        click.echo(f"    {block['rationale']}")
+
+
+@cli.command()
 @click.argument("proposal_ids", nargs=-1, required=True)
 @click.option("--reason", default=None)
 @click.option(

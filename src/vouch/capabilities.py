@@ -34,6 +34,7 @@ METHODS = [
     "kb.list_relations",
     "kb.list_sources",
     "kb.list_pending",
+    "kb.triage_pending",
     "kb.register_source",
     "kb.register_source_from_path",
     "kb.propose_claim",

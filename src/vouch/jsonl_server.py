@@ -304,6 +304,12 @@ def _h_list_pending(_: dict) -> list[dict]:
     ]
 
 
+def _h_triage_pending(p: dict) -> list[dict]:
+    from . import triage as triage_mod
+
+    return triage_mod.triage_pending(_store(), proposal_ids=p.get("proposal_ids"))
+
+
 def _h_register_source(p: dict) -> dict:
     s = _store()
     src = s.put_source(
@@ -740,6 +746,7 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.list_relations": _h_list_relations,
     "kb.list_sources": _h_list_sources,
     "kb.list_pending": _h_list_pending,
+    "kb.triage_pending": _h_triage_pending,
     "kb.register_source": _h_register_source,
     "kb.register_source_from_path": _h_register_source_from_path,
     "kb.propose_claim": _h_propose_claim,

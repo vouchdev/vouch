@@ -394,6 +394,23 @@ def kb_list_pending() -> list[dict[str, Any]]:
     ]
 
 
+@mcp.tool()
+def kb_triage_pending(proposal_ids: list[str] | None = None) -> list[dict[str, Any]]:
+    """Advisory triage scoring over the pending-review queue.
+
+    Attaches `_meta.vouch_triage` (recommendation/score/signals/rationale)
+    to each pending proposal's view. Read-only — never approves, rejects,
+    or otherwise decides; a human still calls `kb_approve` / `kb_reject`.
+    Opt-in: disabled unless `triage.enabled: true` is set in config.yaml.
+    """
+    from . import triage as triage_mod
+
+    try:
+        return triage_mod.triage_pending(_store(), proposal_ids=proposal_ids)
+    except (ValueError, ArtifactNotFoundError) as e:
+        raise ValueError(str(e)) from e
+
+
 # === write tools — gated (produce proposals) =============================
 
 
