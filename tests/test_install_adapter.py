@@ -14,6 +14,7 @@ The writer is idempotent: files that already exist are left alone (the
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import zipfile
@@ -432,3 +433,50 @@ def test_wheel_ships_adapters(tmp_path: Path) -> None:
     assert any(
         n.endswith("vouch/adapters/claude-code/install.yaml") for n in names
     ), "adapter templates missing from the wheel"
+
+
+def test_installed_wheel_resolves_adapters(tmp_path: Path) -> None:
+    """Follow-up to the wheel-contents test, which was not enough: 1.1.0's
+    ADAPTERS_DIR pointed three parents above the package, so an installed
+    wheel could *contain* the templates yet still report
+    "(available: (none))". Import the wheel's own copy of the package (no
+    repo checkout in sight) and assert the resolver finds the packaged
+    templates.
+    """
+    pytest.importorskip("hatchling")
+    proc = subprocess.run(
+        [sys.executable, "-m", "hatchling", "build", "-t", "wheel", "-d", str(tmp_path)],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert proc.returncode == 0, proc.stderr
+    wheel = sorted(tmp_path.glob("*.whl"))[-1]
+    site = tmp_path / "site"
+    with zipfile.ZipFile(wheel) as zf:
+        zf.extractall(site)
+    env = dict(os.environ)
+    # The unpacked wheel must shadow the repo checkout; deps still resolve
+    # from the test venv further down sys.path.
+    env["PYTHONPATH"] = str(site)
+    probe = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import vouch.install_adapter as ia; import json, sys; "
+            "print(json.dumps({'file': ia.__file__, "
+            "'hosts': ia.available_adapters()}))",
+        ],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert probe.returncode == 0, probe.stderr
+    result = json.loads(probe.stdout)
+    assert str(site) in result["file"], result  # really the wheel's copy
+    assert "claude-code" in result["hosts"], (
+        f"installed copy can't resolve adapters: {result}"
+    )

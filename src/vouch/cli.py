@@ -163,11 +163,17 @@ def _force_utf8_stdio() -> None:
                 stream.reconfigure(encoding="utf-8", errors="replace")
 
 
+# At import, not in the cli() callback: click renders eager --help /
+# --version output during argument parsing, before any group callback
+# runs — and the group docstring's em dash already crashes a latin-1
+# stdout. Idempotent and a no-op on utf-8 streams.
+_force_utf8_stdio()
+
+
 @click.group()
 @click.version_option(__version__, prog_name="vouch")
 def cli() -> None:
     """vouch — git-native, review-gated knowledge base for LLM agents."""
-    _force_utf8_stdio()
     configure_logging()
 
 
