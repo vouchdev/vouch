@@ -162,12 +162,18 @@ ensure_pipx() {
     # non-login shell often misses ~/.local/bin, so an already-installed
     # pipx would look absent and get shadowed by a needless reinstall.
     ensure_pipx_bin_on_path "$py"
-    if has_cmd pipx; then
+    # `pipx --version` and not just `has_cmd`: a leftover shim whose venv
+    # died (e.g. a brew python upgrade) must fall through to the
+    # recreation path below, not get accepted as installed.
+    if has_cmd pipx && pipx --version >/dev/null 2>&1; then
         ok "pipx already installed ($(pipx --version 2>/dev/null | head -1))"
         return 0
     fi
     info "pipx not found — installing into user site (no sudo)"
-    pipx_log="${TMPDIR:-/tmp}/vouch-install-pipx.log"
+    pipx_log=$(mktemp "${TMPDIR:-/tmp}/vouch-install-pipx.XXXXXX") || {
+        err "could not create the pipx install log"
+        return 1
+    }
     if "$py" -m pip install --user --upgrade pipx >"$pipx_log" 2>&1; then
         "$py" -m pipx ensurepath >/dev/null 2>&1 || true
     else
