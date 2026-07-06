@@ -610,12 +610,22 @@ def test_new_pending_not_approved(store: KBStore) -> None:
 # --- non-utf-8 stdio --------------------------------------------------------
 
 
-def test_status_survives_non_utf8_stdio(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("args", "needle"),
+    [
+        # '•' separators in the status summary
+        (["status"], "durable"),
+        # eager help renders the em-dash group docstring BEFORE the group
+        # callback runs, so a callback-scoped reconfigure can't save it —
+        # this is why _force_utf8_stdio() runs at module import.
+        (["--help"], "review-gated"),
+    ],
+)
+def test_cli_survives_non_utf8_stdio(tmp_path: Path, args: list[str], needle: str) -> None:
     """1.1.0 regression: under a non-utf-8 locale (LANG=en_US.ISO-8859-1)
-    click encoded stdout with the locale codec, so the ``•`` separators in
-    ``vouch status`` raised UnicodeEncodeError. The CLI entry now forces
-    utf-8 stdio (replacing where the stream can't), so the command must
-    exit 0 with its summary intact.
+    click encoded stdout with the locale codec, so any non-ascii glyph in
+    CLI output raised UnicodeEncodeError. The CLI forces utf-8 stdio at
+    import (replacing where the stream can't), so these must exit 0.
     """
     KBStore.init(tmp_path)
     env = {
@@ -625,7 +635,7 @@ def test_status_survives_non_utf8_stdio(tmp_path: Path) -> None:
     # host has generated — same failure mode as LANG=en_US.ISO-8859-1.
     env["PYTHONIOENCODING"] = "latin-1"
     proc = subprocess.run(
-        [sys.executable, "-m", "vouch", "status"],
+        [sys.executable, "-m", "vouch", *args],
         cwd=tmp_path,
         env=env,
         capture_output=True,
@@ -636,4 +646,4 @@ def test_status_survives_non_utf8_stdio(tmp_path: Path) -> None:
     )
     assert proc.returncode == 0, proc.stderr
     assert "UnicodeEncodeError" not in proc.stderr, proc.stderr
-    assert "durable" in proc.stdout, proc.stdout
+    assert needle in proc.stdout, proc.stdout
