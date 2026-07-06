@@ -5,7 +5,8 @@
 #
 # What this does, in order:
 #   1. Pick a Python interpreter (>=3.11) — exits with a hint if none found.
-#   2. Make sure pipx is installed (offers a user-scope install if missing).
+#   2. Make sure pipx is installed (user-scope install if missing; falls
+#      back to a private venv on PEP 668 externally-managed systems).
 #   3. Install or upgrade the `vouch-kb` package via pipx.
 #   4. Smoke-test: run `vouch --version` and report success.
 #   5. If Claude Code config is detected, point you at `vouch install-mcp`.
@@ -163,13 +164,29 @@ ensure_pipx() {
         return 0
     fi
     info "pipx not found — installing into user site (no sudo)"
-    if ! "$py" -m pip install --user --upgrade pipx >/dev/null 2>&1; then
-        err "pip install --user pipx failed — try installing it manually"
-        err "  sudo apt install pipx     # Debian/Ubuntu"
-        err "  brew install pipx         # macOS"
-        return 1
+    if "$py" -m pip install --user --upgrade pipx >/dev/null 2>&1; then
+        "$py" -m pipx ensurepath >/dev/null 2>&1 || true
+    else
+        # Debian 12+ / Ubuntu 23.04+ mark the system interpreter externally
+        # managed (PEP 668) and refuse --user installs. Host pipx in a
+        # private venv instead — still no sudo.
+        info "user-site install refused (PEP 668) — using a private venv"
+        pipx_venv="$HOME/.local/share/vouch/pipx-venv"
+        if ! "$py" -m venv "$pipx_venv" >/dev/null 2>&1 || \
+           ! "$pipx_venv/bin/pip" install --quiet --upgrade pipx >/dev/null 2>&1; then
+            err "could not install pipx (user site refused, private venv failed)"
+            err "install it manually, then re-run:"
+            err "  sudo apt install pipx python3-venv   # Debian/Ubuntu"
+            err "  brew install pipx                    # macOS"
+            return 1
+        fi
+        PATH="$pipx_venv/bin:$PATH"; export PATH
+        # keep pipx reachable in later shells too (~/.local/bin is what
+        # `pipx ensurepath` puts on PATH)
+        mkdir -p "$HOME/.local/bin"
+        ln -sf "$pipx_venv/bin/pipx" "$HOME/.local/bin/pipx"
+        pipx ensurepath >/dev/null 2>&1 || true
     fi
-    "$py" -m pipx ensurepath >/dev/null 2>&1 || true
 
     # `ensurepath` edits ~/.profile / ~/.zshrc to add pipx's bin dir, but
     # the current process's PATH is already fixed. Add it explicitly so
