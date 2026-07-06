@@ -17,10 +17,15 @@ Steps:
 3. Read the relevant code paths.
 4. Propose the smallest fix (run the project's tests first to confirm the
    bug reproduces).
-5. After the fix is committed, propose **at most three** new claims via
-   `kb_propose_claim` that capture:
-   * the root cause in one sentence (cited by the offending file:line),
-   * the chosen fix pattern (cited by the patch commit), and
+5. After the fix is committed, register the evidence first — claims cite
+   content-hashed source ids, never raw `file:line` strings:
+   `kb_register_source_from_path` on the offending file (and on the patch
+   file or commit message). Then propose **at most three** new claims via
+   `kb_propose_claim`, each citing those source ids in `evidence`, that
+   capture:
+   * the root cause in one sentence (name the file:line in the claim
+     *text*; cite the registered source id),
+   * the chosen fix pattern (cite the patch source id), and
    * any policy/precedent established (only if novel).
 
 Do not auto-approve. Leave the proposals in `.vouch/proposed/` for the

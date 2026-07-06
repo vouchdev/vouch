@@ -12,7 +12,7 @@
 #      `openclaw plugin enable vouch`).
 # T2 = AGENTS.md fenced snippet pointing at the plugin manifest and
 #      summarizing the review-gate contract.
-# T3 = the same four slash commands the claude-code adapter ships,
+# T3 = the same five slash commands the claude-code adapter ships,
 #      referenced in place rather than duplicated (see
 #      install_adapter.py's docstring; OpenClaw's loader bundles these
 #      from adapters/claude-code/ directly).
@@ -33,5 +33,6 @@ tiers:
     - { src: ../claude-code/.claude/commands/vouch-status.md, dst: .claude/commands/vouch-status.md }
     - { src: ../claude-code/.claude/commands/vouch-resolve-issue.md, dst: .claude/commands/vouch-resolve-issue.md }
     - { src: ../claude-code/.claude/commands/vouch-propose-from-pr.md, dst: .claude/commands/vouch-propose-from-pr.md }
+    - { src: ../claude-code/.claude/commands/vouch-start.md, dst: .claude/commands/vouch-start.md }
   T4:
     - { src: policy.json, dst: .openclaw/policy.json }

@@ -123,6 +123,7 @@ def test_skills_publish_as_ready(installed: dict[str, str]) -> None:
         "vouch-propose-from-pr",
         "vouch-recall",
         "vouch-resolve-issue",
+        "vouch-start",
         "vouch-status",
     ):
         line = next(

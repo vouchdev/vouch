@@ -90,9 +90,10 @@ def test_install_claude_code_t4_writes_all_tiers(tmp_path: Path) -> None:
     assert (cmd_dir / "vouch-status.md").is_file()
     assert (cmd_dir / "vouch-resolve-issue.md").is_file()
     assert (cmd_dir / "vouch-propose-from-pr.md").is_file()
+    assert (cmd_dir / "vouch-start.md").is_file()
     assert (tmp_path / ".claude" / "settings.json").is_file()
-    # T1 .mcp.json + T2 CLAUDE.md + 4 T3 commands + T4 settings = 7 files.
-    assert len(result.written) == 7, result.written
+    # T1 .mcp.json + T2 CLAUDE.md + 5 T3 commands + T4 settings = 8 files.
+    assert len(result.written) == 8, result.written
 
 
 def test_install_claude_code_is_idempotent(tmp_path: Path) -> None:
@@ -109,6 +110,7 @@ def test_install_claude_code_is_idempotent(tmp_path: Path) -> None:
         ".claude/commands/vouch-status.md",
         ".claude/commands/vouch-resolve-issue.md",
         ".claude/commands/vouch-propose-from-pr.md",
+        ".claude/commands/vouch-start.md",
         ".claude/settings.json",
     }
 
@@ -272,9 +274,10 @@ def test_install_openclaw_t4_writes_all_tiers(tmp_path: Path) -> None:
     assert (cmd_dir / "vouch-status.md").is_file()
     assert (cmd_dir / "vouch-resolve-issue.md").is_file()
     assert (cmd_dir / "vouch-propose-from-pr.md").is_file()
+    assert (cmd_dir / "vouch-start.md").is_file()
     assert (tmp_path / ".openclaw" / "policy.json").is_file()
-    # T1 plugins.json + T2 AGENTS.md + 4 T3 commands + T4 policy.json = 7.
-    assert len(result.written) == 7, result.written
+    # T1 plugins.json + T2 AGENTS.md + 5 T3 commands + T4 policy.json = 8.
+    assert len(result.written) == 8, result.written
 
 
 def test_install_openclaw_t3_commands_match_claude_code(tmp_path: Path) -> None:
@@ -284,6 +287,7 @@ def test_install_openclaw_t3_commands_match_claude_code(tmp_path: Path) -> None:
     for name in (
         "vouch-recall.md", "vouch-status.md",
         "vouch-resolve-issue.md", "vouch-propose-from-pr.md",
+        "vouch-start.md",
     ):
         installed = (tmp_path / ".claude" / "commands" / name).read_text(encoding="utf-8")
         ref_path = REPO_ROOT / "adapters" / "claude-code" / ".claude" / "commands" / name
@@ -301,6 +305,7 @@ def test_install_openclaw_is_idempotent(tmp_path: Path) -> None:
         ".claude/commands/vouch-status.md",
         ".claude/commands/vouch-resolve-issue.md",
         ".claude/commands/vouch-propose-from-pr.md",
+        ".claude/commands/vouch-start.md",
         ".openclaw/policy.json",
     }
 

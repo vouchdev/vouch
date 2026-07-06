@@ -17,7 +17,7 @@ KB at <root>
   sources:    <n>
   entities:   <n>
   pending:    <n>   ← review queue depth
-  last audit: <iso8601 timestamp>
+  last audit: <last_audit_at from kb_status, or "never">
 ```
 
 If `pending > 0`, suggest the user run `vouch approve <id>` (or `vouch lint`

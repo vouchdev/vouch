@@ -25,6 +25,7 @@ SKILL_NAMES = (
     "vouch-propose-from-pr",
     "vouch-recall",
     "vouch-resolve-issue",
+    "vouch-start",
     "vouch-status",
 )
 

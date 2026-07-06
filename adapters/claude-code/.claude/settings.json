@@ -56,11 +56,13 @@
     ],
     "SessionEnd": [
       {
+        "comment": "timeout covers capture.summary_llm_cmd (llm narrative, default 90s budget); without it the hook's default 60s kills the summary mid-generation",
         "matcher": "*",
         "hooks": [
           {
             "type": "command",
-            "command": "vouch capture finalize || true"
+            "command": "vouch capture finalize || true",
+            "timeout": 120
           }
         ]
       }
