@@ -4,10 +4,37 @@ Wires `vouch serve` into [OpenAI's Codex CLI][codex] as an MCP server.
 
 [codex]: https://github.com/openai/codex
 
-## Setup
+## Quick start
 
-Codex reads MCP server config from `~/.codex/config.toml`. Add a
-`vouch` entry:
+```bash
+vouch install-mcp codex
+```
+
+This writes a project-local `.codex/config.toml` (T1) and, at T2,
+appends a fenced snippet to `AGENTS.md` so Codex knows how to use the
+KB tools. Restart any running Codex session.
+
+## Tiers
+
+| Tier | What it adds | File |
+|---|---|---|
+| T1 | MCP wire — `vouch serve` as an MCP server | `.codex/config.toml` |
+| T2 | AGENTS.md snippet — standing instructions for recall, propose-don't-write, and the human review gate | `AGENTS.md` (fenced) |
+
+Install a specific tier:
+
+```bash
+vouch install-mcp codex --tier T1   # MCP config only
+vouch install-mcp codex --tier T2   # MCP config + AGENTS.md snippet
+```
+
+Re-running is idempotent: existing files are left alone, and the
+`AGENTS.md` fence is replaced in-place without duplicating the block.
+
+## Manual setup
+
+If you prefer to edit the config by hand, add a `vouch` entry to
+`~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.vouch]
@@ -18,7 +45,9 @@ args = ["serve"]
 VOUCH_AGENT = "codex"
 ```
 
-Restart any running `codex` session.
+Or use the project-local form (what `vouch install-mcp codex --tier T1`
+writes) at `<project>/.codex/config.toml`. The project-local form is
+preferred because it doesn't touch home-directory state.
 
 ## Notes
 

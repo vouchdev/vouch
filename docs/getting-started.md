@@ -111,16 +111,24 @@ git add .vouch && git commit -m "kb: approve auth-uses-jwt"
 you need:
 
 ```bash
-claude mcp add vouch -- vouch serve    # or: codex mcp add vouch -- vouch serve
+claude mcp add vouch -- vouch serve    # Claude Code
+codex mcp add vouch -- vouch serve     # OpenAI Codex CLI
 ```
 
-Add `-e VOUCH_AGENT=claude-code` to attribute the agent's proposals to it
-rather than your shell user. Confirm with `claude mcp list` (look for
-`vouch … ✓ Connected`).
+Add `-e VOUCH_AGENT=claude-code` (or `VOUCH_AGENT=codex`) to attribute the
+agent's proposals to it rather than your shell user. Confirm with
+`claude mcp list` or `codex mcp list` (look for `vouch … ✓ Connected`).
 
-Prefer a config file, or want the brain-first `CLAUDE.md`, slash commands, and
-hooks too? Run `vouch install-mcp claude-code` — or drop this into `.mcp.json`
-at the project root by hand:
+Prefer a config file, or want the brain-first `CLAUDE.md`/`AGENTS.md`,
+slash commands, and hooks too? Run the installer for your host:
+
+```bash
+vouch install-mcp claude-code   # Claude Code
+vouch install-mcp codex         # OpenAI Codex CLI
+```
+
+Or drop the config in by hand — for Claude Code, put this into `.mcp.json`
+at the project root:
 
 ```json
 {
