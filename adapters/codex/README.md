@@ -52,6 +52,32 @@ yourself.
 The skill bodies are identical to the claude-code slash commands
 (enforced by a sync test), so the flows behave the same on every host.
 
+## Automatic session capture (T4)
+
+`vouch install-mcp codex` (default tier T4) wires automatic capture
+through codex's hooks system: `.codex/hooks.json` registers a `Stop`
+hook that runs `vouch capture ingest-codex --hook` when a turn
+completes. The handler reads the hook payload, resolves the session's
+rollout file, and rolls it into ONE pending session-summary proposal —
+the same review-gated summary a claude-code session produces. Because
+`Stop` fires per turn, re-ingest is idempotent: an unchanged session
+is a no-op, a session that grew refreshes its pending proposal in
+place, and a proposal you've already reviewed is never resurrected.
+
+Failure semantics match `capture observe`: the `--hook` mode exits 0
+no matter what, so a capture problem can never break your codex turn.
+Nothing is auto-approved — review with `vouch review`.
+
+Hooks merge, not clobber: if you already have a `.codex/hooks.json`,
+the installer deep-merges the vouch hook in next to yours (re-runs
+don't duplicate it). Project-local hooks run in trusted projects only,
+so trust the project when codex asks.
+
+Why not codex's `notify` setting: codex honours `notify` only in
+user-global config (`~/.codex/config.toml`), which a project-scoped
+install never touches. If you prefer notify anyway, point it at a
+wrapper that calls `vouch capture ingest-codex --hook` yourself.
+
 ## Notes
 
 - Codex respects MCP tool naming verbatim, so the tools appear as

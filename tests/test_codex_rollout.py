@@ -139,7 +139,9 @@ def test_reingest_same_session_is_noop(store: KBStore) -> None:
 
 
 def test_ingest_below_min_files_nothing(store: KBStore) -> None:
-    store.config_path.write_text("capture:\n  min_observations: 99\n")
+    store.config_path.write_text(
+        "capture:\n  min_observations: 99\n", encoding="utf-8"
+    )
     result = cr.ingest_rollout(store, BASIC)
     assert result["skipped"] == "below-min"
     assert result["summary_proposal_id"] is None
@@ -147,7 +149,9 @@ def test_ingest_below_min_files_nothing(store: KBStore) -> None:
 
 
 def test_ingest_noop_when_capture_disabled(store: KBStore) -> None:
-    store.config_path.write_text("capture:\n  enabled: false\n")
+    store.config_path.write_text(
+        "capture:\n  enabled: false\n", encoding="utf-8"
+    )
     result = cr.ingest_rollout(store, BASIC)
     assert result["skipped"] == "disabled"
     assert store.list_proposals(None) == []
@@ -157,6 +161,164 @@ def test_ingest_never_writes_approved_content(store: KBStore) -> None:
     """The review gate stays intact: ingest files a proposal, not a page."""
     cr.ingest_rollout(store, BASIC)
     assert store.list_pages() == []
+
+
+# --- per-turn re-ingest: refresh the pending proposal (vouchdev/vouch#388) --
+
+
+def _grown_copy(tmp_path: Path) -> Path:
+    """BASIC plus one more tool call, same session id — a later turn."""
+    grown = tmp_path / f"rollout-2026-07-01T09-30-00-{BASIC_SESSION}.jsonl"
+    extra = {
+        "timestamp": "2026-07-01T09:30:00.000Z",
+        "type": "response_item",
+        "payload": {
+            "type": "function_call", "name": "exec_command",
+            "arguments": json.dumps({"cmd": "ruff check src"}),
+            "call_id": "call_extra",
+        },
+    }
+    grown.write_text(
+        BASIC.read_text(encoding="utf-8") + json.dumps(extra) + "\n",
+        encoding="utf-8",
+    )
+    return grown
+
+
+def test_reingest_grown_session_updates_pending_in_place(
+    store: KBStore, tmp_path: Path
+) -> None:
+    first = cr.ingest_rollout(store, BASIC)
+    pid = first["summary_proposal_id"]
+    second = cr.ingest_rollout(store, _grown_copy(tmp_path))
+    assert second["updated"] is True
+    assert second["summary_proposal_id"] == pid
+    proposals = store.list_proposals(None)
+    assert len(proposals) == 1  # refreshed, not duplicated
+    assert "ruff check src" in proposals[0].payload["body"]
+    assert proposals[0].status == ProposalStatus.PENDING
+
+
+def test_reingest_decided_session_stays_decided(
+    store: KBStore, tmp_path: Path
+) -> None:
+    """A proposal the human already reviewed is history — a later turn must
+    not resurrect or mutate it."""
+    from vouch.proposals import approve
+
+    first = cr.ingest_rollout(store, BASIC)
+    approve(store, first["summary_proposal_id"], approved_by="alice-example")
+    result = cr.ingest_rollout(store, _grown_copy(tmp_path))
+    assert result["skipped"] == "already-ingested"
+    assert len(store.list_proposals(ProposalStatus.PENDING)) == 0
+
+
+def test_reingest_update_lands_in_audit_log(store: KBStore, tmp_path: Path) -> None:
+    from vouch import audit
+
+    cr.ingest_rollout(store, BASIC)
+    cr.ingest_rollout(store, _grown_copy(tmp_path))
+    events = [e.event for e in audit.read_events(store.kb_dir)]
+    assert "proposal.page.update" in events
+
+
+# --- hook wire (--hook): codex Stop event ------------------------------------
+
+
+def test_ingest_hook_payload_files_proposal(store: KBStore) -> None:
+    result = cr.ingest_hook_payload(
+        store,
+        {"session_id": BASIC_SESSION, "transcript_path": str(BASIC),
+         "hook_event_name": "Stop", "cwd": str(store.kb_dir.parent)},
+    )
+    assert result is not None
+    assert result["summary_proposal_id"]
+
+
+def test_ingest_hook_payload_resolves_by_session_id(
+    store: KBStore, tmp_path: Path
+) -> None:
+    home = tmp_path / "codex-home"
+    day = home / "sessions" / "2026" / "07" / "01"
+    day.mkdir(parents=True)
+    rollout = day / f"rollout-2026-07-01T09-00-00-{BASIC_SESSION}.jsonl"
+    rollout.write_text(BASIC.read_text(encoding="utf-8"), encoding="utf-8")
+    result = cr.ingest_hook_payload(
+        store, {"session_id": BASIC_SESSION}, codex_home=home
+    )
+    assert result is not None
+    assert result["summary_proposal_id"]
+
+
+def test_ingest_hook_payload_never_raises(store: KBStore, tmp_path: Path) -> None:
+    assert cr.ingest_hook_payload(None, {"session_id": "x"}) is None
+    assert cr.ingest_hook_payload(store, {}) is None
+    assert (
+        cr.ingest_hook_payload(
+            store, {"session_id": "no-such-session"},
+            codex_home=tmp_path / "empty",
+        )
+        is None
+    )
+
+
+def test_cli_hook_mode_files_proposal(store: KBStore, monkeypatch) -> None:
+    monkeypatch.chdir(store.kb_dir.parent)
+    payload = json.dumps({
+        "session_id": BASIC_SESSION,
+        "transcript_path": str(BASIC),
+        "hook_event_name": "Stop",
+    })
+    res = CliRunner().invoke(
+        cli, ["capture", "ingest-codex", "--hook"], input=payload
+    )
+    assert res.exit_code == 0, res.output
+    assert len(store.list_proposals(ProposalStatus.PENDING)) == 1
+
+
+def test_cli_hook_mode_exits_zero_on_garbage(store: KBStore, monkeypatch) -> None:
+    monkeypatch.chdir(store.kb_dir.parent)
+    res = CliRunner().invoke(
+        cli, ["capture", "ingest-codex", "--hook"], input="{ not json"
+    )
+    assert res.exit_code == 0, res.output
+
+
+def test_cli_hook_mode_exits_zero_without_kb(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)  # no .vouch anywhere above tmp_path
+    payload = json.dumps({"session_id": BASIC_SESSION, "transcript_path": str(BASIC)})
+    res = CliRunner().invoke(
+        cli, ["capture", "ingest-codex", "--hook"], input=payload
+    )
+    assert res.exit_code == 0, res.output
+
+
+def test_find_rollout_by_session_id(tmp_path: Path) -> None:
+    home = tmp_path / "codex-home"
+    day = home / "sessions" / "2026" / "07" / "01"
+    day.mkdir(parents=True)
+    target = day / "rollout-2026-07-01T09-00-00-sess-42.jsonl"
+    target.write_text("{}", encoding="utf-8")
+    (day / "rollout-2026-07-01T10-00-00-sess-43.jsonl").write_text(
+        "{}", encoding="utf-8"
+    )
+    assert cr.find_rollout_by_session_id("sess-42", codex_home=home) == target
+    assert cr.find_rollout_by_session_id("sess-99", codex_home=home) is None
+
+
+def test_find_rollout_by_session_id_treats_glob_chars_literally(
+    tmp_path: Path,
+) -> None:
+    """A session id from a hook payload is matched as a literal suffix, so
+    glob metacharacters can't widen the search to unrelated rollouts."""
+    home = tmp_path / "codex-home"
+    day = home / "sessions" / "2026" / "07" / "01"
+    day.mkdir(parents=True)
+    (day / "rollout-2026-07-01T09-00-00-sess-42.jsonl").write_text(
+        "{}", encoding="utf-8"
+    )
+    # `*` must not match the real session above.
+    assert cr.find_rollout_by_session_id("sess-*", codex_home=home) is None
 
 
 # --- --latest resolution ----------------------------------------------------

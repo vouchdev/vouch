@@ -523,6 +523,57 @@ def test_install_codex_t3_is_idempotent(tmp_path: Path) -> None:
         assert f".codex/skills/{name}/SKILL.md" in second.skipped
 
 
+# --- codex: T4 hooks.json capture wiring (vouchdev/vouch#388) ---------------
+
+
+def test_codex_t4_writes_hooks_json(tmp_path: Path) -> None:
+    """Fresh T4 install wires the Stop hook so a completed codex session
+    lands as a PENDING summary proposal with no manual steps."""
+    result = install("codex", target=tmp_path, tier="T4")
+    hooks_path = tmp_path / ".codex" / "hooks.json"
+    assert hooks_path.is_file()
+    assert ".codex/hooks.json" in result.written
+    data = json.loads(hooks_path.read_text(encoding="utf-8"))
+    cmds = [
+        h["command"]
+        for g in data["hooks"]["Stop"]
+        for h in g["hooks"]
+    ]
+    assert "vouch capture ingest-codex --hook" in cmds
+
+
+def test_codex_t4_merges_into_existing_hooks_json(tmp_path: Path) -> None:
+    """An existing user hook is never silently overwritten — ours merges in
+    next to it via the json_merge machinery."""
+    codex_dir = tmp_path / ".codex"
+    codex_dir.mkdir()
+    (codex_dir / "hooks.json").write_text(json.dumps({
+        "hooks": {
+            "Stop": [
+                {"hooks": [{"type": "command", "command": "my-own-stop-hook"}]}
+            ]
+        }
+    }), encoding="utf-8")
+    result = install("codex", target=tmp_path, tier="T4")
+    data = json.loads((codex_dir / "hooks.json").read_text(encoding="utf-8"))
+    cmds = [h["command"] for g in data["hooks"]["Stop"] for h in g["hooks"]]
+    assert "my-own-stop-hook" in cmds
+    assert "vouch capture ingest-codex --hook" in cmds
+    assert ".codex/hooks.json" in result.merged
+
+
+def test_codex_t4_rerun_does_not_duplicate_hook(tmp_path: Path) -> None:
+    install("codex", target=tmp_path, tier="T4")
+    first = (tmp_path / ".codex" / "hooks.json").read_text(encoding="utf-8")
+    second = install("codex", target=tmp_path, tier="T4")
+    after = (tmp_path / ".codex" / "hooks.json").read_text(encoding="utf-8")
+    assert first == after
+    assert ".codex/hooks.json" in second.skipped
+    data = json.loads(after)
+    cmds = [h["command"] for g in data["hooks"]["Stop"] for h in g["hooks"]]
+    assert cmds.count("vouch capture ingest-codex --hook") == 1
+
+
 # --- codex: config.toml deep-merge (vouchdev/vouch#384) ---------------------
 
 

@@ -2080,21 +2080,43 @@ def capture_finalize_all_cmd(session_id: str | None, max_age_seconds: float) -> 
     help="Resolve the newest codex rollout recorded for this project (by cwd).",
 )
 @click.option(
+    "--hook", "hook_mode", is_flag=True,
+    help="Read a codex Stop-hook payload from stdin; never fails the host "
+         "(exits 0 even on errors, like `capture observe`).",
+)
+@click.option(
     "--codex-home", type=click.Path(file_okay=False, path_type=Path), default=None,
     help="Codex state dir holding sessions/ (default: $CODEX_HOME or ~/.codex).",
 )
 def capture_ingest_codex_cmd(
-    rollout: Path | None, latest: bool, codex_home: Path | None
+    rollout: Path | None, latest: bool, hook_mode: bool, codex_home: Path | None
 ) -> None:
     """Ingest one codex session rollout into a PENDING summary proposal.
 
-    Codex has no live hook stream; it persists each session as a rollout
-    jsonl instead. This maps the rollout's tool calls into the same
-    observation shape `capture observe` produces and reuses the existing
-    rollup, so the result is the same review-gated summary a claude
-    session yields. Re-ingesting a session is a no-op; review with
+    Codex has no live notify stream vouch can use project-locally; it
+    persists each session as a rollout jsonl instead. This maps the
+    rollout's tool calls into the same observation shape `capture observe`
+    produces and reuses the existing rollup, so the result is the same
+    review-gated summary a claude session yields. Re-ingesting an
+    unchanged session is a no-op; a session that grew since the last
+    ingest refreshes its one PENDING proposal in place. Review with
     `vouch review`.
     """
+    if hook_mode:
+        # Hook wire (codex `Stop` event): parse the stdin payload, resolve
+        # the session's rollout, ingest idempotently. Exits 0 no matter
+        # what — capture must never break the user's codex turn.
+        try:
+            raw = "" if sys.stdin.isatty() else sys.stdin.read()
+            payload = json.loads(raw) if raw.strip() else {}
+            if isinstance(payload, dict):
+                codex_rollout_mod.ingest_hook_payload(
+                    _capture_store(), payload, codex_home=codex_home
+                )
+        except Exception:
+            # the hook contract is exit 0 — never surface an error here.
+            pass
+        return
     if (rollout is None) == (not latest):
         raise click.ClickException("pass exactly one of ROLLOUT or --latest")
     store = _load_store()

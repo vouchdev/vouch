@@ -815,6 +815,20 @@ class KBStore:
             ) from e
         return proposal
 
+    def update_proposal(self, proposal: Proposal) -> Proposal:
+        """Overwrite an existing *pending* proposal file in place.
+
+        Pure I/O: the caller decides whether a refresh is legitimate (only
+        pending proposals may be rewritten — a decided one is history).
+        """
+        path = self._proposal_path(proposal.id)
+        if not path.exists():
+            raise ArtifactNotFoundError(f"proposal {proposal.id}")
+        path.write_text(
+            _yaml_dump(proposal.model_dump(mode="json")), encoding="utf-8"
+        )
+        return proposal
+
     def get_proposal(self, proposal_id: str) -> Proposal:
         for path in (self._proposal_path(proposal_id), self._decided_path(proposal_id)):
             if path.exists():
