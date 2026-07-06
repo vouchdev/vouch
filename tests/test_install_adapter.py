@@ -319,6 +319,122 @@ def test_install_openclaw_is_idempotent(tmp_path: Path) -> None:
     }
 
 
+# --- codex: T2 AGENTS.md fenced snippet (vouchdev/vouch#385) ----------------
+
+
+def test_codex_t2_appends_snippet_to_existing_agents_md(tmp_path: Path) -> None:
+    """Codex reads AGENTS.md for project instructions the way cursor does;
+    without the snippet a codex session gets the kb tools but no standing
+    guidance on recall-first or the review gate."""
+    (tmp_path / "AGENTS.md").write_text("# My project\n\nExisting content.\n")
+    result = install("codex", target=tmp_path, tier="T2")
+    final = (tmp_path / "AGENTS.md").read_text(encoding="utf-8")
+    assert "Existing content." in final
+    assert "<!-- BEGIN vouch -->" in final
+    assert "<!-- END vouch -->" in final
+    assert "AGENTS.md" in result.appended
+
+
+def test_codex_t2_creates_agents_md_when_absent(tmp_path: Path) -> None:
+    result = install("codex", target=tmp_path, tier="T2")
+    agents = tmp_path / "AGENTS.md"
+    assert agents.is_file()
+    assert "<!-- BEGIN vouch -->" in agents.read_text(encoding="utf-8")
+    assert "AGENTS.md" in result.written
+
+
+def test_codex_t2_rerun_is_noop(tmp_path: Path) -> None:
+    install("codex", target=tmp_path, tier="T2")
+    before = (tmp_path / "AGENTS.md").read_text(encoding="utf-8")
+    again = install("codex", target=tmp_path, tier="T2")
+    after = (tmp_path / "AGENTS.md").read_text(encoding="utf-8")
+    assert before == after
+    assert "AGENTS.md" in again.skipped
+    assert "AGENTS.md" not in again.appended
+
+
+def test_codex_t1_does_not_touch_agents_md(tmp_path: Path) -> None:
+    install("codex", target=tmp_path, tier="T1")
+    assert not (tmp_path / "AGENTS.md").exists()
+
+
+def test_codex_snippet_stays_in_lockstep_with_cursor(tmp_path: Path) -> None:
+    """The two snippets carry the same invariants (recall first, all writes
+    via proposals, review stays human) and are phrased host-neutrally: the
+    only difference allowed is the host name itself."""
+    codex = (ADAPTERS_DIR / "codex" / "AGENTS.md.snippet").read_text(encoding="utf-8")
+    cursor = (ADAPTERS_DIR / "cursor" / "AGENTS.md.snippet").read_text(encoding="utf-8")
+    assert codex == cursor.replace("cursor", "codex")
+
+
+def test_fenced_refresh_replaces_edited_fence_body(tmp_path: Path) -> None:
+    """An edited fence body is brought back in sync within the markers;
+    user content outside the fence is untouched (vouchdev/vouch#385)."""
+    (tmp_path / "AGENTS.md").write_text("# Mine\n\nAbove.\n")
+    install("codex", target=tmp_path, tier="T2")
+    installed = (tmp_path / "AGENTS.md").read_text(encoding="utf-8")
+
+    tampered = installed.replace(
+        "<!-- BEGIN vouch -->",
+        "<!-- BEGIN vouch -->\nstale hand edits\n",
+    ) + "\nBelow.\n"
+    (tmp_path / "AGENTS.md").write_text(tampered, encoding="utf-8")
+
+    result = install("codex", target=tmp_path, tier="T2")
+    final = (tmp_path / "AGENTS.md").read_text(encoding="utf-8")
+    assert "stale hand edits" not in final
+    assert "Above." in final
+    assert "Below." in final
+    assert final.count("<!-- BEGIN vouch -->") == 1
+    assert "AGENTS.md" in result.merged
+    assert "AGENTS.md" not in result.skipped
+
+
+def test_fenced_append_when_marker_only_mentioned_in_prose(tmp_path: Path) -> None:
+    """A file that merely *mentions* the marker text (docs, a code sample)
+    has no standalone fence, so the snippet is appended rather than the
+    mention being mistaken for an existing install and skipped."""
+    (tmp_path / "AGENTS.md").write_text(
+        "# Docs\n\nWe wrap vouch content in `<!-- BEGIN vouch -->` markers.\n",
+        encoding="utf-8",
+    )
+    result = install("codex", target=tmp_path, tier="T2")
+    final = (tmp_path / "AGENTS.md").read_text(encoding="utf-8")
+    # the prose line survived, and a real standalone fence was appended
+    assert "We wrap vouch content in" in final
+    assert any(line.strip() == "<!-- BEGIN vouch -->" for line in final.splitlines())
+    assert "AGENTS.md" in result.appended
+    assert "AGENTS.md" not in result.skipped
+
+
+def test_fenced_refresh_ignores_marker_mention_below_real_fence(tmp_path: Path) -> None:
+    """Re-running stays a flat no-op even when the user pasted the marker
+    text into prose below the installed fence: the standalone fence is
+    up to date, the prose mention is not a second fence."""
+    install("codex", target=tmp_path, tier="T2")
+    installed = (tmp_path / "AGENTS.md").read_text(encoding="utf-8")
+    (tmp_path / "AGENTS.md").write_text(
+        installed + "\nnote: the `<!-- BEGIN vouch -->` line is ours.\n",
+        encoding="utf-8",
+    )
+    before = (tmp_path / "AGENTS.md").read_text(encoding="utf-8")
+    result = install("codex", target=tmp_path, tier="T2")
+    assert (tmp_path / "AGENTS.md").read_text(encoding="utf-8") == before
+    assert "AGENTS.md" in result.skipped
+
+
+def test_fenced_refresh_leaves_unclosed_fence_alone(tmp_path: Path) -> None:
+    """A begin marker without an end marker is a corrupt state we refuse to
+    mangle — the file is left untouched and reported skipped."""
+    (tmp_path / "AGENTS.md").write_text(
+        "content\n<!-- BEGIN vouch -->\nno end marker here\n", encoding="utf-8"
+    )
+    before = (tmp_path / "AGENTS.md").read_text(encoding="utf-8")
+    result = install("codex", target=tmp_path, tier="T2")
+    assert (tmp_path / "AGENTS.md").read_text(encoding="utf-8") == before
+    assert "AGENTS.md" in result.skipped
+
+
 # --- codex: config.toml deep-merge (vouchdev/vouch#384) ---------------------
 
 

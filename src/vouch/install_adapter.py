@@ -280,10 +280,15 @@ def _install_fenced(
 
     States:
 
-    * dst is missing                 -> write fresh, fenced (``written``)
-    * dst exists, fence not in file  -> append fenced block (``appended``)
-    * dst exists, fence already in   -> skip (``skipped``); we are the
-                                        author and there's nothing to do
+    * dst is missing                    -> write fresh, fenced (``written``)
+    * dst exists, fence not in file     -> append fenced block (``appended``)
+    * dst exists, fence body up to date -> skip (``skipped``); we are the
+                                           author and there's nothing to do
+    * dst exists, fence body edited     -> replace within the markers
+                                           (``merged``); the fence is ours,
+                                           content around it is the user's
+    * dst exists, begin without end     -> skip (``skipped``); corrupt fence
+                                           we refuse to mangle
     """
     snippet = src.read_text(encoding="utf-8")
     fenced_block = f"\n{manifest.fence_begin}\n{snippet.rstrip()}\n{manifest.fence_end}\n"
@@ -295,14 +300,69 @@ def _install_fenced(
         return
 
     existing = dst.read_text(encoding="utf-8")
-    if manifest.fence_begin in existing:
+    span = _fence_span(existing, manifest.fence_begin, manifest.fence_end)
+    if span is not None:
+        start, stop = span
+        current = existing[start:stop]
+        expected = fenced_block.strip("\n")
+        if current == expected:
+            result.skipped.append(rel_dst)
+            return
+        # The fence is ours: bring an edited body back in sync in place,
+        # touching nothing outside the markers.
+        refreshed = existing[:start] + expected + existing[stop:]
+        dst.write_text(refreshed, encoding="utf-8")
+        result.merged.append(rel_dst)
+        return
+
+    if _has_standalone_line(existing, manifest.fence_begin):
+        # A begin marker on its own line with no matching end marker: a
+        # corrupt fence we can't cleanly parse. Don't append a second one.
         result.skipped.append(rel_dst)
         return
 
     # User-authored content above; append our fenced block at the bottom.
+    # (A file that merely *mentions* the marker text in prose or a code
+    # sample has no standalone fence, so it lands here and gets the block
+    # appended rather than being mistaken for an existing install.)
     new_content = existing.rstrip() + "\n" + fenced_block
     dst.write_text(new_content, encoding="utf-8")
     result.appended.append(rel_dst)
+
+
+def _has_standalone_line(text: str, marker: str) -> bool:
+    return any(line.strip() == marker for line in text.splitlines())
+
+
+def _fence_span(text: str, begin: str, end: str) -> tuple[int, int] | None:
+    """Char offsets of a well-formed fence whose ``begin``/``end`` markers
+    each occupy their own line, or None if there's no such pair.
+
+    Only standalone marker lines count — text that merely mentions the
+    marker inside prose or a fenced code sample is ignored, so a passing
+    reference can't be mistaken for an installed fence (and can't cause an
+    in-place rewrite to clobber unrelated content between two stray
+    mentions). The returned span runs from the start of the begin line to
+    the end of the end-marker text (excluding its trailing newline), so a
+    caller can splice a replacement in without disturbing the surrounding
+    file.
+    """
+    lines = text.splitlines(keepends=True)
+    begin_idx: int | None = None
+    end_idx: int | None = None
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if begin_idx is None:
+            if stripped == begin:
+                begin_idx = i
+        elif stripped == end:
+            end_idx = i
+            break
+    if begin_idx is None or end_idx is None:
+        return None
+    start = sum(len(line) for line in lines[:begin_idx])
+    stop = sum(len(line) for line in lines[:end_idx]) + len(lines[end_idx].rstrip("\n"))
+    return start, stop
 
 
 def _event_commands(groups: Any) -> set[str]:

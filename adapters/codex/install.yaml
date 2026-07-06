@@ -9,6 +9,14 @@
 # of skipping it -- see issue #384. Existing user values always win.
 host: codex
 pretty: OpenAI Codex CLI
+fence:
+  begin: "<!-- BEGIN vouch -->"
+  end: "<!-- END vouch -->"
 tiers:
   T1:
     - { src: config.toml, dst: .codex/config.toml, toml_merge: true }
+  # T2 = AGENTS.md fenced snippet (codex reads AGENTS.md for project
+  # instructions the way cursor does -- see issue #385). Kept in lockstep
+  # with adapters/cursor/AGENTS.md.snippet modulo the host name.
+  T2:
+    - { src: AGENTS.md.snippet, dst: AGENTS.md, fenced_append: true }
