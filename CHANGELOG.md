@@ -248,6 +248,7 @@ All notable changes to vouch are documented here. Format follows
   New `vouch schema list` and `vouch schema sync` commands inspect declared
   kinds and audit existing pages against them; `propose-page` gains `--kind`
   and repeatable `--meta key=value`.
+- `kb.capabilities` now reports a `host_compat` block mirroring the `openclaw.compat` constraints declared in `openclaw.plugin.json` (e.g. `pluginApi`), so non-OpenClaw clients can detect compat without parsing the manifest. A new test asserts the two stay in sync and fails CI on drift (#237).
 - `kb.synthesize` — answer-mode retrieval over the review-gated KB. Answers a
   query in prose from approved claims only, with an inline `[claim_id]`
   citation behind every sentence, an explicit `gaps` block listing query
