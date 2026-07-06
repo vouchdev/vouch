@@ -66,7 +66,7 @@ compile:
 
 **3. Work a session — it captures itself.** Use Claude Code normally. Each tool call is harvested into a gitignored scratch buffer, and at session end the buffer rolls up — mechanically, no LLM — into **one pending session-summary page**. Never auto-approved: the next session greets you with
 
-```
+```text
 🔔 1 auto-captured session summary(ies) awaiting review — run `vouch review`.
 ```
 
