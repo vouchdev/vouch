@@ -20,13 +20,15 @@
 
 It also captures your Claude Code sessions automatically — each session's work is harvested and rolled up into a summary. But where the persistent-memory tools compress with an LLM and inject straight back, vouch's rollup is **mechanical (no LLM)** and the summary lands in the **same review gate**: nothing becomes durable memory until you approve it.
 
+The destination is the one [Andrej Karpathy's llm-wiki idea file](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) sketches: stop using LLMs as search engines that rediscover your documents on every question — use them as tireless knowledge engineers that compile, cross-reference, and maintain a living wiki, while humans curate and think. vouch is that idea with the write path made trustworthy. `vouch compile` has an LLM draft the topic pages, but every page cites approved claims, every `[claim: …]` citation is machine-verified before the draft is filed, and the drafts pass through the same review gate as every other write. The LLM compiles; the human approves; the wiki compounds.
+
 > **Built for Gittensor (SN74) miners.** Mining subnet 74 means landing merged PRs across a whitelist of repos that keeps shuffling — which means re-investigating each repo's codebase and merge bar every session your agent opens. vouch auto-captures what a session works out, you approve what's worth keeping, and the next session recalls it: less re-discovery, more merged PRs. → **[docs/gittensor.md](docs/gittensor.md)**
 
 ## Watch it work (110 seconds)
 
 [![vouch demo — capture, summarize, approve, compile, recall](docs/img/how-it-works-preview.gif)](docs/vouch-how-it-works.mp4)
 
-Captured live from the review console, no mockups — the preview above is muted and 3× speed; the real thing is **[▶ docs/vouch-how-it-works.mp4](docs/vouch-how-it-works.mp4)**. A Claude Code session auto-captures itself, an LLM summarizes what it meant, a human approves it at the gate, **`vouch compile`** distills the approved claims into cited topic pages (every `[claim: …]` citation machine-verified, still gated), and `vouch recall` injects the result into the next session's first turn.
+**capture → summarize → approve → compile → recall.** Captured live from the review console, no mockups — the preview above is muted and 3× speed; the full cut is **[▶ docs/vouch-how-it-works.mp4](docs/vouch-how-it-works.mp4)**. A Claude Code session captures itself, an LLM summarizes what the session *meant*, a human approves it at the gate, **`vouch compile`** distills the approved claims into cited topic pages (every `[claim: …]` citation machine-verified, still gated), and the film closes on real `vouch recall` output — the wiki the video just built, injected into the next session's first turn.
 
 ## Why this exists
 
