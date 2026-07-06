@@ -98,6 +98,27 @@ Every `[claim: …]` marker and `[[wikilink]]` in a draft is verified mechanical
 
 **6. Start the next session — it already knows.** The `SessionStart` hook runs `vouch recall`, injecting every approved claim and page title into the first turn, so the session starts from your reviewed knowledge instead of re-discovering it.
 
+Detection is Claude Code's hook contract: whatever a `SessionStart` hook prints becomes context in the session's opening turn. `vouch recall` prints the digest the video closes on — claims with their full text, pages by id and title:
+
+```text
+<vouch-approved-knowledge>
+# approved KB knowledge for this repo — 2 claim(s), 1 page(s). reviewed,
+# cited, durable. use kb_read_page / kb_search for detail; kb_propose_*
+# (human-approved) to add more.
+
+## claims
+- [auth-uses-jwt] Auth uses JWT tokens — decision from the design note.
+- [vouch-starter-reviewed-knowledge] Vouch stores reviewed, cited knowledge
+  in the repository so future agent sessions can retrieve agreed project
+  context.
+
+## pages
+- [edit-in-obsidian] Edit in Obsidian
+</vouch-approved-knowledge>
+```
+
+Only approved artifacts are ever emitted — archived, superseded, and still-pending items are excluded — and the digest is size-guarded (`recall.max_chars`) with an explicit truncation notice.
+
 How the approved pages actually get used from there: recall carries the *titles*, and the session pulls full content on demand through the `kb.*` MCP tools — `kb_search` matches page bodies, `kb_read_page` returns a page's markdown plus the claims it cites, and `kb_context` bundles the most relevant claims and pages for a stated task. To pull a topic in explicitly, use the `/vouch-recall <topic>` slash command, or just ask Claude to check the KB. One thing to know: pages still sitting in `vouch review` are invisible to all of this — the gate applies to retrieval too, so a compiled page only starts informing sessions once you approve it.
 
 **7. Commit the knowledge with the code.**
