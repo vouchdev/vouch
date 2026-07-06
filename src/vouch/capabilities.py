@@ -17,10 +17,14 @@ from .openclaw.context_engine import describe_engine
 
 _log = logging.getLogger(__name__)
 
-# Path to the plugin manifest, relative to this module. capabilities.py lives
-# at src/vouch/capabilities.py; openclaw.plugin.json lives at the repo root,
-# three levels up (src/vouch/ -> src/ -> repo root).
-_PLUGIN_MANIFEST_PATH = Path(__file__).resolve().parent.parent.parent / "openclaw.plugin.json"
+# package.json — not openclaw.plugin.json — is where the openclaw.compat
+# floor lives: the manifest deliberately excludes a top-level "openclaw" key
+# (see test_openclaw_plugin_manifest.py's dead-dialect-fields check), so
+# package.json's openclaw.compat.pluginApi is the only place this can be
+# read from. Path is relative to this module: capabilities.py lives at
+# src/vouch/capabilities.py; package.json lives at the repo root, three
+# levels up (src/vouch/ -> src/ -> repo root).
+_PACKAGE_JSON_PATH = Path(__file__).resolve().parent.parent.parent / "package.json"
 
 # The full method surface this implementation exposes. Keep this list in
 # sync with the MCP server + JSONL server registrations — `test_capabilities`
@@ -90,19 +94,19 @@ METHODS = [
 
 
 def _load_host_compat() -> dict[str, dict[str, str]]:
-    """Read the `openclaw.compat` block from openclaw.plugin.json (#237).
+    """Read the `openclaw.compat` block from package.json (#237).
 
     Surfaced in `kb.capabilities` as `host_compat` so non-OpenClaw clients
-    can detect compat without parsing the manifest themselves. Returns an
-    empty dict (rather than raising) if the manifest is missing or
+    can detect compat without parsing package.json themselves. Returns an
+    empty dict (rather than raising) if package.json is missing or
     malformed — capabilities() must never fail to report basic info just
-    because the manifest moved or this is installed as a standalone wheel
-    without the manifest packaged alongside it.
+    because the file moved or this is installed as a standalone wheel
+    without package.json packaged alongside it.
     """
     try:
-        manifest = json.loads(_PLUGIN_MANIFEST_PATH.read_text(encoding="utf-8"))
+        manifest = json.loads(_PACKAGE_JSON_PATH.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as e:
-        _log.debug("openclaw.plugin.json unreadable, host_compat will be empty: %s", e)
+        _log.debug("package.json unreadable, host_compat will be empty: %s", e)
         return {}
     compat = manifest.get("openclaw", {}).get("compat")
     if not isinstance(compat, dict):
