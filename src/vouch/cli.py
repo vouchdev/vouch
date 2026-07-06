@@ -3667,12 +3667,21 @@ def install_mcp(
         click.echo(f"  ~ {f}  (merged into existing)")
     for f in result.skipped:
         click.echo(f"  · {f}  (already present)")
+    for f in result.failed:
+        click.echo(f"  ✗ {f}  (could not install — left unchanged)")
     click.echo(
         f"Done — {len(result.written)} written, "
         f"{len(result.appended)} appended, {len(result.merged)} merged, "
-        f"{len(result.skipped)} skipped "
+        f"{len(result.skipped)} skipped, {len(result.failed)} failed "
         f"under {target}"
     )
+    if result.failed:
+        # a failed install is not a no-op: exit non-zero so scripts (and the
+        # user) notice vouch was NOT wired into these files.
+        raise click.ClickException(
+            f"{len(result.failed)} file(s) could not be installed: "
+            f"{', '.join(result.failed)}"
+        )
 
 
 # --- sync: bidirectional vouch <-> Obsidian-style vault -------------------
