@@ -6,7 +6,7 @@ start compiling*: sessions and sources feed claims through the review gate;
 compile distills those claims into the small, durable wiki a future agent (or
 human) reads first.
 
-```
+```text
      sessions / sources          claims               topic pages
    ───────────────────▶ gate ───────────▶ compile ───────────▶ gate ──▶ wiki
         (capture)             (approve)      (LLM drafts)       (approve)
