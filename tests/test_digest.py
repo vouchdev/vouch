@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, tzinfo
 from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
 
 from vouch import digest as digest_mod
+from vouch import proposals as proposals_mod
 from vouch.cli import cli
 from vouch.models import (
     Claim,
@@ -26,8 +27,22 @@ from vouch.storage import KBStore
 NOW = datetime(2026, 7, 4, 12, 0, 0, tzinfo=UTC)
 
 
+class _FrozenDatetime(datetime):
+    """`datetime` whose `now` is pinned to NOW.
+
+    approve/reject stamp `decided_at` with wall-clock time; the window tests
+    anchor to NOW, so decisions must be stamped relative to NOW too or the
+    assertions rot as real time passes the fixture dates.
+    """
+
+    @classmethod
+    def now(cls, tz: tzinfo | None = None) -> datetime:
+        return NOW if tz is not None else NOW.replace(tzinfo=None)
+
+
 @pytest.fixture
-def store(tmp_path: Path) -> KBStore:
+def store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> KBStore:
+    monkeypatch.setattr(proposals_mod, "datetime", _FrozenDatetime)
     s = KBStore.init(tmp_path)
     src = s.put_source(b"evidence body", title="src", locator="test:src", source_type="message")
 

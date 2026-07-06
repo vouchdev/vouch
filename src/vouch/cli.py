@@ -24,6 +24,7 @@ import yaml
 from . import __version__, bundle, health, volunteer_context
 from . import audit as audit_mod
 from . import capture as capture_mod
+from . import compile as compile_mod
 from . import digest as digest_mod
 from . import fetch as fetch_mod
 from . import inbox as inbox_mod
@@ -2024,6 +2025,46 @@ def recall_cmd() -> None:
     digest = recall_mod.build_digest(store, max_chars=cfg.max_chars)
     if digest.strip():
         click.echo(digest)
+
+
+@cli.command(name="compile")
+@click.option("--dry-run", is_flag=True, help="Draft and validate; file nothing.")
+@click.option("--max-pages", type=int, default=None,
+              help="Cap drafted pages (default: compile.max_pages, 5).")
+@click.option("--llm-cmd", default=None,
+              help="Override compile.llm_cmd from config.yaml for this run.")
+@click.option("--json", "as_json", is_flag=True, help="Machine-readable report.")
+def compile_cmd(dry_run: bool, max_pages: int | None,
+                llm_cmd: str | None, as_json: bool) -> None:
+    """Compile approved claims into topic-page proposals (llm-wiki ingest).
+
+    Runs the deployment-configured LLM (compile.llm_cmd) over the live
+    approved claims, validates every citation in the drafts, and files the
+    survivors as pending page proposals. Approval stays a separate human
+    step (`vouch review`).
+    """
+    store = _load_store()
+    actor = os.environ.get("VOUCH_AGENT") or compile_mod.COMPILE_ACTOR
+    try:
+        report = compile_mod.compile_kb(
+            store, actor=actor, triggered_by=_whoami(), llm_cmd=llm_cmd,
+            max_pages=max_pages, dry_run=dry_run,
+        )
+    except compile_mod.CompileError as e:
+        raise click.ClickException(str(e)) from e
+    if as_json:
+        _emit_json(report.to_dict())
+        return
+    verb = "would propose" if dry_run else "proposed"
+    _echo(f"{verb} {len(report.proposed)} page draft(s):")
+    for row in report.proposed:
+        _echo(f"  • {row['proposal_id']}  {row['title']}")
+    if report.dropped:
+        _echo(f"dropped {len(report.dropped)}:")
+        for row in report.dropped:
+            _echo(f"  • {row['title']} — {row['reason']}")
+    if report.proposed and not dry_run:
+        _echo("run `vouch review` to decide.")
 
 
 @cli.command()
