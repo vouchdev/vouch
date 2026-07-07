@@ -175,18 +175,103 @@ def test_context_rerank_enabled_reorders_scoped_window(
         ],
     )
     monkeypatch.setattr(context.index_db, "search", lambda *a, **k: [])
+    context._RERANKER_CACHE = None
     monkeypatch.setattr(rerank_mod, "default_reranker", lambda: object())
     monkeypatch.setattr(
         rerank_mod,
         "rerank",
-        lambda *, query, hits, reranker, top_k: [hits[1], hits[0]][:top_k],
+        lambda *, query, hits, reranker, top_k: [
+            (hits[1][0], hits[1][1], hits[1][2], 99.0),
+            (hits[0][0], hits[0][1], hits[0][2], 88.0),
+        ][:top_k],
     )
     _set_backend(store, "hybrid")
+    _set_rerank(store, enabled=False)
+    before = context.build_context_pack(store, query="auth", limit=3)
+    scores_by_id = {item["id"]: item["score"] for item in before["items"]}
     _set_rerank(store, enabled=True, top_k=2)
 
     pack = context.build_context_pack(store, query="auth", limit=3)
 
     assert [item["id"] for item in pack["items"]] == ["c2", "c1", "c3"]
+    assert [item["score"] for item in pack["items"]] == [
+        scores_by_id["c2"],
+        scores_by_id["c1"],
+        scores_by_id["c3"],
+    ]
+
+
+def test_context_rerank_bool_top_k_falls_back_to_limit(
+    store: KBStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from vouch.embeddings import rerank as rerank_mod
+
+    src = store.put_source(b"e2")
+    store.put_claim(Claim(id="c2", text="OAuth refresh flow", evidence=[src.id]))
+    store.put_claim(Claim(id="c3", text="SAML login flow", evidence=[src.id]))
+    health.rebuild_index(store)
+    monkeypatch.setattr(
+        context.index_db,
+        "search_semantic",
+        lambda *a, **k: [
+            ("claim", "c1", "JWT token rotation", 0.90),
+            ("claim", "c2", "OAuth refresh flow", 0.80),
+            ("claim", "c3", "SAML login flow", 0.70),
+        ],
+    )
+    monkeypatch.setattr(context.index_db, "search", lambda *a, **k: [])
+    seen_top_k: list[int] = []
+    context._RERANKER_CACHE = None
+    monkeypatch.setattr(rerank_mod, "default_reranker", lambda: object())
+
+    def fake_rerank(*, query, hits, reranker, top_k):
+        seen_top_k.append(top_k)
+        return list(reversed(hits))
+
+    monkeypatch.setattr(rerank_mod, "rerank", fake_rerank)
+    _set_backend(store, "hybrid")
+    _set_rerank(store, enabled=True, top_k=True)
+
+    pack = context.build_context_pack(store, query="auth", limit=3)
+
+    assert seen_top_k == [3]
+    assert [item["id"] for item in pack["items"]] == ["c3", "c2", "c1"]
+
+
+def test_context_rerank_reuses_default_reranker(
+    store: KBStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from vouch.embeddings import rerank as rerank_mod
+
+    src = store.put_source(b"e2")
+    store.put_claim(Claim(id="c2", text="OAuth refresh flow", evidence=[src.id]))
+    health.rebuild_index(store)
+    monkeypatch.setattr(
+        context.index_db,
+        "search_semantic",
+        lambda *a, **k: [
+            ("claim", "c1", "JWT token rotation", 0.90),
+            ("claim", "c2", "OAuth refresh flow", 0.80),
+        ],
+    )
+    monkeypatch.setattr(context.index_db, "search", lambda *a, **k: [])
+    calls = 0
+    context._RERANKER_CACHE = None
+
+    def fake_default_reranker():
+        nonlocal calls
+        calls += 1
+        return object()
+
+    monkeypatch.setattr(rerank_mod, "default_reranker", fake_default_reranker)
+    monkeypatch.setattr(rerank_mod, "rerank", lambda *, query, hits, reranker, top_k: hits)
+    _set_backend(store, "hybrid")
+    _set_rerank(store, enabled=True)
+
+    context.build_context_pack(store, query="auth", limit=2)
+    context.build_context_pack(store, query="auth", limit=2)
+
+    assert calls == 1
 
 
 def test_context_rerank_missing_extra_degrades_to_fused_order(
@@ -206,6 +291,7 @@ def test_context_rerank_missing_extra_degrades_to_fused_order(
         ],
     )
     monkeypatch.setattr(context.index_db, "search", lambda *a, **k: [])
+    context._RERANKER_CACHE = None
     monkeypatch.setattr(
         rerank_mod,
         "default_reranker",
