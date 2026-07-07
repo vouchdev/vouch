@@ -28,8 +28,8 @@ vouch install-mcp codex --tier T1   # MCP config only
 vouch install-mcp codex --tier T2   # MCP config + AGENTS.md snippet
 ```
 
-Re-running is idempotent: existing files are left alone, and the
-`AGENTS.md` fence is replaced in-place without duplicating the block.
+Re-running is idempotent: existing files are left alone, and an
+existing `AGENTS.md` fence is preserved without duplicating the block.
 
 ## Manual setup
 
