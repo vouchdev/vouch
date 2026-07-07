@@ -74,6 +74,78 @@ def _configured_backend(store: KBStore) -> str:
     return "auto"
 
 
+def _configured_rerank(store: KBStore, *, limit: int) -> tuple[bool, int]:
+    """Resolve the optional context rerank stage from config.yaml.
+
+    Defaults to disabled so existing KBs keep byte-identical ordering unless
+    they opt in with ``retrieval.rerank.enabled: true``. ``top_k`` is the
+    window to reorder; by default it is the caller's context limit.
+    """
+    try:
+        loaded = yaml.safe_load(store.config_path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        return False, limit
+    if not isinstance(loaded, dict):
+        return False, limit
+    retrieval = loaded.get("retrieval")
+    if not isinstance(retrieval, dict):
+        return False, limit
+    rerank = retrieval.get("rerank")
+    if not isinstance(rerank, dict):
+        return False, limit
+
+    enabled = rerank.get("enabled", False)
+    enabled = enabled if isinstance(enabled, bool) else False
+
+    top_k = rerank.get("top_k", limit)
+    top_k = top_k if isinstance(top_k, int) and top_k > 0 else limit
+    return enabled, top_k
+
+
+def _maybe_rerank(
+    store: KBStore,
+    *,
+    query: str,
+    hits: list[tuple[str, str, str, float]],
+    limit: int,
+) -> list[tuple[str, str, str, float]]:
+    enabled, top_k = _configured_rerank(store, limit=limit)
+    if not enabled or not hits or top_k <= 0:
+        return hits
+
+    window_size = min(top_k, len(hits))
+    window = hits[:window_size]
+    try:
+        from .embeddings.rerank import default_reranker
+        from .embeddings.rerank import rerank as do_rerank
+
+        reranked = do_rerank(
+            query=query,
+            hits=window,
+            reranker=default_reranker(),
+            top_k=window_size,
+        )
+    except ImportError:
+        return hits
+
+    # Keep reranking as an ordering-only stage: the configured window may move,
+    # but it must not add/drop artifacts from the already-scoped result set.
+    original_keys = {(kind, artifact_id) for kind, artifact_id, _summary, _score in window}
+    seen: set[tuple[str, str]] = set()
+    ordered: list[tuple[str, str, str, float]] = []
+    for hit in reranked:
+        key = (hit[0], hit[1])
+        if key in original_keys and key not in seen:
+            ordered.append(hit)
+            seen.add(key)
+    for hit in window:
+        key = (hit[0], hit[1])
+        if key not in seen:
+            ordered.append(hit)
+            seen.add(key)
+    return ordered + hits[window_size:]
+
+
 def _retrieve(
     store: KBStore,
     query: str,
@@ -101,6 +173,7 @@ def _retrieve(
         fused = rrf_fuse(sem, lex, limit=fetch_limit)
         if fused:
             filtered = filter_hits(store, fused, viewer, limit=limit)
+            filtered = _maybe_rerank(store, query=query, hits=filtered, limit=limit)
             return [(k, i, s, sc, "hybrid") for k, i, s, sc in filtered]
         # both retrievers empty -> fall through to the substring scan below.
 
