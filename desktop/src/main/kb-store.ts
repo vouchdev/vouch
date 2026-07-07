@@ -33,7 +33,17 @@ class KbStore {
 
   private _load(): StoreData {
     try {
-      return { ...DEFAULTS, ...JSON.parse(fs.readFileSync(this.file, "utf8")) };
+      const raw = JSON.parse(fs.readFileSync(this.file, "utf8"));
+      if (raw == null || typeof raw !== "object" || Array.isArray(raw)) {
+        return JSON.parse(JSON.stringify(DEFAULTS));
+      }
+      const safe: Record<string, unknown> = {};
+      for (const key of Object.keys(raw)) {
+        if (key !== "__proto__" && key !== "constructor") {
+          safe[key] = raw[key];
+        }
+      }
+      return { ...DEFAULTS, ...safe };
     } catch {
       return JSON.parse(JSON.stringify(DEFAULTS));
     }
