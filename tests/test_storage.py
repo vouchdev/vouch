@@ -548,6 +548,37 @@ def test_check_approvable_clean_for_well_formed_proposal(
     assert check_approvable(store, pr.id, approved_by="reviewer") is None
 
 
+def test_update_page_rejects_dangling_claim_ref(store: KBStore) -> None:
+    """update_page must mirror put_page's ref guard — vault edits land here."""
+    src = store.put_source(b"e")
+    store.put_claim(Claim(id="c1", text="t", evidence=[src.id]))
+    store.put_page(
+        Page(id="p1", title="T", body="body", type=PageType.CONCEPT, claims=["c1"]),
+    )
+    bad = Page(
+        id="p1", title="T", body="updated", type=PageType.CONCEPT, claims=["ghost"],
+    )
+    with pytest.raises(ValueError, match="unknown claim"):
+        store.update_page(bad)
+
+
+def test_approve_page_update_rejects_stale_claim_ref(store: KBStore) -> None:
+    """A claim deleted between propose and approve must not become a dangling
+    page reference — the vault-edit path routes through update_page."""
+    src = store.put_source(b"e")
+    store.put_claim(Claim(id="c1", text="t", evidence=[src.id]))
+    store.put_page(
+        Page(id="p1", title="T", body="body", type=PageType.CONCEPT, claims=["c1"]),
+    )
+    pr = propose_page(
+        store, title="T", body="updated", claim_ids=["c1"],
+        proposed_by="vault-sync", slug_hint="p1",
+    )
+    (store.kb_dir / "claims" / "c1.yaml").unlink()
+    with pytest.raises(ValueError, match="unknown claim"):
+        approve(store, pr.id, approved_by="reviewer")
+
+
 # --- evidence -------------------------------------------------------------
 
 
