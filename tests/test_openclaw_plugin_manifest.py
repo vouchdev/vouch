@@ -138,13 +138,13 @@ def test_manifest_carries_no_dead_dialect_fields(manifest: dict) -> None:
     """The pre-2026.6 dialect's fields are silently ignored by the loader.
 
     Keeping them around would suggest they still do something; they don't.
+    Note: ``openclaw`` is now a live field carrying ``compat.pluginApi`` (#237).
     """
     dead_fields = (
         "family",
         "mcpServers",
         "shared_deps",
         "excluded_from_install",
-        "openclaw",
         "contracts",
     )
     for dead in dead_fields:

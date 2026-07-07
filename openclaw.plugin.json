@@ -7,6 +7,11 @@
   "skills": [
     "adapters/openclaw/skills"
   ],
+  "openclaw": {
+    "compat": {
+      "pluginApi": ">=2026.6.0"
+    }
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
