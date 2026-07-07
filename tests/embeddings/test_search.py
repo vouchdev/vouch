@@ -109,8 +109,8 @@ def test_jsonl_search_uses_embedding_backend(
         "params": {"query": "claim about logins"},
     })
     assert resp["ok"] is True
-    assert resp["result"]["hits"]
-    assert resp["result"]["backend"] in ("embedding", "fts5", "substring")
+    assert resp["result"]
+    assert resp["result"][0]["backend"] in ("embedding", "fts5", "substring")
 
 
 def test_kb_search_defaults_to_semantic_then_fts5(
@@ -126,41 +126,6 @@ def test_kb_search_defaults_to_semantic_then_fts5(
     assert result["hits"]
     assert result["backend"] in ("embedding", "fts5", "substring")
     assert result["hits"][0]["id"] == "c1"
-
-
-def test_mcp_kb_reindex_embeddings(store: KBStore, monkeypatch: pytest.MonkeyPatch) -> None:
-    from vouch import server
-    monkeypatch.setattr(server, "_store", lambda: store)
-    src = store.put_source(b"e")
-    store.put_claim(Claim(id="c1", text="x", evidence=[src.id]))
-    out = server.kb_reindex_embeddings(backfill=True)
-    assert out["touched"] >= 1
-
-
-def test_mcp_kb_dedup_scan(store: KBStore, monkeypatch: pytest.MonkeyPatch) -> None:
-    from vouch import server
-    monkeypatch.setattr(server, "_store", lambda: store)
-    out = server.kb_dedup_scan(threshold=0.95, dry_run=True)
-    assert "duplicates" in out
-
-
-def test_mcp_kb_embeddings_stats(store: KBStore, monkeypatch: pytest.MonkeyPatch) -> None:
-    from vouch import server
-    monkeypatch.setattr(server, "_store", lambda: store)
-    out = server.kb_embeddings_stats()
-    assert "model" in out
-
-
-def test_jsonl_kb_reindex_embeddings(store: KBStore, monkeypatch: pytest.MonkeyPatch) -> None:
-    from vouch import jsonl_server
-    monkeypatch.setattr(jsonl_server, "_store", lambda: store)
-    src = store.put_source(b"e")
-    store.put_claim(Claim(id="c1", text="x", evidence=[src.id]))
-    resp = jsonl_server.handle_request({
-        "id": "1", "method": "kb.reindex_embeddings",
-        "params": {"backfill": True},
-    })
-    assert resp["ok"] is True
 
 
 def test_search_semantic_returns_top_hits(store: KBStore) -> None:

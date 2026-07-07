@@ -36,7 +36,7 @@ export default {
     const job = reactive({
       id: null, status: "idle", progress: [], candidates: [],
       issue: null, error: null, kept_branch: null, proposed_ids: [],
-      changed_files: [],
+      changed_files: [], recommendation: null,
     });
 
     function applyState(s) {
@@ -64,6 +64,7 @@ export default {
     async function run() {
       job.progress = []; job.error = null; job.candidates = [];
       job.kept_branch = null; job.proposed_ids = []; job.changed_files = [];
+      job.recommendation = null;
       const r = await fetch("/dual-solve/run", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -105,6 +106,12 @@ export default {
   <p v-if="job.issue" class="ds-issue">#{{job.issue.number}} {{job.issue.title}}</p>
   <pre v-if="job.progress.length" class="ds-progress">{{ job.progress.join('\\n') }}</pre>
   <p v-if="job.error" class="ds-error">{{ job.error }}</p>
+  <p v-if="job.recommendation && job.recommendation.reason" class="ds-recommendation">
+    <strong>recommendation:</strong>
+    <span v-if="job.recommendation.engine">{{job.recommendation.engine}}</span>
+    <span v-else>no automatic pick</span>
+    <span> -- {{job.recommendation.reason}}</span>
+  </p>
 
   <div v-if="job.status==='ready'||job.status==='done'" class="ds-panes">
     <div v-for="c in job.candidates" :key="c.engine" class="ds-pane">
@@ -113,6 +120,10 @@ export default {
       <ul v-if="c.changed_files && c.changed_files.length" class="ds-changed-files">
         <li v-for="f in c.changed_files" :key="f">{{f}}</li>
       </ul>
+      <details v-if="c.log" class="ds-log">
+        <summary>{{c.engine}} log</summary>
+        <pre>{{c.log}}</pre>
+      </details>
       <div v-for="f in c.files" :key="f.path" class="ds-file">
         <div class="ds-file-head">{{f.path}}</div>
         <pre><code><span v-for="(l,i) in f.lines" :key="i" :class="'ln-'+l.cls">{{l.text}}\\n</span></code></pre>

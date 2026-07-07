@@ -22,53 +22,31 @@ import os
 import sys
 import traceback
 from collections.abc import Callable
-from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
-import yaml
-
-from . import audit, bundle, health, volunteer_context
-from . import compile as compile_mod
-from . import digest as digest_mod
+from . import audit, bundle, health
 from . import lifecycle as life
-from . import metrics as metrics_mod
-from . import salience as salience_mod
 from . import sessions as sess_mod
-from . import trust as trust_mod
 from . import verify as verify_mod
 from .capabilities import capabilities as build_caps
 from .context import build_context_pack
-from .logging_config import configure_logging
 from .models import ProposalStatus
-from .page_filters import filter_pages
 from .proposals import (
-    EXPIRE_ACTOR,
     ProposalError,
     approve,
-    expire_pending,
     propose_claim,
     propose_entity,
     propose_page,
     propose_relation,
     reject,
-    reject_auto_extracted,
 )
-from .stats import collect_stats
 from .storage import (
     ArtifactNotFoundError,
     KBNotFoundError,
     KBStore,
     discover_root,
 )
-from .synthesize import synthesize
-
-# Per-request actor override. The HTTP transport sets this from the
-# X-Vouch-Agent header so audit attribution is correct without mutating
-# process-wide env (each ThreadingHTTPServer request thread gets its own
-# context, so this is concurrency-safe). stdio/JSONL leave it unset and
-# fall back to VOUCH_AGENT.
-_actor: ContextVar[str | None] = ContextVar("vouch_actor", default=None)
 
 
 def _store() -> KBStore:
@@ -79,7 +57,7 @@ def _store() -> KBStore:
 
 
 def _agent() -> str:
-    return _actor.get() or os.environ.get("VOUCH_AGENT", "unknown-agent")
+    return os.environ.get("VOUCH_AGENT", "unknown-agent")
 
 
 # --- per-method handlers ---------------------------------------------------
@@ -93,40 +71,19 @@ def _h_status(_: dict) -> dict:
     return health.status(_store())
 
 
-def _h_stats(p: dict) -> dict:
-    days = int(p.get("days", 30))
-    since = None if days == 0 else days
-    return collect_stats(_store(), since_days=since)
-
-
-def _h_digest(p: dict) -> dict:
-    d = digest_mod.build(
-        _store(),
-        since=metrics_mod.parse_since(str(p.get("since", digest_mod.DEFAULT_SINCE_SPEC))),
-        stale_after_days=int(p.get("stale_days", metrics_mod.DEFAULT_STALE_DAYS)),
-        limit=int(p.get("limit", digest_mod.DEFAULT_LIMIT)),
-    )
-    return d.to_dict()
-
-
-def _h_search(p: dict) -> dict:
+def _h_search(p: dict) -> list[dict]:
     from . import index_db
-    from .scoping import filter_hits, scoped_fetch_limit, viewer_from
-
     s = _store()
     q = p["query"]
     limit = int(p.get("limit", 10))
     backend_arg = p.get("backend", "auto")
     min_score = float(p.get("min_score", 0.0))
-    viewer = viewer_from(
-        config_path=s.config_path,
-        project=p.get("project"),
-        agent=p.get("agent"),
-    )
-    fetch_limit = scoped_fetch_limit(limit, viewer)
     hits: list[tuple[str, str, str, float]] = []
     used = backend_arg
 
+    # Reject unknown backends with a clear error rather than silently
+    # returning []. Falling through hides client typos and diverges from
+    # the MCP transport, which raises ValueError on the same input.
     valid_backends = {"auto", "embedding", "fts5", "substring", "hybrid"}
     if backend_arg not in valid_backends:
         raise ValueError(
@@ -136,18 +93,18 @@ def _h_search(p: dict) -> dict:
 
     if backend_arg in ("auto", "embedding"):
         hits = index_db.search_semantic(
-            s.kb_dir, q, limit=fetch_limit, min_score=min_score,
+            s.kb_dir, q, limit=limit, min_score=min_score,
         )
         if hits:
             used = "embedding"
     if not hits and backend_arg in ("auto", "fts5"):
         try:
-            hits = index_db.search(s.kb_dir, q, limit=fetch_limit)
+            hits = index_db.search(s.kb_dir, q, limit=limit)
             used = "fts5" if hits else used
         except Exception:
             hits = []
     if not hits and backend_arg in ("auto", "substring"):
-        hits = s.search_substring(q, limit=fetch_limit)
+        hits = s.search_substring(q, limit=limit)
         used = "substring"
     if backend_arg == "hybrid":
         from .embeddings.fusion import (  # type: ignore[import-not-found,import-untyped,unused-ignore]
@@ -156,81 +113,32 @@ def _h_search(p: dict) -> dict:
         # Hybrid must honour min_score and survive FTS failures the same
         # way the dedicated fts5 branch does.
         emb = index_db.search_semantic(
-            s.kb_dir, q, limit=fetch_limit * 2, min_score=min_score,
+            s.kb_dir, q, limit=limit * 2, min_score=min_score,
         )
         try:
-            fts = index_db.search(s.kb_dir, q, limit=fetch_limit * 2)
+            fts = index_db.search(s.kb_dir, q, limit=limit * 2)
         except Exception:
             fts = []
-        hits = rrf_fuse(emb, fts, limit=fetch_limit)
+        hits = rrf_fuse(emb, fts, limit=limit)
         used = "hybrid"
 
-    scoped = filter_hits(s, hits, viewer, limit=limit)
-    return {
-        "backend": used,
-        "viewer": {"project": viewer.project, "agent": viewer.agent},
-        "hits": [
-            {"kind": k, "id": i, "snippet": sn, "score": sc, "backend": used}
-            for k, i, sn, sc in scoped
-        ],
-    }
-
-
-def _load_cfg(store: KBStore) -> dict:
-    try:
-        loaded = yaml.safe_load((store.kb_dir / "config.yaml").read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-    return loaded if isinstance(loaded, dict) else {}
-
-
-def _h_neighbors(p: dict) -> dict:
-    from .graph import find_neighbors
-
-    return find_neighbors(
-        _store(),
-        p["node_id"],
-        depth=int(p.get("depth", 1)),
-        rel_types=p.get("rel_types"),
-        max_nodes=int(p.get("max_nodes", 50)),
-    )
+    return [
+        {"kind": k, "id": i, "snippet": sn, "score": sc, "backend": used}
+        for k, i, sn, sc in hits
+    ]
 
 
 def _h_context(p: dict) -> dict:
-    store = _store()
-    query = p["task"]
-    cfg = _load_cfg(store)
-    session_id = p.get("session_id")
-    if session_id:
-        _, window, _ = salience_mod.reflex_cfg(cfg)
-        salience_mod.record_query(session_id, query, window=window)
-    result: dict = build_context_pack(  # type: ignore[assignment]
-        store,
-        query=query,
+    return build_context_pack(
+        _store(),
+        query=p["task"],
         limit=int(p.get("limit", 10)),
-        max_chars=int(p["max_chars"]) if p.get("max_chars") is not None else None,
+        max_chars=p.get("max_chars"),
         min_items=int(p.get("min_items", 0)),
         require_citations=bool(p.get("require_citations", False)),
         fail_on_warnings=bool(p.get("fail_on_warnings", False)),
         fail_on_budget_truncation=bool(p.get("fail_on_budget_truncation", False)),
-        project=p.get("project"),
-        agent=p.get("agent"),
-        expand_graph=bool(p.get("expand_graph", False)),
-        graph_depth=int(p.get("graph_depth", 1)),
-        graph_limit=int(p.get("graph_limit", 20)),
-        graph_rel_types=p.get("graph_rel_types"),
-    )
-    return salience_mod.attach_salience(result, store, session_id, cfg)
-
-
-def _h_synthesize(p: dict) -> dict:
-    return synthesize(
-        _store(),
-        query=p["query"],
-        depth=int(p.get("depth", 3)),
-        max_chars=int(p.get("max_chars", 4000)),
-        llm=bool(p.get("llm", False)),
-    )
+    ).model_dump(mode="json")
 
 
 def _h_read_page(p: dict) -> dict:
@@ -249,15 +157,8 @@ def _h_read_relation(p: dict) -> dict:
     return _store().get_relation(p["relation_id"]).model_dump(mode="json")
 
 
-def _h_list_pages(p: dict) -> list[dict]:
-    pages = filter_pages(
-        _store().list_pages(),
-        kind=p.get("type"),
-        equals=p.get("meta"),
-        before=p.get("meta_before"),
-        after=p.get("meta_after"),
-    )
-    return [pg.model_dump(mode="json") for pg in pages]
+def _h_list_pages(_: dict) -> list[dict]:
+    return [p.model_dump(mode="json") for p in _store().list_pages()]
 
 
 def _h_list_claims(p: dict) -> list[dict]:
@@ -323,7 +224,7 @@ def _h_register_source_from_path(p: dict) -> dict:
 
 
 def _h_propose_claim(p: dict) -> dict:
-    result = propose_claim(
+    pr = propose_claim(
         _store(),
         text=p["text"],
         evidence=list(p["evidence"]),
@@ -337,16 +238,8 @@ def _h_propose_claim(p: dict) -> dict:
         dry_run=bool(p.get("dry_run", False)),
         proposed_by=_agent(),
     )
-    pr = result.proposal
-    out: dict = {
-        "proposal_id": pr.id,
-        "status": pr.status.value,
-        "kind": pr.kind.value,
-        "dry_run": bool(p.get("dry_run", False)),
-    }
-    if result.warnings:
-        out["warnings"] = result.warnings
-    return out
+    return {"proposal_id": pr.id, "status": pr.status.value, "kind": pr.kind.value,
+            "dry_run": bool(p.get("dry_run", False))}
 
 
 def _h_propose_page(p: dict) -> dict:
@@ -357,7 +250,6 @@ def _h_propose_page(p: dict) -> dict:
         claim_ids=p.get("claim_ids"),
         entity_ids=p.get("entity_ids"),
         source_ids=p.get("source_ids"),
-        metadata=p.get("metadata"),
         rationale=p.get("rationale"),
         slug_hint=p.get("slug_hint"),
         session_id=p.get("session_id"),
@@ -365,22 +257,6 @@ def _h_propose_page(p: dict) -> dict:
         proposed_by=_agent(),
     )
     return {"proposal_id": pr.id, "status": pr.status.value, "kind": pr.kind.value}
-
-
-def _h_compile(p: dict) -> dict:
-    try:
-        report = compile_mod.compile_kb(
-            _store(), triggered_by=_agent(),
-            max_pages=p.get("max_pages"),
-            dry_run=bool(p.get("dry_run", False)),
-            session_id=p.get("session_id"),
-        )
-    except compile_mod.CompileError as e:
-        # config/LLM/output-shape failures are caller-visible conditions,
-        # not server faults — surface them on the ValueError path so the
-        # envelope carries a clean message instead of internal_error.
-        raise ValueError(str(e)) from e
-    return report.to_dict()
 
 
 def _h_propose_entity(p: dict) -> dict:
@@ -419,30 +295,6 @@ def _h_approve(p: dict) -> dict:
 def _h_reject(p: dict) -> dict:
     reject(_store(), p["proposal_id"], rejected_by=_agent(), reason=p["reason"])
     return {"proposal_id": p["proposal_id"], "status": "rejected"}
-
-
-def _h_reject_extracted(p: dict) -> dict:
-    kwargs: dict[str, Any] = {"page_id": p.get("page_id")}
-    if p.get("reason"):
-        kwargs["reason"] = p["reason"]
-    rejected = reject_auto_extracted(_store(), rejected_by=_agent(), **kwargs)
-    return {"rejected": [pr.id for pr in rejected]}
-
-
-def _h_expire(p: dict) -> dict:
-    result = expire_pending(
-        _store(),
-        apply=bool(p.get("apply")),
-        expired_by=EXPIRE_ACTOR,
-        days=p.get("days"),
-    )
-    return {
-        "threshold_days": result.threshold_days,
-        "enabled": result.threshold_days > 0,
-        "dry_run": not bool(p.get("apply")),
-        "would_expire": [pr.id for pr in result.would_expire],
-        "expired": [pr.id for pr in result.expired],
-    }
 
 
 def _h_supersede(p: dict) -> dict:
@@ -505,14 +357,6 @@ def _h_crystallize(p: dict) -> dict:
     )
 
 
-def _h_volunteer_context(p: dict) -> dict:
-    offers = volunteer_context.drain_pending(
-        p["session_id"],
-        clear=bool(p.get("clear", True)),
-    )
-    return {"volunteers": [o.to_dict() for o in offers]}
-
-
 def _h_index_rebuild(_: dict) -> dict:
     return health.rebuild_index(_store())
 
@@ -573,152 +417,18 @@ def _h_import_apply(p: dict) -> dict:
     return r
 
 
-def _h_audit(p: dict) -> dict:
-    from .scoping import viewer_from_params
-
-    s = _store()
-    viewer = viewer_from_params(s, p)
-    tail = int(p.get("tail", 50))
-    events = list(audit.read_events(s.kb_dir, store=s, viewer=viewer))[-tail:]
-    return {
-        "viewer": {"project": viewer.project, "agent": viewer.agent},
-        "events": [e.model_dump(mode="json") for e in events],
-    }
-
-
-def _h_reindex_embeddings(p: dict) -> dict:
-    from .embeddings.migration import backfill_embeddings
-    n = backfill_embeddings(_store(), force=bool(p.get("force", False)))
-    return {"touched": n}
-
-
-def _h_dedup_scan(p: dict) -> dict:
-    from .embeddings.dedup import scan_all
-    return {
-        "duplicates": scan_all(
-            _store().kb_dir,
-            threshold=float(p.get("threshold", 0.95)),
-            dry_run=bool(p.get("dry_run", False)),
-        ),
-    }
-
-
-def _h_eval_embeddings(p: dict) -> dict:
-    from pathlib import Path
-
-    from .embeddings.scorer import evaluate
-    return evaluate(
-        kb_dir=_store().kb_dir,
-        queries_file=Path(p["queries_path"]),
-        k=int(p.get("k", 10)),
-    )
-
-
-def _h_embeddings_stats(_: dict) -> dict:
-    from . import index_db
-    from .embeddings.cache import query_cache_stats
-    store = _store()
-    meta = index_db.get_embedding_meta(store.kb_dir)
-    with index_db.open_db(store.kb_dir) as conn:
-        counts = {
-            k: int(n) for k, n in conn.execute(
-                "SELECT kind, COUNT(*) FROM embedding_index GROUP BY kind"
-            )
-        }
-    return {
-        "model": meta.get("embedding_model"),
-        "counts": counts,
-        "query_cache": query_cache_stats(store.kb_dir),
-    }
-
-
-def _h_why(p: dict) -> dict:
-    from . import provenance as prov
-
-    return prov.why(_store(), claim_id=p["claim_id"], depth=int(p.get("depth", 3)))
-
-
-def _h_trace(p: dict) -> dict:
-    from . import provenance as prov
-
-    return prov.trace(_store(), from_id=p["from"], to_id=p["to"])
-
-
-def _h_impact(p: dict) -> dict:
-    from . import provenance as prov
-
-    return prov.impact(
-        _store(),
-        claim_id=p["claim_id"],
-        depth=int(p.get("depth", 1)),
-        op=p.get("op"),
-    )
-
-
-def _h_graph_export(p: dict) -> dict:
-    from . import provenance as prov
-
-    fmt = p.get("format", "dot")
-    graph = prov.graph_export(_store(), session=p.get("session"), fmt=fmt)
-    return {"format": fmt, "graph": graph}
-
-
-def _h_provenance_rebuild(_: dict) -> dict:
-    from . import provenance as prov
-
-    return {"edges": prov.rebuild_prov_edges(_store())}
-
-
-def _h_detect_themes(p: dict) -> dict:
-    from . import themes
-
-    result = themes.detect_themes(
-        _store(),
-        min_sessions=p.get("min_sessions"),
-        min_claims=p.get("min_claims"),
-        top_k=p.get("top_k"),
-    )
-    return {
-        "clusters": [
-            {
-                "entities": c.entities,
-                "claim_ids": c.claim_ids,
-                "session_ids": c.session_ids,
-                "score": c.score,
-                "session_count": c.session_count,
-                "claim_count": c.claim_count,
-            }
-            for c in result.clusters
-        ],
-        "config": result.config_used,
-    }
-
-
-def _h_propose_theme(p: dict) -> dict:
-    from . import themes
-
-    store = _store()
-    actor = p.get("agent") or os.environ.get("VOUCH_AGENT", "unknown-agent")
-    cluster = themes.ThemeCluster(
-        entities=p["entities"],
-        claim_ids=p["claim_ids"],
-        session_ids=p.get("session_ids", []),
-        score=float(p.get("score", 0.0)),
-        session_count=len(p.get("session_ids", [])),
-        claim_count=len(p["claim_ids"]),
-    )
-    return themes.propose_theme(store, cluster, proposed_by=actor)
+def _h_audit(p: dict) -> list[dict]:
+    return [
+        e.model_dump(mode="json")
+        for e in list(audit.read_events(_store().kb_dir))[-int(p.get("tail", 50)):]
+    ]
 
 
 HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.capabilities": _h_capabilities,
     "kb.status": _h_status,
-    "kb.stats": _h_stats,
-    "kb.digest": _h_digest,
     "kb.search": _h_search,
-    "kb.neighbors": _h_neighbors,
     "kb.context": _h_context,
-    "kb.synthesize": _h_synthesize,
     "kb.read_page": _h_read_page,
     "kb.read_claim": _h_read_claim,
     "kb.read_entity": _h_read_entity,
@@ -733,13 +443,10 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.register_source_from_path": _h_register_source_from_path,
     "kb.propose_claim": _h_propose_claim,
     "kb.propose_page": _h_propose_page,
-    "kb.compile": _h_compile,
     "kb.propose_entity": _h_propose_entity,
     "kb.propose_relation": _h_propose_relation,
     "kb.approve": _h_approve,
     "kb.reject": _h_reject,
-    "kb.reject_extracted": _h_reject_extracted,
-    "kb.expire": _h_expire,
     "kb.supersede": _h_supersede,
     "kb.contradict": _h_contradict,
     "kb.archive": _h_archive,
@@ -748,7 +455,6 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.source_verify": _h_source_verify,
     "kb.session_start": _h_session_start,
     "kb.session_end": _h_session_end,
-    "kb.volunteer_context": _h_volunteer_context,
     "kb.crystallize": _h_crystallize,
     "kb.index_rebuild": _h_index_rebuild,
     "kb.lint": _h_lint,
@@ -758,17 +464,6 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.import_check": _h_import_check,
     "kb.import_apply": _h_import_apply,
     "kb.audit": _h_audit,
-    "kb.reindex_embeddings": _h_reindex_embeddings,
-    "kb.dedup_scan": _h_dedup_scan,
-    "kb.eval_embeddings": _h_eval_embeddings,
-    "kb.embeddings_stats": _h_embeddings_stats,
-    "kb.why": _h_why,
-    "kb.trace": _h_trace,
-    "kb.impact": _h_impact,
-    "kb.graph_export": _h_graph_export,
-    "kb.provenance_rebuild": _h_provenance_rebuild,
-    "kb.detect_themes": _h_detect_themes,
-    "kb.propose_theme": _h_propose_theme,
 }
 
 
@@ -784,11 +479,7 @@ def handle_request(envelope: dict) -> dict:
         }
     try:
         result = HANDLERS[method](params)
-        return {
-            "id": req_id,
-            "ok": True,
-            "result": trust_mod.finish_kb_result(result),
-        }
+        return {"id": req_id, "ok": True, "result": result}
     except KeyError as e:
         return {
             "id": req_id, "ok": False,
@@ -812,8 +503,6 @@ def handle_request(envelope: dict) -> dict:
 
 def run_jsonl(stdin=None, stdout=None) -> None:
     """Read one request per line, write one response per line."""
-    configure_logging()
-    trust_mod.set_stdio_default(trust_mod.JSONL_STDIO)
     stdin = stdin or sys.stdin
     stdout = stdout or sys.stdout
     for line in stdin:

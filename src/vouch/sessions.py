@@ -12,8 +12,7 @@ import time
 import uuid
 from datetime import UTC, datetime
 
-from . import audit, index_db, volunteer_context
-from . import salience as salience_mod
+from . import audit
 from .models import Page, PageType, ProposalStatus, Session
 from .proposals import approve
 from .storage import KBStore
@@ -34,13 +33,11 @@ def session_start(store: KBStore, *, agent: str, task: str | None = None,
         store.kb_dir, event="session.start", actor=agent,
         object_ids=[sess.id], data={"task": task},
     )
-    volunteer_context.on_session_start(store, sess)
     return sess
 
 
 def session_end(store: KBStore, session_id: str, *, note: str | None = None) -> Session:
     sess = store.get_session(session_id)
-    salience_mod.reset_session(session_id)
     if sess.ended_at is not None:
         return sess  # idempotent
     sess.ended_at = datetime.now(UTC)
@@ -55,7 +52,6 @@ def session_end(store: KBStore, session_id: str, *, note: str | None = None) -> 
         store.kb_dir, event="session.end", actor=sess.agent,
         object_ids=[sess.id], data={"proposals": len(sess.proposal_ids)},
     )
-    volunteer_context.on_session_end(session_id)
     return sess
 
 
@@ -111,19 +107,11 @@ def crystallize(
             ],
         )
         store.put_page(page)
-        with index_db.open_db(store.kb_dir) as conn:
-            index_db.index_page(
-                conn, id=page.id, title=page.title, body=page.body,
-                type=page.type, tags=page.tags,
-            )
         summary_page_id = page.id
 
-    crystallize_object_ids = [sess.id, *approved_artifact_ids]
-    if summary_page_id is not None:
-        crystallize_object_ids.append(summary_page_id)
     audit.log_event(
         store.kb_dir, event="session.crystallize", actor=approver,
-        object_ids=crystallize_object_ids,
+        object_ids=[sess.id, *approved_artifact_ids],
         data={"approved": len(approved_artifact_ids), "failed": len(failures)},
     )
     return {
@@ -135,17 +123,11 @@ def crystallize(
 
 
 def _build_summary_body(sess: Session, ids: list[str]) -> str:
-    # The summary page is durable and surfaces in kb.read_page / kb.search /
-    # kb.context, but never goes through propose_page + approve. The body is
-    # therefore restricted to fields the proposing agent cannot influence —
-    # session id (server-generated), timestamps (set from server clock at
-    # session_start / session_end), and the list of artifact ids that did go
-    # through the review gate. Anything agent-controlled (sess.task,
-    # sess.note, sess.agent) is omitted to keep the review-gate guarantee
-    # intact for the Page artifact kind. See #76.
-    lines = [
-        f"# Session {sess.id}",
-        "",
+    lines = [f"# Session {sess.id}", ""]
+    if sess.task:
+        lines += [f"**Task:** {sess.task}", ""]
+    lines += [
+        f"**Agent:** {sess.agent}",
         f"**Started:** {sess.started_at.isoformat()}",
         f"**Ended:** {(sess.ended_at or datetime.now(UTC)).isoformat()}",
         "",
