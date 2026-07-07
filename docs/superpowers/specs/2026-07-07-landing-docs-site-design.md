@@ -76,12 +76,13 @@ propose-time dup flagging, SLO-as-code. Tracked in
 3. **proof strip with reproduction links** — 17% faster / 32% fewer turns /
    18% cheaper, each linking to the tutorial that produced it. rule: no
    number on the page without a repro command or source link.
-4. **the knowledge graph** — an interactive canvas render of a real
-   `.vouch/` KB export (typed, cited, human-approved edges; colored by
-   artifact type/status). generated offline: `vouch graph --format json`
-   (or `kb_graph_export`) → static JSON checked into `site/assets/` +
-   a small self-contained canvas renderer (~pmb's viz.py export pattern,
-   no CDN). caption contrasts: co-occurrence graphs guess; these edges were
+4. **the knowledge graph** — an interactive canvas render of a KB graph
+   (typed, cited, human-approved edges; colored by artifact type/status).
+   user decision 2026-07-07: **mock data is fine** — a hand-crafted
+   demonstration KB checked into `site/assets/` as static JSON + a small
+   self-contained canvas renderer (~pmb's viz.py export pattern, no CDN).
+   can be swapped for a real `vouch graph --format json` export later.
+   caption contrasts: co-occurrence graphs guess; these edges were
    approved by a human.
 5. **pages are the product** — a rendered compiled wiki page with visible
    `[claim: …]` citations; one paragraph on `vouch compile` machine-verifying
@@ -100,6 +101,10 @@ video), `gittensor.html` (existing case study, kept as a page). the old
 "Reference" nav item now points at docs.vouchai.dev.
 
 ### design language
+
+**quality bar (user, 2026-07-07): visibly better than pmbai.dev.** the page
+must lead with visuals, not copy — judged side-by-side against pmbai.dev
+screenshots before shipping.
 
 dark-first, text-forward precision retained (it reads as engineering
 credibility), but with the three visuals above so the page is no longer
