@@ -457,3 +457,12 @@ class Capabilities(BaseModel):
         default_factory=list,
         description="OpenClaw context engines exposed (see openclaw.plugin.json)",
     )
+    host_compat: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Per-host compatibility ranges (#237). Mirrors the "
+            "`openclaw.compat` block in package.json so non-OpenClaw "
+            "clients can detect compat without parsing the package metadata, "
+            'e.g. {"openclaw": {"pluginApi": ">=2026.6.0"}}.'
+        ),
+    )
