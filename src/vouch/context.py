@@ -212,24 +212,25 @@ def _jaccard(a: set[str], b: set[str]) -> float:
 def _dedupe_near_duplicates(items: list[ContextItem]) -> list[ContextItem]:
     """Drop items whose summary is near-identical to a higher-scored one.
 
-    Cheap greedy pass (token-set Jaccard >= 0.85 over the first 40 tokens),
-    keeping the highest-scored member of each near-duplicate cluster. Sorts
-    by score internally so the invariant holds even when callers append
-    lower-priority items out of order (e.g. graph-expansion neighbours).
+    The *keep* decision runs in descending-score order so the highest-scored
+    member of a near-duplicate cluster survives; survivors are returned in the
+    caller's original order. build_context_pack appends lower-priority items
+    (graph-expansion neighbours) after the ranked hits and relies on that tail
+    ordering for budget eviction, so this pass must not re-rank the pack.
 
-    Note: the 0.85/40-token heuristic can over-merge long, near-templated
-    claims that differ by a single token (e.g. a version or status word);
-    it is a deliberate cheap filter, not a semantic dedup.
+    Cheap greedy heuristic (token-set Jaccard >= 0.85 over the first 40 tokens);
+    it can over-merge long near-templated claims that differ by a single token.
     """
-    kept: list[ContextItem] = []
+    dropped: set[int] = set()
     kept_tokens: list[set[str]] = []
-    for it in sorted(items, key=lambda i: i.score, reverse=True):
-        toks = set(it.summary.lower().split()[:40])
+    order = sorted(range(len(items)), key=lambda i: items[i].score, reverse=True)
+    for idx in order:
+        toks = set(items[idx].summary.lower().split()[:40])
         if any(_jaccard(toks, seen) >= 0.85 for seen in kept_tokens):
+            dropped.add(idx)
             continue
-        kept.append(it)
         kept_tokens.append(toks)
-    return kept
+    return [it for i, it in enumerate(items) if i not in dropped]
 
 
 def build_context_pack(

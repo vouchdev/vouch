@@ -162,3 +162,18 @@ def test_dedupe_keeps_highest_scored_regardless_of_input_order() -> None:
                      score=0.90, backend="hybrid", citations=[], freshness="unknown")
     out = _dedupe_near_duplicates([lo, hi])  # deliberately low-score-first
     assert [i.id for i in out] == ["hi"]
+
+
+def test_dedupe_preserves_input_order_not_score_order() -> None:
+    """Survivors keep the caller's order (ranked hits first, appended
+    neighbours last) even when a later distinct item outscores an earlier one,
+    so budget eviction drops the tail, not the real matches."""
+    from vouch.context import _dedupe_near_duplicates
+    from vouch.models import ContextItem
+
+    a = ContextItem(id="a", type="claim", summary="alpha topic one",
+                    score=0.02, backend="hybrid", citations=[], freshness="unknown")
+    b = ContextItem(id="b", type="claim", summary="beta subject two",
+                    score=0.32, backend="graph", citations=[], freshness="unknown")
+    out = _dedupe_near_duplicates([a, b])  # distinct summaries, a first but lower-scored
+    assert [i.id for i in out] == ["a", "b"]
