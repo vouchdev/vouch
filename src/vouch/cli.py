@@ -25,6 +25,7 @@ import yaml
 from . import __version__, bundle, health, volunteer_context
 from . import audit as audit_mod
 from . import capture as capture_mod
+from . import codex_rollout as codex_rollout_mod
 from . import compile as compile_mod
 from . import digest as digest_mod
 from . import fetch as fetch_mod
@@ -98,6 +99,7 @@ def _cli_errors() -> Iterator[None]:
         ProposalError,
         LifecycleError,
         migrations_mod.MigrationError,
+        codex_rollout_mod.CodexRolloutError,
     ) as e:
         raise click.ClickException(str(e)) from e
 
@@ -1028,6 +1030,52 @@ def list_relations() -> None:
         output = f"{relation.id:50} {relation.source} -> {relation.relation} -> "
         output += relation.target
         click.echo(output)
+
+
+@cli.command()
+@click.argument("proposal_ids", nargs=-1)
+@click.option(
+    "--json", "as_json", is_flag=True,
+    help="Emit machine-readable _meta.vouch_triage blocks.",
+)
+@click.option(
+    "--reverse", is_flag=True,
+    help="Ascending order (worst-first) instead of the default descending (best-first).",
+)
+def triage(proposal_ids: tuple[str, ...], as_json: bool, reverse: bool) -> None:
+    """Advisory triage scoring over pending proposals (opt-in: triage.enabled).
+
+    Scores each proposal on fit, citation quality, duplication risk, and
+    contradiction risk, then prints a ranked table. Never approves or
+    rejects — a human still decides via `vouch approve` / `vouch reject`.
+    """
+    from . import triage as triage_mod
+
+    store = _load_store()
+    with _cli_errors():
+        results = triage_mod.triage_pending(store, proposal_ids=list(proposal_ids) or None)
+    results.sort(key=lambda r: r["_meta"]["vouch_triage"]["score"], reverse=not reverse)
+
+    if as_json:
+        _emit_json(results)
+        return
+    if not results:
+        click.echo("no pending proposals to triage")
+        return
+    for r in results:
+        block = r["_meta"]["vouch_triage"]
+        preview = (
+            r["payload"].get("text")
+            or r["payload"].get("title")
+            or r["payload"].get("name")
+            or r["payload"].get("id")
+            or "-"
+        )
+        click.echo(
+            f"{block['score']:.2f}  [{block['recommendation']:>11}]  "
+            f"{r['id']}  [{r['kind']}]  {str(preview).strip()[:80]}"
+        )
+        click.echo(f"    {block['rationale']}")
 
 
 @cli.command()
@@ -2022,6 +2070,75 @@ def capture_finalize_all_cmd(session_id: str | None, max_age_seconds: float) -> 
     _emit_json(result)
 
 
+@capture.command("ingest-codex")
+@click.argument(
+    "rollout", required=False,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+)
+@click.option(
+    "--latest", is_flag=True,
+    help="Resolve the newest codex rollout recorded for this project (by cwd).",
+)
+@click.option(
+    "--hook", "hook_mode", is_flag=True,
+    help="Read a codex Stop-hook payload from stdin; never fails the host "
+         "(exits 0 even on errors, like `capture observe`).",
+)
+@click.option(
+    "--codex-home", type=click.Path(file_okay=False, path_type=Path), default=None,
+    help="Codex state dir holding sessions/ (default: $CODEX_HOME or ~/.codex).",
+)
+def capture_ingest_codex_cmd(
+    rollout: Path | None, latest: bool, hook_mode: bool, codex_home: Path | None
+) -> None:
+    """Ingest one codex session rollout into a PENDING summary proposal.
+
+    Codex has no live notify stream vouch can use project-locally; it
+    persists each session as a rollout jsonl instead. This maps the
+    rollout's tool calls into the same observation shape `capture observe`
+    produces and reuses the existing rollup, so the result is the same
+    review-gated summary a claude session yields. Re-ingesting an
+    unchanged session is a no-op; a session that grew since the last
+    ingest refreshes its one PENDING proposal in place. Review with
+    `vouch review`.
+    """
+    if hook_mode:
+        # Hook wire (codex `Stop` event): parse the stdin payload, resolve
+        # the session's rollout, ingest idempotently. Exits 0 no matter
+        # what — capture must never break the user's codex turn.
+        try:
+            raw = "" if sys.stdin.isatty() else sys.stdin.read()
+            payload = json.loads(raw) if raw.strip() else {}
+            if isinstance(payload, dict):
+                codex_rollout_mod.ingest_hook_payload(
+                    _capture_store(), payload, codex_home=codex_home
+                )
+        except Exception:
+            # the hook contract is exit 0 — never surface an error here.
+            pass
+        return
+    if (rollout is None) == (not latest):
+        raise click.ClickException("pass exactly one of ROLLOUT or --latest")
+    store = _load_store()
+    with _cli_errors():
+        if latest:
+            found = codex_rollout_mod.find_latest_rollout(
+                Path.cwd(), codex_home=codex_home
+            )
+            if found is None:
+                raise click.ClickException(
+                    "no codex rollout found for this project under "
+                    f"{(codex_home or codex_rollout_mod.default_codex_home()) / 'sessions'}; "
+                    "pass a rollout file explicitly"
+                )
+            rollout = found
+        assert rollout is not None
+        result = codex_rollout_mod.ingest_rollout(
+            store, rollout, generated_at=datetime.now(UTC).isoformat()
+        )
+    _emit_json(result)
+
+
 @capture.command("banner")
 def capture_banner_cmd() -> None:
     """Emit a SessionStart nudge if captured summaries await review."""
@@ -2297,6 +2414,30 @@ def context(
         graph_limit=graph_limit,
     )
     _emit_json(pack)
+
+
+@cli.command(name="context-hook", hidden=True)
+def context_hook() -> None:
+    """Emit relevant KB context for a host UserPromptSubmit hook (reads stdin).
+
+    Wired by the claude-code adapter; not meant to be run by hand. Reads the
+    host's JSON hook payload on stdin, prints an additionalContext envelope,
+    and always exits 0 so it can never block a turn.
+    """
+    import sys
+
+    from . import hooks
+
+    stdin_text = sys.stdin.read()
+    store = _capture_store()
+    out = ""
+    if store is not None:
+        try:
+            out = hooks.build_claude_prompt_hook(store, stdin_text)
+        except Exception:
+            out = ""
+    if out:
+        click.echo(out)
 
 
 @cli.command()
@@ -2883,20 +3024,32 @@ def dual_solve_cmd(issue_url: str, claude_effort: str, codex_effort: str,
         _emit_json({
             "issue": {"number": issue.number, "title": issue.title,
                       "url": issue.url},
+            "recommendation": ds_mod.recommendation(candidates),
             "candidates": [
                 {"engine": c.engine, "branch": c.branch, "ok": c.ok,
                  "error": c.error, "changed_files": ds_mod.changed_files(c.diff),
-                 "diff": c.diff} for c in candidates
+                 "log": c.log, "diff": c.diff} for c in candidates
             ],
         })
         return
 
     for c in candidates:
         click.echo(f"\n=== {c.engine} ({c.branch}) ===", err=True)
+        if c.log.strip():
+            click.echo("--- engine log ---", err=True)
+            click.echo(c.log)
         if c.ok:
+            if c.log.strip():
+                click.echo("--- diff ---", err=True)
             click.echo(c.diff)
         else:
             click.echo(f"(failed: {c.error})", err=True)
+
+    rec = ds_mod.recommendation(candidates)
+    if rec.get("reason"):
+        label = f"recommendation: {rec['engine']}" if rec.get("engine") \
+            else "recommendation: no automatic pick"
+        click.echo(f"{label} -- {rec['reason']}", err=True)
 
     ok = [c for c in candidates if c.ok]
     if not ok:
@@ -2979,10 +3132,14 @@ def sync_apply_cmd(source_path: str, on_conflict: str) -> None:
 
 @cli.command()
 @click.argument("old_id")
-@click.argument("new_id")
+@click.argument("new_id", required=False)
 @click.option("--json", "as_json", is_flag=True, default=False, help="Emit the diff as JSON.")
-def diff(old_id: str, new_id: str, as_json: bool) -> None:
-    """Show what changed between two claim or two page revisions."""
+def diff(old_id: str, new_id: str | None, as_json: bool) -> None:
+    """Show what changed between two claim or two page revisions.
+
+    NEW_ID is optional for a claim that has been superseded: it resolves to
+    ``superseded_by`` automatically.
+    """
     from .diff import diff_artifacts
 
     store = _load_store()

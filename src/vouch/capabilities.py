@@ -7,9 +7,20 @@ without hardcoding assumptions.
 
 from __future__ import annotations
 
+import json
+import logging
+from pathlib import Path
+
 from . import __version__
 from .models import Capabilities
 from .openclaw.context_engine import describe_engine
+
+_log = logging.getLogger(__name__)
+
+# Path to the plugin manifest, relative to this module. capabilities.py lives
+# at src/vouch/capabilities.py; openclaw.plugin.json lives at the repo root,
+# three levels up (src/vouch/ -> src/ -> repo root).
+_PLUGIN_MANIFEST_PATH = Path(__file__).resolve().parent.parent.parent / "openclaw.plugin.json"
 
 # The full method surface this implementation exposes. Keep this list in
 # sync with the MCP server + JSONL server registrations — `test_capabilities`
@@ -27,12 +38,14 @@ METHODS = [
     "kb.read_claim",
     "kb.read_entity",
     "kb.read_relation",
+    "kb.diff",
     "kb.list_pages",
     "kb.list_claims",
     "kb.list_entities",
     "kb.list_relations",
     "kb.list_sources",
     "kb.list_pending",
+    "kb.triage_pending",
     "kb.register_source",
     "kb.register_source_from_path",
     "kb.propose_claim",
@@ -76,6 +89,27 @@ METHODS = [
 ]
 
 
+def _load_host_compat() -> dict[str, dict[str, str]]:
+    """Read the `openclaw.compat` block from openclaw.plugin.json (#237).
+
+    Surfaced in `kb.capabilities` as `host_compat` so non-OpenClaw clients
+    can detect compat without parsing the manifest themselves. Returns an
+    empty dict (rather than raising) if the manifest is missing or
+    malformed — capabilities() must never fail to report basic info just
+    because the manifest moved or this is installed as a standalone wheel
+    without the manifest packaged alongside it.
+    """
+    try:
+        manifest = json.loads(_PLUGIN_MANIFEST_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        _log.debug("openclaw.plugin.json unreadable, host_compat will be empty: %s", e)
+        return {}
+    compat = manifest.get("openclaw", {}).get("compat")
+    if not isinstance(compat, dict):
+        return {}
+    return {"openclaw": {k: str(v) for k, v in compat.items()}}
+
+
 def capabilities() -> Capabilities:
     retrieval = ["fts5", "substring"]
     try:
@@ -98,4 +132,5 @@ def capabilities() -> Capabilities:
             "config_path": "retrieval.scope",
         },
         context_engines=[describe_engine()],
+        host_compat=_load_host_compat(),
     )

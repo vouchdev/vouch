@@ -80,9 +80,11 @@ def test_dual_solve_sandbox_runner_can_be_enabled(git_kb, monkeypatch):
 def _fake_prepare(monkeypatch, *, calls):
     issue = ds.Issue("Fix bug", "body", number=4, url="u")
     cA = ds.Candidate("claude", "vouch-dual/4-fix-bug-claude", Path("/w/claude"),
-                      diff="diff --git a/x b/x\n+1\n", sha="s1", ok=True)
+                      diff="diff --git a/x b/x\n+1\n", sha="s1",
+                      log="claude fixed it", ok=True)
     cX = ds.Candidate("codex", "vouch-dual/4-fix-bug-codex", Path("/w/codex"),
-                      diff="diff --git a/y b/y\n+2\n", sha="s2", ok=True)
+                      diff="diff --git a/y b/y\n+2\n+3\n", sha="s2",
+                      log="codex fixed it too", ok=True)
 
     def fake(store, issue_ref, root, runner, *, claude_effort="high",
              codex_effort="high", autonomy="edit", dry_run=False,
@@ -117,6 +119,9 @@ def test_run_starts_job_and_reaches_ready(git_kb, monkeypatch):
     assert [x["engine"] for x in state["candidates"]] == ["claude", "codex"]
     assert state["candidates"][0]["changed_files"] == ["x"]
     assert state["candidates"][1]["changed_files"] == ["y"]
+    assert state["candidates"][0]["log"] == "claude fixed it"
+    assert state["candidates"][1]["log"] == "codex fixed it too"
+    assert state["recommendation"]["engine"] == "claude"
     # autonomy is forced to edit regardless of input
     assert calls[0]["autonomy"] == "edit"
 
@@ -200,6 +205,7 @@ def test_choose_winner_finalizes_and_returns_ids(git_kb, monkeypatch):
     assert r.json()["proposed_ids"] == ["prop-1", "prop-2"]
     assert r.json()["kept_branch"] == "vouch-dual/4-fix-bug-codex"
     assert r.json()["changed_files"] == ["y"]
+    assert r.json()["recommendation"]["engine"] == "claude"
     assert captured["winner"] == "codex"
     assert captured["record"] is True and captured["reason"] == "cleaner"
 

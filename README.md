@@ -61,7 +61,7 @@ vouch init
 vouch install-mcp claude-code
 ```
 
-`init` creates `.vouch/` with a starter config; `install-mcp` writes `.mcp.json` (the `kb.*` MCP tools), the `/vouch-*` slash commands, and three hooks — `PostToolUse` capture, `SessionEnd` rollup, `SessionStart` recall. Restart Claude Code so they load.
+`init` creates `.vouch/` with a starter config; `install-mcp` writes `.mcp.json` (the `kb.*` MCP tools — a lean default surface you can widen with `VOUCH_TOOL_PROFILE`), the `/vouch-*` slash commands, and four hooks — `PostToolUse` capture, `SessionEnd` rollup, `SessionStart` recall, and `UserPromptSubmit` per-prompt context injection. Restart Claude Code so they load.
 
 **2. Point `compile` at an LLM** — the only step that needs a model. In `.vouch/config.yaml`:
 
@@ -124,6 +124,8 @@ Detection is Claude Code's hook contract: whatever a `SessionStart` hook prints 
 ```
 
 Only approved artifacts are ever emitted — archived, superseded, and still-pending items are excluded — and the digest is size-guarded (`recall.max_chars`) with an explicit truncation notice.
+
+Recall isn't only a session-start event anymore: a `UserPromptSubmit` hook runs `vouch context-hook` on *every* prompt, fusing the most relevant approved claims and pages for what you just asked and injecting them with zero tool calls — so the model sees relevant knowledge even when the agent doesn't think to look it up.
 
 How the approved pages actually get used from there: recall carries the *titles*, and the session pulls full content on demand through the `kb.*` MCP tools — `kb_search` matches page bodies, `kb_read_page` returns a page's markdown plus the claims it cites, and `kb_context` bundles the most relevant claims and pages for a stated task. To pull a topic in explicitly, use the `/vouch-recall <topic>` slash command, or just ask Claude to check the KB. One thing to know: pages still sitting in `vouch review` are invisible to all of this — the gate applies to retrieval too, so a compiled page only starts informing sessions once you approve it.
 

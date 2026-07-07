@@ -19,7 +19,7 @@ from typing import Any
 import yaml
 from mcp.server.fastmcp import FastMCP
 
-from . import audit, bundle, health, volunteer_context
+from . import audit, bundle, health, mcp_profiles, volunteer_context
 from . import compile as compile_mod
 from . import digest as digest_mod
 from . import lifecycle as life
@@ -310,6 +310,18 @@ def kb_read_relation(relation_id: str) -> dict[str, Any]:
 
 
 @mcp.tool()
+def kb_diff(old_id: str, new_id: str | None = None) -> dict[str, Any]:
+    """Field-level diff between two claim revisions or two page revisions.
+
+    new_id is optional for a superseded claim: resolves to superseded_by.
+    """
+    from dataclasses import asdict
+
+    from .diff import diff_artifacts
+    return asdict(diff_artifacts(_store(), old_id, new_id))
+
+
+@mcp.tool()
 def kb_list_pages(
     *,
     type: str | None = None,
@@ -380,6 +392,23 @@ def kb_list_pending() -> list[dict[str, Any]]:
         p.model_dump(mode="json")
         for p in _store().list_proposals(ProposalStatus.PENDING)
     ]
+
+
+@mcp.tool()
+def kb_triage_pending(proposal_ids: list[str] | None = None) -> list[dict[str, Any]]:
+    """Advisory triage scoring over the pending-review queue.
+
+    Attaches `_meta.vouch_triage` (recommendation/score/signals/rationale)
+    to each pending proposal's view. Read-only — never approves, rejects,
+    or otherwise decides; a human still calls `kb_approve` / `kb_reject`.
+    Opt-in: disabled unless `triage.enabled: true` is set in config.yaml.
+    """
+    from . import triage as triage_mod
+
+    try:
+        return triage_mod.triage_pending(_store(), proposal_ids=proposal_ids)
+    except (ValueError, ArtifactNotFoundError) as e:
+        raise ValueError(str(e)) from e
 
 
 # === write tools — gated (produce proposals) =============================
@@ -1012,4 +1041,12 @@ def run_stdio() -> None:
     """Entry point used by `vouch serve`."""
     configure_logging()
     trust_mod.set_stdio_default(trust_mod.MCP_STDIO)
+    try:
+        cfg: dict[str, Any] | None = _load_cfg(_store())
+    except Exception:
+        cfg = None
+    profile = mcp_profiles.resolve_profile_name(cfg)
+    mcp_profiles.apply_tool_profile(mcp, profile)
+    if profile != "full":
+        mcp_profiles.compact_descriptions(mcp)
     mcp.run()

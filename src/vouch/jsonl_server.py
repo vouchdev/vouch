@@ -18,9 +18,9 @@ Response envelope (failure):
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sys
-import traceback
 from collections.abc import Callable
 from contextvars import ContextVar
 from pathlib import Path
@@ -62,6 +62,8 @@ from .storage import (
     discover_root,
 )
 from .synthesize import synthesize
+
+_log = logging.getLogger("vouch.jsonl_server")
 
 # Per-request actor override. The HTTP transport sets this from the
 # X-Vouch-Agent header so audit attribution is correct without mutating
@@ -249,6 +251,14 @@ def _h_read_relation(p: dict) -> dict:
     return _store().get_relation(p["relation_id"]).model_dump(mode="json")
 
 
+def _h_diff(p: dict) -> dict:
+    from dataclasses import asdict
+
+    from .diff import diff_artifacts
+
+    return asdict(diff_artifacts(_store(), p["old_id"], p.get("new_id")))
+
+
 def _h_list_pages(p: dict) -> list[dict]:
     pages = filter_pages(
         _store().list_pages(),
@@ -292,6 +302,12 @@ def _h_list_pending(_: dict) -> list[dict]:
         p.model_dump(mode="json")
         for p in _store().list_proposals(ProposalStatus.PENDING)
     ]
+
+
+def _h_triage_pending(p: dict) -> list[dict]:
+    from . import triage as triage_mod
+
+    return triage_mod.triage_pending(_store(), proposal_ids=p.get("proposal_ids"))
 
 
 def _h_register_source(p: dict) -> dict:
@@ -723,12 +739,14 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.read_claim": _h_read_claim,
     "kb.read_entity": _h_read_entity,
     "kb.read_relation": _h_read_relation,
+    "kb.diff": _h_diff,
     "kb.list_pages": _h_list_pages,
     "kb.list_claims": _h_list_claims,
     "kb.list_entities": _h_list_entities,
     "kb.list_relations": _h_list_relations,
     "kb.list_sources": _h_list_sources,
     "kb.list_pending": _h_list_pending,
+    "kb.triage_pending": _h_triage_pending,
     "kb.register_source": _h_register_source,
     "kb.register_source_from_path": _h_register_source_from_path,
     "kb.propose_claim": _h_propose_claim,
@@ -800,12 +818,12 @@ def handle_request(envelope: dict) -> dict:
             "error": {"code": "invalid_request", "message": str(e)},
         }
     except Exception as e:
+        _log.exception("internal error handling %s", method)
         return {
             "id": req_id, "ok": False,
             "error": {
                 "code": "internal_error",
                 "message": str(e),
-                "traceback": traceback.format_exc(),
             },
         }
 
