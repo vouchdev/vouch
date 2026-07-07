@@ -157,7 +157,7 @@ def rebuild_index(store: KBStore) -> dict:
         for p in store.list_pages():
             index_db.index_page(
                 conn, id=p.id, title=p.title, body=p.body,
-                type=p.type.value, tags=p.tags,
+                type=p.type, tags=p.tags,
             )
         for e in store.list_entities():
             index_db.index_entity(

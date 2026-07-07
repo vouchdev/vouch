@@ -196,7 +196,7 @@ def kb_read_relation(relation_id: str) -> dict[str, Any]:
 @mcp.tool()
 def kb_list_pages() -> list[dict[str, Any]]:
     return [
-        {"id": p.id, "title": p.title, "type": p.type.value, "tags": p.tags}
+        {"id": p.id, "title": p.title, "type": p.type, "tags": p.tags}
         for p in _store().list_pages()
     ]
 

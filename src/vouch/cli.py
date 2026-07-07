@@ -478,13 +478,13 @@ def enrich_page_cmd(
         _emit_json(result.to_dict())
         return
     if result.skipped_reason:
-        _echo(f"skipped {page_id}: {result.skipped_reason}")
+        click.echo(f"skipped {page_id}: {result.skipped_reason}")
         return
     verb = "would propose" if dry_run else "proposed"
-    _echo(f"{verb} enrichment of {page_id} citing {len(result.claim_ids)} claim(s)"
-          f"{'' if dry_run else f': {result.proposal_id}'}")
+    click.echo(f"{verb} enrichment of {page_id} citing {len(result.claim_ids)} claim(s)"
+               f"{'' if dry_run else f': {result.proposal_id}'}")
     if not dry_run:
-        _echo("run `vouch review` to decide.")
+        click.echo("run `vouch review` to decide.")
 
 
 @cli.command(name="enrich-pages")
@@ -517,15 +517,15 @@ def enrich_pages_cmd(
         _emit_json(report.to_dict())
         return
     verb = "would propose" if dry_run else "proposed"
-    _echo(f"{verb} enrichment for {len(report.proposed)} page(s):")
+    click.echo(f"{verb} enrichment for {len(report.proposed)} page(s):")
     for row in report.proposed:
-        _echo(f"  • {row['page_id']}  {row['proposal_id']}")
+        click.echo(f"  • {row['page_id']}  {row['proposal_id']}")
     if report.skipped:
-        _echo(f"skipped {len(report.skipped)}:")
+        click.echo(f"skipped {len(report.skipped)}:")
         for row in report.skipped:
-            _echo(f"  • {row['page_id']} — {row['reason']}")
+            click.echo(f"  • {row['page_id']} — {row['reason']}")
     if report.proposed and not dry_run:
-        _echo("run `vouch review` to decide.")
+        click.echo("run `vouch review` to decide.")
 
 
 @cli.command()

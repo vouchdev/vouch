@@ -374,6 +374,18 @@ class KBStore:
             raise ArtifactNotFoundError(f"page {page_id}")
         return _deserialize_page(p.read_text())
 
+    def update_page(self, page: Page) -> Page:
+        """Overwrite an existing page on disk. Used by the vault-edit approve path.
+
+        Parallel to `update_claim`: the caller is responsible for ensuring the
+        page id already exists (raises ArtifactNotFoundError otherwise).
+        """
+        if not self._page_path(page.id).exists():
+            raise ArtifactNotFoundError(f"page {page.id}")
+        self._page_path(page.id).write_text(_serialize_page(page))
+        self._embed_and_store(kind="page", id=page.id, text=f"{page.title}\n\n{page.body}")
+        return page
+
     def list_pages(self) -> list[Page]:
         pdir = self.kb_dir / "pages"
         if not pdir.is_dir():
