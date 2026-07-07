@@ -203,6 +203,30 @@ def _append_graph_neighbors(
     return warnings
 
 
+def _jaccard(a: set[str], b: set[str]) -> float:
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a | b)
+
+
+def _dedupe_near_duplicates(items: list[ContextItem]) -> list[ContextItem]:
+    """Drop later items whose summary is near-identical to a kept one.
+
+    Cheap greedy pass (token-set Jaccard >= 0.85 over the first 40 tokens).
+    `items` must arrive in descending-score order so the higher-scored
+    duplicate is the one kept.
+    """
+    kept: list[ContextItem] = []
+    kept_tokens: list[set[str]] = []
+    for it in items:
+        toks = set(it.summary.lower().split()[:40])
+        if any(_jaccard(toks, seen) >= 0.85 for seen in kept_tokens):
+            continue
+        kept.append(it)
+        kept_tokens.append(toks)
+    return kept
+
+
 def build_context_pack(
     store: KBStore,
     *,
@@ -260,6 +284,9 @@ def build_context_pack(
                 rel_types=graph_rel_types,
             )
         )
+
+    items = _dedupe_near_duplicates(items)
+
     failed: list[str] = []
     uncited: list[str] = []
     budget_truncated = False

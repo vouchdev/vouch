@@ -122,3 +122,26 @@ def test_backend_hybrid_merges_semantic_and_lexical(
     pack = context.build_context_pack(store, query="auth")
     assert {item["id"] for item in pack["items"]} == {"c1", "c2"}
     assert _backends(pack) == {"hybrid"}
+
+
+def test_near_duplicate_summaries_are_dropped(
+    store: KBStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An agent should not see the same fact twice."""
+    src = store.put_source(b"z")
+    store.put_claim(Claim(
+        id="d1", text="the cache uses redis with a 60 second ttl", evidence=[src.id]))
+    store.put_claim(Claim(
+        id="d2", text="the cache uses redis with a 60 second ttl now", evidence=[src.id]))
+    health.rebuild_index(store)
+    monkeypatch.setattr(
+        context.index_db, "search_semantic",
+        lambda *a, **k: [
+            ("claim", "d1", "the cache uses redis with a 60 second ttl", 0.90),
+            ("claim", "d2", "the cache uses redis with a 60 second ttl now", 0.89),
+        ],
+    )
+    monkeypatch.setattr(context.index_db, "search", lambda *a, **k: [])
+    _set_backend(store, "hybrid")
+    pack = context.build_context_pack(store, query="cache")
+    assert {item["id"] for item in pack["items"]} == {"d1"}
