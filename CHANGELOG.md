@@ -6,6 +6,19 @@ All notable changes to vouch are documented here. Format follows
 
 ## [Unreleased]
 
+## [1.2.2] — 2026-07-07
+
+### Packaging
+- published to the mcp registry (`registry.modelcontextprotocol.io`, mirrored
+  at `github.com/mcp/vouchdev/vouch`) as `io.github.vouchdev/vouch`. a
+  `server.json` at the repo root carries the metadata; the pypi `vouch-kb`
+  package is the artifact, run over stdio via `uvx vouch-kb serve`.
+- `vouch-kb` console-script alias (alongside `vouch`) so `uvx vouch-kb serve`
+  resolves — the registry launches a package by its pypi identifier, which
+  otherwise wouldn't match the `vouch` script name.
+- README carries an `<!-- mcp-name: io.github.vouchdev/vouch -->` marker;
+  the registry verifies package ownership by matching it against `server.json`.
+
 ## [1.2.1] — 2026-07-06
 
 ### Fixed
