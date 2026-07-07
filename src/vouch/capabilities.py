@@ -11,6 +11,8 @@ from . import __version__
 from .models import Capabilities
 from .openclaw.context_engine import describe_engine
 
+OPENCLAW_PLUGIN_API = ">=2026.6.0"
+
 # The full method surface this implementation exposes. Keep this list in
 # sync with the MCP server + JSONL server registrations — `test_capabilities`
 # asserts they match.
@@ -98,4 +100,5 @@ def capabilities() -> Capabilities:
             "config_path": "retrieval.scope",
         },
         context_engines=[describe_engine()],
+        host_compat={"openclaw": {"pluginApi": OPENCLAW_PLUGIN_API}},
     )

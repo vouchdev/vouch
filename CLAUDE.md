@@ -173,12 +173,12 @@ Two files make the vouch repo loadable directly as an OpenClaw plugin
 
 * [`openclaw.plugin.json`](./openclaw.plugin.json) — the manifest the
   loader parses: `id` + `configSchema` (required), `kind: context-engine`,
-  `version`, and `skills` (directories under `adapters/openclaw/skills/`,
-  one SKILL.md each; OpenClaw publishes them as skills *and* slash
-  commands).
+  `version`, the `openclaw.compat.pluginApi` floor, and `skills`
+  (directories under `adapters/openclaw/skills/`, one SKILL.md each;
+  OpenClaw publishes them as skills *and* slash commands).
 * [`package.json`](./package.json) — loader-facing only: the
   `openclaw.extensions` pointer at the JS entry module and the
-  `openclaw.compat.pluginApi` floor. The Python package stays in
+  matching `openclaw.compat.pluginApi` floor. The Python package stays in
   `pyproject.toml`.
 
 Invariants, all enforced by `tests/test_openclaw_plugin_manifest.py`:

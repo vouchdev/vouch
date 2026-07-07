@@ -457,3 +457,7 @@ class Capabilities(BaseModel):
         default_factory=list,
         description="OpenClaw context engines exposed (see openclaw.plugin.json)",
     )
+    host_compat: dict[str, dict[str, str]] = Field(
+        default_factory=dict,
+        description="Host compatibility metadata keyed by host/plugin id.",
+    )
