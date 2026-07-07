@@ -175,7 +175,7 @@ def test_context_rerank_enabled_reorders_scoped_window(
         ],
     )
     monkeypatch.setattr(context.index_db, "search", lambda *a, **k: [])
-    context._RERANKER_CACHE = None
+    monkeypatch.setattr(context, "_RERANKER_CACHE", None)
     monkeypatch.setattr(rerank_mod, "default_reranker", lambda: object())
     monkeypatch.setattr(
         rerank_mod,
@@ -221,7 +221,7 @@ def test_context_rerank_bool_top_k_falls_back_to_limit(
     )
     monkeypatch.setattr(context.index_db, "search", lambda *a, **k: [])
     seen_top_k: list[int] = []
-    context._RERANKER_CACHE = None
+    monkeypatch.setattr(context, "_RERANKER_CACHE", None)
     monkeypatch.setattr(rerank_mod, "default_reranker", lambda: object())
 
     def fake_rerank(*, query, hits, reranker, top_k):
@@ -256,7 +256,7 @@ def test_context_rerank_reuses_default_reranker(
     )
     monkeypatch.setattr(context.index_db, "search", lambda *a, **k: [])
     calls = 0
-    context._RERANKER_CACHE = None
+    monkeypatch.setattr(context, "_RERANKER_CACHE", None)
 
     def fake_default_reranker():
         nonlocal calls
@@ -291,7 +291,7 @@ def test_context_rerank_missing_extra_degrades_to_fused_order(
         ],
     )
     monkeypatch.setattr(context.index_db, "search", lambda *a, **k: [])
-    context._RERANKER_CACHE = None
+    monkeypatch.setattr(context, "_RERANKER_CACHE", None)
     monkeypatch.setattr(
         rerank_mod,
         "default_reranker",
