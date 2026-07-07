@@ -1,0 +1,7 @@
+# Vouch starter source
+
+This starter source is created by `vouch init` so new users can see how a
+reviewed claim cites durable evidence.
+
+Keep facts small, cite their sources, and approve only the knowledge you want
+future agents to retrieve.
