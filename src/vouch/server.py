@@ -823,16 +823,22 @@ def kb_audit(
 
 @mcp.tool()
 def kb_reindex_embeddings(
-    *, backfill: bool = False, force: bool = False, model: str | None = None,
+    *,
+    backfill: bool = False,
+    force: bool = False,
+    stale: bool = False,
+    model: str | None = None,
 ) -> dict[str, Any]:
     """Re-encode every artifact under the current embedding adapter."""
     from .embeddings.migration import backfill_embeddings
+    if force and stale:
+        raise ValueError("force and stale are mutually exclusive")
     store = _store()
     if model:
         from .embeddings import get_embedder
         get_embedder(model)
-    n = backfill_embeddings(store, force=force)
-    return {"touched": n, "model": _current_model_name()}
+    result = backfill_embeddings(store, force=force, stale=stale)
+    return {**result, "touched": result["reembedded"], "model": _current_model_name()}
 
 
 @mcp.tool()

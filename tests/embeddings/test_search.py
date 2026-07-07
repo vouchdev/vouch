@@ -134,7 +134,8 @@ def test_mcp_kb_reindex_embeddings(store: KBStore, monkeypatch: pytest.MonkeyPat
     src = store.put_source(b"e")
     store.put_claim(Claim(id="c1", text="x", evidence=[src.id]))
     out = server.kb_reindex_embeddings(backfill=True)
-    assert out["touched"] >= 1
+    assert out["scanned"] >= 1
+    assert out["touched"] == out["reembedded"]
 
 
 def test_mcp_kb_dedup_scan(store: KBStore, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -161,6 +162,8 @@ def test_jsonl_kb_reindex_embeddings(store: KBStore, monkeypatch: pytest.MonkeyP
         "params": {"backfill": True},
     })
     assert resp["ok"] is True
+    assert resp["result"]["scanned"] >= 1
+    assert resp["result"]["touched"] == resp["result"]["reembedded"]
 
 
 def test_search_semantic_returns_top_hits(store: KBStore) -> None:

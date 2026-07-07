@@ -2543,20 +2543,38 @@ def eval_recall(queries: str, k: int, baseline: str | None,
     help="Re-encode every artifact under the current model.",
 )
 @click.option("--force/--no-force", default=False, help="Re-encode even if content hash unchanged.")
+@click.option(
+    "--stale/--no-stale",
+    default=False,
+    help="Only re-embed missing or drifted rows; mutually exclusive with --force.",
+)
 @click.option("--model", default=None, help="Adapter name; defaults to the registered default.")
-def reindex(embeddings: bool, backfill: bool, force: bool, model: str | None) -> None:
+def reindex(
+    embeddings: bool,
+    backfill: bool,
+    force: bool,
+    stale: bool,
+    model: str | None,
+) -> None:
     """Rebuild derived indexes from on-disk artifacts."""
+    if force and stale:
+        raise click.UsageError("--force and --stale are mutually exclusive")
     store = _load_store()
     health.rebuild_index(store)
-    if embeddings or backfill:
+    if embeddings or backfill or stale:
         from .embeddings.migration import backfill_embeddings
 
         if model:
             from .embeddings import get_embedder
 
             get_embedder(model)
-        n = backfill_embeddings(store, force=force)
-        click.echo(f"reindex: embeddings backfilled = {n}")
+        result = backfill_embeddings(store, force=force, stale=stale)
+        click.echo(
+            "reindex: embeddings "
+            f"scanned={result['scanned']} "
+            f"reembedded={result['reembedded']} "
+            f"skipped={result['skipped']}"
+        )
     else:
         click.echo("reindex: FTS5 rebuilt")
 

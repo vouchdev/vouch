@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import index_db
-from .base import get_embedder
+from .base import content_hash, get_embedder
 
 
 def detect_mismatch(kb_dir: Path) -> dict[str, Any] | None:
@@ -32,14 +32,23 @@ def detect_mismatch(kb_dir: Path) -> dict[str, Any] | None:
     }
 
 
-def backfill_embeddings(store: Any, force: bool = False) -> int:
-    """Re-encode every artifact under the current adapter. Returns count touched.
+def backfill_embeddings(store: Any, force: bool = False, stale: bool = False) -> dict[str, Any]:
+    """Re-encode artifacts under the current adapter.
 
     With force=True, re-encode even when the stored content hash and model
-    already match (otherwise unchanged artifacts are skipped).
+    already match. With stale=True, scan every artifact but only call the
+    embedder for missing, content-drifted, or model-drifted rows. If the stored
+    KB embedding model differs from the current adapter, stale mode falls back
+    to a full re-embed because hash equality is not safe across vector spaces.
     """
+    if force and stale:
+        raise ValueError("force and stale are mutually exclusive")
     embedder = get_embedder()
-    touched = 0
+    mismatch = detect_mismatch(store.kb_dir)
+    force_run = force or (stale and mismatch is not None)
+    scanned = 0
+    reembedded = 0
+    skipped = 0
     # (list-method, kind, text-extractor). Missing list methods are skipped;
     # errors raised inside the loop body propagate so a partial backfill never
     # silently updates embedding_meta as if it had succeeded.
@@ -57,9 +66,30 @@ def backfill_embeddings(store: Any, force: bool = False) -> int:
         if lister is None:
             continue
         for obj in lister():
-            store._embed_and_store(kind=kind, id=obj.id, text=text_of(obj), force=force)
-            touched += 1
+            text = text_of(obj)
+            if not text or not text.strip():
+                continue
+            scanned += 1
+            existing = index_db.get_embedding(store.kb_dir, kind=kind, id=obj.id)
+            live_hash = content_hash(text)
+            should_embed = (
+                force_run
+                or existing is None
+                or existing[1] != live_hash
+                or existing[2] != embedder.name
+            )
+            if should_embed:
+                store._embed_and_store(kind=kind, id=obj.id, text=text, force=force_run)
+                reembedded += 1
+            else:
+                skipped += 1
     index_db.set_embedding_meta(
         store.kb_dir, model=embedder.name, version=embedder.version, dim=embedder.dim,
     )
-    return touched
+    return {
+        "scanned": scanned,
+        "reembedded": reembedded,
+        "skipped": skipped,
+        "model": embedder.name,
+        "model_mismatch": mismatch,
+    }

@@ -588,8 +588,12 @@ def _h_audit(p: dict) -> dict:
 
 def _h_reindex_embeddings(p: dict) -> dict:
     from .embeddings.migration import backfill_embeddings
-    n = backfill_embeddings(_store(), force=bool(p.get("force", False)))
-    return {"touched": n}
+    force = bool(p.get("force", False))
+    stale = bool(p.get("stale", False))
+    if force and stale:
+        raise ValueError("force and stale are mutually exclusive")
+    result = backfill_embeddings(_store(), force=force, stale=stale)
+    return {**result, "touched": result["reembedded"]}
 
 
 def _h_dedup_scan(p: dict) -> dict:
