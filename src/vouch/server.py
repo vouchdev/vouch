@@ -1016,5 +1016,8 @@ def run_stdio() -> None:
         cfg: dict[str, Any] | None = _load_cfg(_store())
     except Exception:
         cfg = None
-    mcp_profiles.apply_tool_profile(mcp, mcp_profiles.resolve_profile_name(cfg))
+    profile = mcp_profiles.resolve_profile_name(cfg)
+    mcp_profiles.apply_tool_profile(mcp, profile)
+    if profile != "full":
+        mcp_profiles.compact_descriptions(mcp)
     mcp.run()

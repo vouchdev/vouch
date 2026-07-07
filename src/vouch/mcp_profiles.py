@@ -85,3 +85,25 @@ def apply_tool_profile(mcp: Any, name: str) -> list[str]:
             tools.pop(tool_name, None)
             removed.append(tool_name)
     return sorted(removed)
+
+
+def compact_descriptions(mcp: Any) -> int:
+    """Trim each kb_ tool's description to its first line to save context.
+
+    Full docstrings are only needed under the `full` profile; the first line
+    is enough for an agent choosing a tool. Returns the number changed.
+    """
+    changed = 0
+    for tool in mcp._tool_manager._tools.values():
+        if not tool.name.startswith("kb_"):
+            continue
+        desc = tool.description or ""
+        first = desc.strip().split("\n", 1)[0].strip()
+        if first and first != desc:
+            try:
+                tool.description = first
+            except (AttributeError, TypeError):
+                # pydantic frozen-model fallback
+                object.__setattr__(tool, "description", first)
+            changed += 1
+    return changed

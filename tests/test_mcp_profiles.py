@@ -74,3 +74,19 @@ def test_resolve_tolerates_non_dict_mcp_section(monkeypatch: pytest.MonkeyPatch)
     assert mcp_profiles.resolve_profile_name({"mcp": None}) == "minimal"
     assert mcp_profiles.resolve_profile_name({"mcp": "oops"}) == "minimal"
     assert mcp_profiles.resolve_profile_name({"mcp": {}}) == "minimal"
+
+
+def test_compact_descriptions_trims_to_first_line() -> None:
+    m = FastMCP("probe")
+
+    def kb_thing(x: int = 0) -> int:
+        """First line.
+
+        Second paragraph with lots of detail the agent does not need.
+        """
+        return x
+
+    m.tool()(kb_thing)
+    changed = mcp_profiles.compact_descriptions(m)
+    assert changed == 1
+    assert m._tool_manager._tools["kb_thing"].description == "First line."
