@@ -2,6 +2,11 @@
 
 **Git-native, review-gated knowledge base for LLM agents. MCP server + JSONL tool server + CLI.**
 
+<!-- mcp-name: io.github.vouchdev/vouch -->
+<!-- the mcp registry verifies package ownership by matching this marker against
+     server.json's `name`; keep it in lockstep with server.json at the repo root. -->
+
+
 <p align="center">
   <img src="docs/banner.svg" alt="vouch — sessions auto-capture into a review-gated knowledge base: propose or capture → review → commit → retrieve" width="100%"/>
 </p>

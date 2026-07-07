@@ -1,6 +1,6 @@
 [project]
 name = "vouch-kb"
-version = "1.2.1"
+version = "1.2.2"
 description = "Git-native, review-gated knowledge base for LLM agents. MCP server + CLI."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -60,6 +60,10 @@ rerank = [
 
 [project.scripts]
 vouch = "vouch.cli:cli"
+# alias so `uvx vouch-kb serve` resolves — the mcp registry runs the package
+# by its pypi identifier (vouch-kb), which otherwise wouldn't match the `vouch`
+# console script. keep both pointing at the same entry point.
+vouch-kb = "vouch.cli:cli"
 
 [project.urls]
 Homepage = "https://github.com/plind-junior/vouch"
