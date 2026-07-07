@@ -6,11 +6,6 @@
 <!-- the mcp registry verifies package ownership by matching this marker against
      server.json's `name`; keep it in lockstep with server.json at the repo root. -->
 
-
-<p align="center">
-  <img src="docs/banner.svg" alt="vouch — sessions auto-capture into a review-gated knowledge base: propose or capture → review → commit → retrieve" width="100%"/>
-</p>
-
 <p align="center">
   <a href="https://github.com/vouchdev/vouch/actions/workflows/ci.yml"><img src="https://github.com/vouchdev/vouch/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
   <a href="https://pypi.org/project/vouch-kb/"><img src="https://img.shields.io/pypi/v/vouch-kb.svg" alt="PyPI"></a>
@@ -151,6 +146,10 @@ Pending drafts (`proposed/`) and the derived search index (`state.db`) are gitig
 * `vouch install-mcp <host>` also wires cursor, codex, zed, windsurf, openclaw and friends ([adapters/](adapters/))
 * [vouch webapp](https://github.com/vouchdev/webApp) — the chat-first browser console from the video; [vouch-desktop](https://github.com/vouchdev/vouch-desktop) wraps the same loop as a desktop app
 * [CONTRIBUTING.md](CONTRIBUTING.md) — development setup and the test gate
+
+## Incubated by Gittensor
+
+Vouch was incubated and supported by [Gittensor](https://gittensor.io), a protocol that rewards open-source contributions. The knowledge-base-as-code pattern and review-gated persistence model emerged directly from conversations about trusted AI agents and long-term memory in collaborative development workflows.
 
 ## License
 
