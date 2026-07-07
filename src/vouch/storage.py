@@ -522,7 +522,14 @@ class KBStore:
 
     # --- pages -------------------------------------------------------------
 
-    def put_page(self, page: Page) -> Page:
+    def _validate_page_refs(self, page: Page) -> None:
+        """Reject dangling graph references on a Page before it lands.
+
+        Mirrors `_validate_claim_refs` and the write-time gate on
+        `put_relation`: page edits (vault-sync approve path via
+        `update_page`) must not reintroduce the gap that `put_page` already
+        closed for new pages.
+        """
         for cid in page.claims:
             if not self._claim_path(cid).exists():
                 raise ValueError(f"page {page.id} references unknown claim {cid}")
@@ -532,6 +539,9 @@ class KBStore:
         for sid in page.sources:
             if not (self._source_dir(sid) / "meta.yaml").exists():
                 raise ValueError(f"page {page.id} references unknown source {sid}")
+
+    def put_page(self, page: Page) -> Page:
+        self._validate_page_refs(page)
         try:
             # Explicit UTF-8: page bodies are user / agent prose and routinely
             # contain non-ASCII (em-dashes, smart quotes, unicode in claims).
@@ -561,6 +571,14 @@ class KBStore:
         """
         if not self._page_path(page.id).exists():
             raise ArtifactNotFoundError(f"page {page.id}")
+        # Re-validate the in-memory Page before persisting so model
+        # invariants hold even when a caller mutated fields in place after
+        # get_page(). Field validators only run at construction time.
+        Page.model_validate(page.model_dump(mode="json"))
+        # Re-check graph references too: an in-place mutation (or a claim
+        # deleted between propose and approve on the vault-edit path) can
+        # introduce dangling links that the model validator can't catch.
+        self._validate_page_refs(page)
         self._page_path(page.id).write_text(
             _serialize_page(page), encoding="utf-8"
         )
