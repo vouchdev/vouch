@@ -145,3 +145,20 @@ def test_near_duplicate_summaries_are_dropped(
     _set_backend(store, "hybrid")
     pack = context.build_context_pack(store, query="cache")
     assert {item["id"] for item in pack["items"]} == {"d1"}
+
+
+def test_dedupe_keeps_highest_scored_regardless_of_input_order() -> None:
+    """Invariant: the highest-scored member of a near-duplicate cluster
+    survives even when items arrive out of score order (as graph-expansion
+    neighbours can)."""
+    from vouch.context import _dedupe_near_duplicates
+    from vouch.models import ContextItem
+
+    lo = ContextItem(id="lo", type="claim",
+                     summary="the cache uses redis with a 60 second ttl",
+                     score=0.30, backend="hybrid", citations=[], freshness="unknown")
+    hi = ContextItem(id="hi", type="claim",
+                     summary="the cache uses redis with a 60 second ttl now",
+                     score=0.90, backend="hybrid", citations=[], freshness="unknown")
+    out = _dedupe_near_duplicates([lo, hi])  # deliberately low-score-first
+    assert [i.id for i in out] == ["hi"]

@@ -210,15 +210,20 @@ def _jaccard(a: set[str], b: set[str]) -> float:
 
 
 def _dedupe_near_duplicates(items: list[ContextItem]) -> list[ContextItem]:
-    """Drop later items whose summary is near-identical to a kept one.
+    """Drop items whose summary is near-identical to a higher-scored one.
 
-    Cheap greedy pass (token-set Jaccard >= 0.85 over the first 40 tokens).
-    `items` must arrive in descending-score order so the higher-scored
-    duplicate is the one kept.
+    Cheap greedy pass (token-set Jaccard >= 0.85 over the first 40 tokens),
+    keeping the highest-scored member of each near-duplicate cluster. Sorts
+    by score internally so the invariant holds even when callers append
+    lower-priority items out of order (e.g. graph-expansion neighbours).
+
+    Note: the 0.85/40-token heuristic can over-merge long, near-templated
+    claims that differ by a single token (e.g. a version or status word);
+    it is a deliberate cheap filter, not a semantic dedup.
     """
     kept: list[ContextItem] = []
     kept_tokens: list[set[str]] = []
-    for it in items:
+    for it in sorted(items, key=lambda i: i.score, reverse=True):
         toks = set(it.summary.lower().split()[:40])
         if any(_jaccard(toks, seen) >= 0.85 for seen in kept_tokens):
             continue
