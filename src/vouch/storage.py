@@ -49,6 +49,9 @@ _embed_log = logging.getLogger("vouch.embeddings")
 
 KB_DIRNAME = ".vouch"
 CONFIG_FILENAME = "config.yaml"
+KB_FORMAT_VERSION = 1
+SCHEMA_VERSION = "0.1.0"
+SCHEMA_VERSION_FILENAME = "schema_version"
 
 SUBDIRS = (
     "claims", "pages", "sources", "entities", "relations",
@@ -93,6 +96,36 @@ def _yaml_load(text: str) -> Any:
 
 
 _FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---\n?(.*)$", re.DOTALL)
+
+
+def _starter_config() -> dict[str, Any]:
+    return {
+        "version": KB_FORMAT_VERSION,
+        "review": {
+            "require_human_approval": True,
+            "expire_pending_after_days": 90,
+        },
+        "capture": {
+            "enabled": True,
+            "min_observations": 3,
+        },
+        "recall": {
+            "enabled": True,
+            "max_chars": 12000,
+        },
+        "retrieval": {
+            "backend": "hybrid",
+            "default_limit": 10,
+        },
+        "agents": {
+            "recommended_loop": [
+                "kb.search before writing",
+                "kb.propose_* with citations",
+                "human review via vouch pending/show/approve",
+            ],
+        },
+        "page_kinds": {},
+    }
 
 
 def _serialize_page(page: Page) -> str:

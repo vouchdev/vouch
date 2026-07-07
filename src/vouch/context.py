@@ -17,10 +17,12 @@ import sqlite3
 from typing import Literal, cast
 
 from . import index_db
-from .models import ContextItem, ContextPack, ContextQuality
+from .models import ClaimStatus, ContextItem, ContextPack, ContextQuality
 from .storage import ArtifactNotFoundError, KBStore
 
 ContextItemKind = Literal["claim", "page", "entity", "relation", "source"]
+
+_RETRACTED_CLAIM_STATUSES = {ClaimStatus.SUPERSEDED, ClaimStatus.ARCHIVED, ClaimStatus.REDACTED}
 
 
 def _retrieve(store: KBStore, query: str, limit: int
