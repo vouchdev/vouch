@@ -27,13 +27,11 @@ import hashlib
 import logging
 import os
 import re
-import sqlite3
 import stat
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any
 
 import yaml
-from pydantic import BaseModel, ValidationError
 
 from .models import (
     Claim,
@@ -51,13 +49,6 @@ _embed_log = logging.getLogger("vouch.embeddings")
 
 KB_DIRNAME = ".vouch"
 CONFIG_FILENAME = "config.yaml"
-KB_FORMAT_VERSION = 1
-
-# Semver model-schema version stamped on bootstrap; the migration runner
-# (vouch.migrations) advances it. Distinct from KB_FORMAT_VERSION, which is the
-# integer directory-layout version in config.yaml.
-SCHEMA_VERSION = "0.1.0"
-SCHEMA_VERSION_FILENAME = "schema_version"
 
 SUBDIRS = (
     "claims", "pages", "sources", "entities", "relations",
@@ -73,43 +64,6 @@ class ArtifactNotFoundError(KeyError):
     pass
 
 
-def _starter_config() -> dict[str, Any]:
-    return {
-        "version": KB_FORMAT_VERSION,
-        "review": {
-            "require_human_approval": True,
-            "expire_pending_after_days": 90,
-        },
-        "capture": {
-            # auto-capture claude code sessions into pending summaries.
-            "enabled": True,
-            "min_observations": 3,
-        },
-        "recall": {
-            # inject a digest of all approved knowledge at session start.
-            "enabled": True,
-            "max_chars": 12000,
-        },
-        "retrieval": {
-            # auto = embedding -> fts5 -> substring; or pin one of
-            # embedding | fts5 | substring. See context._retrieve.
-            "backend": "auto",
-            "default_limit": 10,
-        },
-        "agents": {
-            "recommended_loop": [
-                "kb.search before writing",
-                "kb.propose_* with citations",
-                "human review via vouch pending/show/approve",
-            ],
-        },
-        # Extra page kinds beyond the built-in PageType enum. Each maps a kind
-        # name to {required_fields, frontmatter_schema, required_citations,
-        # extends}. See `vouch schema list` / docs for the shape. (issue #234)
-        "page_kinds": {},
-    }
-
-
 def sha256_hex(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -117,25 +71,8 @@ def sha256_hex(data: bytes) -> str:
 def discover_root(start: Path | None = None) -> Path:
     """Walk up from `start` looking for a `.vouch` directory.
 
-    Mirrors how git locates its repo root. The walk can be skipped entirely
-    by setting `VOUCH_KB_PATH=/abs/path/.vouch` (documented in
-    `adapters/generic-mcp/README.md`) — useful when the host launches the
-    server from a default cwd (e.g. Claude Desktop on macOS / Windows).
+    Mirrors how git locates its repo root.
     """
-    forced = os.environ.get("VOUCH_KB_PATH")
-    if forced:
-        kb = Path(forced).resolve()
-        if not kb.is_dir():
-            raise KBNotFoundError(
-                f"VOUCH_KB_PATH={forced!r} is not an existing directory"
-            )
-        if kb.name != KB_DIRNAME:
-            raise KBNotFoundError(
-                f"VOUCH_KB_PATH must point at a {KB_DIRNAME!r} directory, "
-                f"got {forced!r}"
-            )
-        return kb.parent
-
     cur = (start or Path.cwd()).resolve()
     while True:
         if (cur / KB_DIRNAME).is_dir():
@@ -155,26 +92,6 @@ def _yaml_load(text: str) -> Any:
     return yaml.safe_load(text)
 
 
-_log = logging.getLogger("vouch.storage")
-
-_ModelT = TypeVar("_ModelT", bound=BaseModel)
-
-
-def _load_or_skip(path: Path, model: type[_ModelT], kind: str) -> _ModelT | None:
-    """Parse one durable artifact file into ``model``.
-
-    On a corrupt or unreadable file — e.g. a hand-edited yaml or mojibake
-    carrying a control character that pyyaml's loader rejects — log a warning
-    and return ``None`` instead of raising, so a single bad file cannot take
-    down a whole bulk listing (``vouch pending`` and friends).
-    """
-    try:
-        return model.model_validate(_yaml_load(path.read_text(encoding="utf-8")))
-    except (yaml.YAMLError, ValidationError, UnicodeDecodeError, OSError) as e:
-        _log.warning("skipping unreadable %s %s: %s", kind, path.name, e)
-        return None
-
-
 _FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---\n?(.*)$", re.DOTALL)
 
 
@@ -184,7 +101,6 @@ def _serialize_page(page: Page) -> str:
 
 
 def _deserialize_page(text: str) -> Page:
-    text = text.replace("\r\n", "\n")
     m = _FRONTMATTER_RE.match(text)
     if not m:
         raise ValueError("page file missing YAML frontmatter")
@@ -217,14 +133,8 @@ class KBStore:
             raise ValueError(
                 f"path must be inside project root ({self.root}): {resolved}"
             )
-        if resolved.is_dir():
-            raise ValueError(f"not a regular file: {resolved}")
-        flags = os.O_RDONLY
-        # POSIX can reject a symlink swapped in after resolve(); Windows has
-        # no O_NOFOLLOW, so it falls back to the regular-file check below.
-        flags |= getattr(os, "O_NOFOLLOW", 0)
         try:
-            fd = os.open(resolved, flags)
+            fd = os.open(resolved, os.O_RDONLY | os.O_NOFOLLOW)
         except OSError as e:
             raise ValueError(f"cannot read {resolved}: {e}") from e
         try:
@@ -246,14 +156,19 @@ class KBStore:
         for sub in SUBDIRS:
             (kb.kb_dir / sub).mkdir(exist_ok=True)
         if not kb.config_path.exists():
-            kb.config_path.write_text(_yaml_dump(_starter_config()), encoding="utf-8")
-        schema_version_file = kb.kb_dir / SCHEMA_VERSION_FILENAME
-        if not schema_version_file.exists():
-            schema_version_file.write_text(SCHEMA_VERSION + "\n", encoding="utf-8")
+            kb.config_path.write_text(
+                _yaml_dump(
+                    {
+                        "version": 1,
+                        "review": {"require_human_approval": True},
+                        "retrieval": {"backends": ["fts5", "substring"]},
+                    }
+                )
+            )
         gi = kb.kb_dir / ".gitignore"
         if not gi.exists():
             # state.db is derived; proposed/ is the agent's scratch space.
-            gi.write_text("proposed/\ncaptures/\nstate.db\nstate.db-*\n", encoding="utf-8")
+            gi.write_text("proposed/\nstate.db\nstate.db-*\n")
         return kb
 
     # --- paths -------------------------------------------------------------
@@ -314,7 +229,7 @@ class KBStore:
             content_path.write_bytes(content)
         meta_path = sdir / "meta.yaml"
         if meta_path.exists():
-            return Source.model_validate(_yaml_load(meta_path.read_text(encoding="utf-8")))
+            return Source.model_validate(_yaml_load(meta_path.read_text()))
         src = Source(
             id=sid,
             type=source_type,  # type: ignore[arg-type]
@@ -326,7 +241,7 @@ class KBStore:
             tags=tags or [],
             metadata=metadata or {},
         )
-        meta_path.write_text(_yaml_dump(src.model_dump(mode="json")), encoding="utf-8")
+        meta_path.write_text(_yaml_dump(src.model_dump(mode="json")))
         self._embed_and_store(kind="source", id=src.id, text=src.title or src.locator or "")
         return src
 
@@ -334,7 +249,7 @@ class KBStore:
         meta_path = self._source_dir(source_id) / "meta.yaml"
         if not meta_path.exists():
             raise ArtifactNotFoundError(f"source {source_id}")
-        return Source.model_validate(_yaml_load(meta_path.read_text(encoding="utf-8")))
+        return Source.model_validate(_yaml_load(meta_path.read_text()))
 
     def read_source_content(self, source_id: str) -> bytes:
         p = self._source_dir(source_id) / "content"
@@ -350,76 +265,10 @@ class KBStore:
         for sdir in sorted(sources_dir.iterdir()):
             meta = sdir / "meta.yaml"
             if meta.exists():
-                src = _load_or_skip(meta, Source, "source")
-                if src is not None:
-                    out.append(src)
+                out.append(Source.model_validate(_yaml_load(meta.read_text())))
         return out
 
-    # --- graph-integrity helpers ------------------------------------------
-
-    # Closes the structural counterpart of the #81 fix: every graph artifact
-    # (Relation source/target/evidence, Page entities/sources) must resolve
-    # to a known artifact in the KB before it lands on disk. The invariant
-    # was already articulated as a `dangling_relation` finding in
-    # `health.lint` (`src/vouch/health.py:135-145`) but no write path
-    # enforced it, so every approve / lifecycle / bundle / sync surface
-    # silently landed graph edges and pages pointing at nothing.
-
-    def _node_exists(self, node_id: str) -> bool:
-        """True if `node_id` resolves to a Claim, Page, Entity, or Source."""
-        if not node_id:
-            return False
-        if self._claim_path(node_id).exists():
-            return True
-        if self._page_path(node_id).exists():
-            return True
-        if self._entity_path(node_id).exists():
-            return True
-        return (self._source_dir(node_id) / "meta.yaml").exists()
-
-    def _evidence_ref_exists(self, ref_id: str) -> bool:
-        """True if `ref_id` resolves to a Source or Evidence record.
-
-        Matches the citation surface that `put_claim` already accepts:
-        either a content-hash Source id or an Evidence id.
-        """
-        if not ref_id:
-            return False
-        if (self._source_dir(ref_id) / "meta.yaml").exists():
-            return True
-        return self._evidence_path(ref_id).exists()
-
     # --- claims ------------------------------------------------------------
-
-    def _validate_claim_refs(self, claim: Claim) -> None:
-        """Reject dangling graph references on a Claim before it lands.
-
-        The #124 graph-integrity fix closed `Relation.source/target/evidence`
-        and `Page.entities/sources` (see the note above `_node_exists`) but
-        left the Claim's own four reference fields — `entities`,
-        `supersedes`, `superseded_by`, `contradicts` — unchecked on every
-        write path. `fsck._check_lifecycle_chains` already declares three of
-        them as `error`-severity findings (`dangling_supersedes`,
-        `dangling_superseded_by`, `dangling_contradicts`), so the invariant
-        was articulated but enforced by no writer. Enforce it here, the same
-        way `_validate_relation_refs` guards relation endpoints.
-
-        `evidence` is validated separately by `put_claim` (it accepts either
-        a Source id or an Evidence id, a different resolution surface).
-        """
-        for eid in claim.entities:
-            if not self._entity_path(eid).exists():
-                raise ValueError(
-                    f"claim {claim.id} references unknown entity {eid!r}"
-                )
-        claim_refs = [*claim.supersedes, *claim.contradicts]
-        if claim.superseded_by is not None:
-            claim_refs.append(claim.superseded_by)
-        for cid in claim_refs:
-            if not self._claim_path(cid).exists():
-                raise ValueError(
-                    f"claim {claim.id} references unknown claim {cid!r}"
-                )
 
     def put_claim(self, claim: Claim) -> Claim:
         # Evidence entries can be Source IDs or Evidence IDs -- accept either.
@@ -431,9 +280,8 @@ class KBStore:
             raise ValueError(
                 f"claim {claim.id} cites unknown source/evidence {cid_or_sid}"
             )
-        self._validate_claim_refs(claim)
         try:
-            with self._claim_path(claim.id).open("x", encoding="utf-8") as f:
+            with self._claim_path(claim.id).open("x") as f:
                 f.write(_yaml_dump(claim.model_dump(mode="json")))
         except FileExistsError as e:
             raise ValueError(
@@ -446,53 +294,22 @@ class KBStore:
         p = self._claim_path(claim_id)
         if not p.exists():
             raise ArtifactNotFoundError(f"claim {claim_id}")
-        return Claim.model_validate(_yaml_load(p.read_text(encoding="utf-8")))
+        return Claim.model_validate(_yaml_load(p.read_text()))
 
     def list_claims(self) -> list[Claim]:
         cdir = self.kb_dir / "claims"
         if not cdir.is_dir():
             return []
         return [
-            c
+            Claim.model_validate(_yaml_load(p.read_text()))
             for p in sorted(cdir.glob("*.yaml"))
-            if (c := _load_or_skip(p, Claim, "claim")) is not None
         ]
 
     def update_claim(self, claim: Claim) -> Claim:
         if not self._claim_path(claim.id).exists():
             raise ArtifactNotFoundError(f"claim {claim.id}")
-        # Re-validate the in-memory Claim before persisting so model
-        # invariants (e.g. evidence must be non-empty — see #81) hold
-        # even when a caller mutated fields in place after get_claim().
-        # The Claim model's field validators only run at construction
-        # time; mutation alone bypasses them unless we round-trip.
-        Claim.model_validate(claim.model_dump(mode="json"))
-        # Re-check graph references too: an in-place mutation can introduce a
-        # dangling entities/supersedes/superseded_by/contradicts link that the
-        # model validator can't catch (it has no KB access). Mirrors the
-        # put_claim guard so the update path can't reintroduce the gap.
-        self._validate_claim_refs(claim)
-        self._claim_path(claim.id).write_text(
-            _yaml_dump(claim.model_dump(mode="json")), encoding="utf-8")
+        self._claim_path(claim.id).write_text(_yaml_dump(claim.model_dump(mode="json")))
         self._embed_and_store(kind="claim", id=claim.id, text=claim.text)
-        # Keep the FTS5 row in sync with the on-disk claim so lifecycle
-        # mutations (archive, supersede, contradict, confirm) are reflected
-        # in retrieval immediately. Without this, claims_fts.status stays
-        # frozen at first-index time and retracted claims keep matching
-        # kb.search / kb.context.
-        from . import index_db as _index_db
-
-        try:
-            with _index_db.open_db(self.kb_dir) as conn:
-                _index_db.index_claim(
-                    conn, id=claim.id, text=claim.text,
-                    type=claim.type.value, status=claim.status.value,
-                    tags=list(claim.tags),
-                )
-        except sqlite3.Error as e:
-            _embed_log.warning(
-                "claim %s: FTS5 reindex skipped on update (%s)", claim.id, e,
-            )
         return claim
 
     # --- pages -------------------------------------------------------------
@@ -501,18 +318,8 @@ class KBStore:
         for cid in page.claims:
             if not self._claim_path(cid).exists():
                 raise ValueError(f"page {page.id} references unknown claim {cid}")
-        for eid in page.entities:
-            if not self._entity_path(eid).exists():
-                raise ValueError(f"page {page.id} references unknown entity {eid}")
-        for sid in page.sources:
-            if not (self._source_dir(sid) / "meta.yaml").exists():
-                raise ValueError(f"page {page.id} references unknown source {sid}")
         try:
-            # Explicit UTF-8: page bodies are user / agent prose and routinely
-            # contain non-ASCII (em-dashes, smart quotes, unicode in claims).
-            # The default text-mode encoding follows the locale (Latin-1 on a
-            # bare Linux container), which would mangle anything past 0x7F.
-            with self._page_path(page.id).open("x", encoding="utf-8") as f:
+            with self._page_path(page.id).open("x") as f:
                 f.write(_serialize_page(page))
         except FileExistsError as e:
             raise ValueError(
@@ -525,40 +332,19 @@ class KBStore:
         p = self._page_path(page_id)
         if not p.exists():
             raise ArtifactNotFoundError(f"page {page_id}")
-        return _deserialize_page(p.read_text(encoding="utf-8"))
-
-    def update_page(self, page: Page) -> Page:
-        """Overwrite an existing page on disk. Used by the vault-edit approve path.
-
-        Parallel to `update_claim`: the caller is responsible for ensuring the
-        page id already exists (raises ArtifactNotFoundError otherwise). The
-        embedding index is refreshed so search reflects the new body.
-        """
-        if not self._page_path(page.id).exists():
-            raise ArtifactNotFoundError(f"page {page.id}")
-        self._page_path(page.id).write_text(
-            _serialize_page(page), encoding="utf-8"
-        )
-        self._embed_and_store(
-            kind="page", id=page.id,
-            text=f"{page.title}\n\n{page.body}",
-        )
-        return page
+        return _deserialize_page(p.read_text())
 
     def list_pages(self) -> list[Page]:
         pdir = self.kb_dir / "pages"
         if not pdir.is_dir():
             return []
-        return [
-            _deserialize_page(p.read_text(encoding="utf-8"))
-            for p in sorted(pdir.glob("*.md"))
-        ]
+        return [_deserialize_page(p.read_text()) for p in sorted(pdir.glob("*.md"))]
 
     # --- entities ----------------------------------------------------------
 
     def put_entity(self, entity: Entity) -> Entity:
         try:
-            with self._entity_path(entity.id).open("x", encoding="utf-8") as f:
+            with self._entity_path(entity.id).open("x") as f:
                 f.write(_yaml_dump(entity.model_dump(mode="json")))
         except FileExistsError as e:
             raise ValueError(
@@ -574,40 +360,20 @@ class KBStore:
         p = self._entity_path(eid)
         if not p.exists():
             raise ArtifactNotFoundError(f"entity {eid}")
-        return Entity.model_validate(_yaml_load(p.read_text(encoding="utf-8")))
+        return Entity.model_validate(_yaml_load(p.read_text()))
 
     def list_entities(self) -> list[Entity]:
         d = self.kb_dir / "entities"
         if not d.is_dir():
             return []
-        return [e for p in sorted(d.glob("*.yaml"))
-                if (e := _load_or_skip(p, Entity, "entity")) is not None]
+        return [Entity.model_validate(_yaml_load(p.read_text()))
+                for p in sorted(d.glob("*.yaml"))]
 
     # --- relations ---------------------------------------------------------
 
-    def _validate_relation_refs(self, rel: Relation) -> None:
-        if not self._node_exists(rel.source):
-            raise ValueError(
-                f"relation {rel.id} references unknown source endpoint "
-                f"{rel.source!r} (must be an existing claim, page, entity, "
-                f"or source id)"
-            )
-        if not self._node_exists(rel.target):
-            raise ValueError(
-                f"relation {rel.id} references unknown target endpoint "
-                f"{rel.target!r} (must be an existing claim, page, entity, "
-                f"or source id)"
-            )
-        for eid in rel.evidence:
-            if not self._evidence_ref_exists(eid):
-                raise ValueError(
-                    f"relation {rel.id} cites unknown source/evidence {eid!r}"
-                )
-
     def put_relation(self, rel: Relation) -> Relation:
-        self._validate_relation_refs(rel)
         try:
-            with self._relation_path(rel.id).open("x", encoding="utf-8") as f:
+            with self._relation_path(rel.id).open("x") as f:
                 f.write(_yaml_dump(rel.model_dump(mode="json")))
         except FileExistsError as e:
             raise ValueError(
@@ -619,53 +385,18 @@ class KBStore:
         )
         return rel
 
-    def put_relation_idempotent(self, rel: Relation) -> Relation:
-        """Write a relation only if it does not already exist.
-
-        Used by lifecycle ops (supersede, contradict) that need to converge
-        to a consistent state on retry without raising if the relation file
-        was already written in a previous partial execution.
-        """
-        path = self._relation_path(rel.id)
-        if path.exists():
-            self._embed_and_store(
-                kind="relation", id=rel.id,
-                text=f"{rel.source} {rel.relation.value} {rel.target}",
-            )
-            return rel
-        # Validate before the exclusive create. Skipping validation for the
-        # "already on disk" branch above is deliberate — a relation that's
-        # already durable was validated when it landed; re-checking would
-        # turn supersede/contradict retries into spurious failures whenever
-        # the linked claim was subsequently archived or retracted.
-        self._validate_relation_refs(rel)
-        try:
-            with path.open("x", encoding="utf-8") as f:
-                f.write(_yaml_dump(rel.model_dump(mode="json")))
-        except FileExistsError:
-            self._embed_and_store(
-                kind="relation", id=rel.id,
-                text=f"{rel.source} {rel.relation.value} {rel.target}",
-            )
-            return rel  # lost the race — already written, that's fine
-        self._embed_and_store(
-            kind="relation", id=rel.id,
-            text=f"{rel.source} {rel.relation.value} {rel.target}",
-        )
-        return rel
-
     def get_relation(self, rid: str) -> Relation:
         p = self._relation_path(rid)
         if not p.exists():
             raise ArtifactNotFoundError(f"relation {rid}")
-        return Relation.model_validate(_yaml_load(p.read_text(encoding="utf-8")))
+        return Relation.model_validate(_yaml_load(p.read_text()))
 
     def list_relations(self) -> list[Relation]:
         d = self.kb_dir / "relations"
         if not d.is_dir():
             return []
-        return [r for p in sorted(d.glob("*.yaml"))
-                if (r := _load_or_skip(p, Relation, "relation")) is not None]
+        return [Relation.model_validate(_yaml_load(p.read_text()))
+                for p in sorted(d.glob("*.yaml"))]
 
     def relations_from(self, node_id: str) -> list[Relation]:
         return [r for r in self.list_relations() if r.source == node_id]
@@ -679,7 +410,7 @@ class KBStore:
         if not (self._source_dir(ev.source_id) / "meta.yaml").exists():
             raise ValueError(f"evidence {ev.id} cites unknown source {ev.source_id}")
         try:
-            with self._evidence_path(ev.id).open("x", encoding="utf-8") as f:
+            with self._evidence_path(ev.id).open("x") as f:
                 f.write(_yaml_dump(ev.model_dump(mode="json")))
         except FileExistsError as e:
             raise ValueError(
@@ -692,20 +423,20 @@ class KBStore:
         p = self._evidence_path(eid)
         if not p.exists():
             raise ArtifactNotFoundError(f"evidence {eid}")
-        return Evidence.model_validate(_yaml_load(p.read_text(encoding="utf-8")))
+        return Evidence.model_validate(_yaml_load(p.read_text()))
 
     def list_evidence(self) -> list[Evidence]:
         d = self.kb_dir / "evidence"
         if not d.is_dir():
             return []
-        return [ev for p in sorted(d.glob("*.yaml"))
-                if (ev := _load_or_skip(p, Evidence, "evidence")) is not None]
+        return [Evidence.model_validate(_yaml_load(p.read_text()))
+                for p in sorted(d.glob("*.yaml"))]
 
     # --- sessions ----------------------------------------------------------
 
     def put_session(self, sess: Session) -> Session:
         try:
-            with self._session_path(sess.id).open("x", encoding="utf-8") as f:
+            with self._session_path(sess.id).open("x") as f:
                 f.write(_yaml_dump(sess.model_dump(mode="json")))
         except FileExistsError as e:
             raise ValueError(
@@ -719,28 +450,25 @@ class KBStore:
         # guard against duplicate ids, so updates need a separate path.
         if not self._session_path(sess.id).exists():
             raise ArtifactNotFoundError(f"session {sess.id}")
-        self._session_path(sess.id).write_text(
-            _yaml_dump(sess.model_dump(mode="json")), encoding="utf-8")
+        self._session_path(sess.id).write_text(_yaml_dump(sess.model_dump(mode="json")))
         return sess
 
     def get_session(self, sid: str) -> Session:
         p = self._session_path(sid)
         if not p.exists():
             raise ArtifactNotFoundError(f"session {sid}")
-        return Session.model_validate(_yaml_load(p.read_text(encoding="utf-8")))
+        return Session.model_validate(_yaml_load(p.read_text()))
 
     def list_sessions(self) -> list[Session]:
         d = self.kb_dir / "sessions"
         if not d.is_dir():
             return []
-        return [s for p in sorted(d.glob("*.yaml"))
-                if (s := _load_or_skip(p, Session, "session")) is not None]
+        return [Session.model_validate(_yaml_load(p.read_text()))
+                for p in sorted(d.glob("*.yaml"))]
 
     # --- embedding hook ------------------------------------------------------
 
-    def _embed_and_store(
-        self, *, kind: str, id: str, text: str, force: bool = False
-    ) -> None:
+    def _embed_and_store(self, *, kind: str, id: str, text: str) -> None:
         """Compute and persist an embedding for an artifact.
 
         Skipped only if (kind, id) already has an embedding produced by
@@ -761,9 +489,7 @@ class KBStore:
             return
         try:
             embedder = get_embedder()
-        except (KeyError, ImportError):
-            # No embedder registered, or the registered adapter's heavy deps
-            # (e.g. sentence-transformers) aren't installed. Best-effort hook.
+        except KeyError:
             return
         try:
             h = content_hash(text)
@@ -771,8 +497,7 @@ class KBStore:
             # existing is (vec, content_hash, model); skip only when both the
             # content AND the embedder model match what's on disk.
             if (
-                not force
-                and existing is not None
+                existing is not None
                 and existing[1] == h
                 and existing[2] == embedder.name
             ):
@@ -807,7 +532,7 @@ class KBStore:
 
     def put_proposal(self, proposal: Proposal) -> Proposal:
         try:
-            with self._proposal_path(proposal.id).open("x", encoding="utf-8") as f:
+            with self._proposal_path(proposal.id).open("x") as f:
                 f.write(_yaml_dump(proposal.model_dump(mode="json")))
         except FileExistsError as e:
             raise ValueError(
@@ -818,16 +543,14 @@ class KBStore:
     def get_proposal(self, proposal_id: str) -> Proposal:
         for path in (self._proposal_path(proposal_id), self._decided_path(proposal_id)):
             if path.exists():
-                return Proposal.model_validate(_yaml_load(path.read_text(encoding="utf-8")))
+                return Proposal.model_validate(_yaml_load(path.read_text()))
         raise ArtifactNotFoundError(f"proposal {proposal_id}")
 
     def list_proposals(self, status: ProposalStatus | None = None) -> list[Proposal]:
         out: list[Proposal] = []
         for sub in ("proposed", "decided"):
             for p in sorted((self.kb_dir / sub).glob("*.yaml")):
-                pr = _load_or_skip(p, Proposal, "proposal")
-                if pr is None:
-                    continue
+                pr = Proposal.model_validate(_yaml_load(p.read_text()))
                 if status is None or pr.status == status:
                     out.append(pr)
         return out
@@ -835,7 +558,7 @@ class KBStore:
     def move_proposal_to_decided(self, proposal: Proposal) -> None:
         src = self._proposal_path(proposal.id)
         dst = self._decided_path(proposal.id)
-        dst.write_text(_yaml_dump(proposal.model_dump(mode="json")), encoding="utf-8")
+        dst.write_text(_yaml_dump(proposal.model_dump(mode="json")))
         if src.exists():
             src.unlink()
 

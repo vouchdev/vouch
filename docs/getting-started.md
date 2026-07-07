@@ -118,9 +118,17 @@ Add `-e VOUCH_AGENT=claude-code` to attribute the agent's proposals to it
 rather than your shell user. Confirm with `claude mcp list` (look for
 `vouch … ✓ Connected`).
 
-Prefer a config file, or want the brain-first `CLAUDE.md`, slash commands, and
-hooks too? Run `vouch install-mcp claude-code` — or drop this into `.mcp.json`
-at the project root by hand:
+Prefer a config file, or want the brain-first instructions, guided flows, and
+capture hooks too? The installer ships the full tiered setup for either host:
+
+```bash
+vouch install-mcp claude-code   # .mcp.json + CLAUDE.md + slash commands + hooks
+vouch install-mcp codex         # .codex/config.toml + AGENTS.md + skills + capture
+```
+
+Both are idempotent and merge-safe — existing config files are deep-merged
+into, never clobbered. Or drop this into `.mcp.json` at the project root by
+hand:
 
 ```json
 {

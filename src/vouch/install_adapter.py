@@ -12,6 +12,9 @@ files into ``target``:
   inside a ``<!-- BEGIN vouch --> ... <!-- END vouch -->`` block
   (``InstallResult.appended``). If the fence already exists, the file is
   treated as skipped -- so reruns of ``vouch install-mcp`` stay flat-noop.
+* **settings.json with ``json_merge`` / config.toml with ``toml_merge``** ->
+  an existing destination is deep-merged into instead of skipped
+  (``InstallResult.merged``); the user's existing values always win.
 
 Tiers stack from T1 (the minimum: MCP wire) through T4 (full integration:
 slash commands and host-side hooks). Each manifest declares only the tiers
@@ -27,8 +30,11 @@ adapter will do (``cat adapters/<name>/install.yaml``).
 
 from __future__ import annotations
 
+import datetime
 import json
+import re
 import shutil
+import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -75,6 +81,7 @@ class _FileEntry:
     dst: str           # path relative to the target directory
     fenced_append: bool = False  # CLAUDE.md-style: append inside our fence
     json_merge: bool = False  # settings.json-style: deep-merge into existing
+    toml_merge: bool = False  # config.toml-style: deep-merge into existing
 
 
 @dataclass(frozen=True)
@@ -135,10 +142,32 @@ def _load_manifest(host: str) -> _Manifest:
                 raise AdapterError(
                     f"{host}: install.yaml tier {tier_name}: every entry needs a non-empty `dst`"
                 )
-            fenced = bool(raw.get("fenced_append", False))
-            json_merge = bool(raw.get("json_merge", False))
+            def _flag(name: str, raw: Any = raw, tier_name: str = tier_name) -> bool:
+                # Require an actual YAML boolean. `bool(raw.get(...))` would
+                # coerce a mistakenly-quoted `toml_merge: "false"` (a
+                # non-empty string) to True and silently enable a merge
+                # strategy, so reject anything that isn't a real bool.
+                val = raw.get(name, False)
+                if not isinstance(val, bool):
+                    raise AdapterError(
+                        f"{host}: install.yaml tier {tier_name}: `{name}` must be "
+                        f"a boolean, got {type(val).__name__} ({val!r})"
+                    )
+                return val
+
+            fenced = _flag("fenced_append")
+            json_merge = _flag("json_merge")
+            toml_merge = _flag("toml_merge")
+            if fenced + json_merge + toml_merge > 1:
+                raise AdapterError(
+                    f"{host}: install.yaml tier {tier_name}: entry sets more than "
+                    f"one of fenced_append/json_merge/toml_merge; pick one strategy"
+                )
             parsed_entries.append(
-                _FileEntry(src=src, dst=dst, fenced_append=fenced, json_merge=json_merge)
+                _FileEntry(
+                    src=src, dst=dst, fenced_append=fenced,
+                    json_merge=json_merge, toml_merge=toml_merge,
+                )
             )
         if parsed_entries:
             parsed[tier_name] = parsed_entries
@@ -224,6 +253,10 @@ def install(adapter: str, *, target: Path, tier: str = "T4") -> InstallResult:
                 _install_json_merge(src, dst, result, entry.dst)
                 continue
 
+            if entry.toml_merge:
+                _install_toml_merge(src, dst, result, entry.dst)
+                continue
+
             if dst.exists():
                 result.skipped.append(entry.dst)
                 continue
@@ -247,10 +280,15 @@ def _install_fenced(
 
     States:
 
-    * dst is missing                 -> write fresh, fenced (``written``)
-    * dst exists, fence not in file  -> append fenced block (``appended``)
-    * dst exists, fence already in   -> skip (``skipped``); we are the
-                                        author and there's nothing to do
+    * dst is missing                    -> write fresh, fenced (``written``)
+    * dst exists, fence not in file     -> append fenced block (``appended``)
+    * dst exists, fence body up to date -> skip (``skipped``); we are the
+                                           author and there's nothing to do
+    * dst exists, fence body edited     -> replace within the markers
+                                           (``merged``); the fence is ours,
+                                           content around it is the user's
+    * dst exists, begin without end     -> skip (``skipped``); corrupt fence
+                                           we refuse to mangle
     """
     snippet = src.read_text(encoding="utf-8")
     fenced_block = f"\n{manifest.fence_begin}\n{snippet.rstrip()}\n{manifest.fence_end}\n"
@@ -262,14 +300,69 @@ def _install_fenced(
         return
 
     existing = dst.read_text(encoding="utf-8")
-    if manifest.fence_begin in existing:
+    span = _fence_span(existing, manifest.fence_begin, manifest.fence_end)
+    if span is not None:
+        start, stop = span
+        current = existing[start:stop]
+        expected = fenced_block.strip("\n")
+        if current == expected:
+            result.skipped.append(rel_dst)
+            return
+        # The fence is ours: bring an edited body back in sync in place,
+        # touching nothing outside the markers.
+        refreshed = existing[:start] + expected + existing[stop:]
+        dst.write_text(refreshed, encoding="utf-8")
+        result.merged.append(rel_dst)
+        return
+
+    if _has_standalone_line(existing, manifest.fence_begin):
+        # A begin marker on its own line with no matching end marker: a
+        # corrupt fence we can't cleanly parse. Don't append a second one.
         result.skipped.append(rel_dst)
         return
 
     # User-authored content above; append our fenced block at the bottom.
+    # (A file that merely *mentions* the marker text in prose or a code
+    # sample has no standalone fence, so it lands here and gets the block
+    # appended rather than being mistaken for an existing install.)
     new_content = existing.rstrip() + "\n" + fenced_block
     dst.write_text(new_content, encoding="utf-8")
     result.appended.append(rel_dst)
+
+
+def _has_standalone_line(text: str, marker: str) -> bool:
+    return any(line.strip() == marker for line in text.splitlines())
+
+
+def _fence_span(text: str, begin: str, end: str) -> tuple[int, int] | None:
+    """Char offsets of a well-formed fence whose ``begin``/``end`` markers
+    each occupy their own line, or None if there's no such pair.
+
+    Only standalone marker lines count — text that merely mentions the
+    marker inside prose or a fenced code sample is ignored, so a passing
+    reference can't be mistaken for an installed fence (and can't cause an
+    in-place rewrite to clobber unrelated content between two stray
+    mentions). The returned span runs from the start of the begin line to
+    the end of the end-marker text (excluding its trailing newline), so a
+    caller can splice a replacement in without disturbing the surrounding
+    file.
+    """
+    lines = text.splitlines(keepends=True)
+    begin_idx: int | None = None
+    end_idx: int | None = None
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if begin_idx is None:
+            if stripped == begin:
+                begin_idx = i
+        elif stripped == end:
+            end_idx = i
+            break
+    if begin_idx is None or end_idx is None:
+        return None
+    start = sum(len(line) for line in lines[:begin_idx])
+    stop = sum(len(line) for line in lines[:end_idx]) + len(lines[end_idx].rstrip("\n"))
+    return start, stop
 
 
 def _event_commands(groups: Any) -> set[str]:
@@ -389,3 +482,144 @@ def _install_json_merge(
         result.merged.append(rel_dst)
     else:
         result.skipped.append(rel_dst)
+
+
+def _merge_toml(src: dict[str, Any], dst: dict[str, Any]) -> bool:
+    """Recursively add ``src`` keys missing from ``dst`` in place. Returns
+    True if ``dst`` changed. Same never-clobber convention as
+    :func:`_merge_settings`: on any conflict — a key present on both sides
+    with non-table values, or with mismatched types — the user's existing
+    ``dst`` value wins and only genuinely missing nested keys are filled in.
+    Idempotent: re-merging the same ``src`` reports no change.
+    """
+    changed = False
+    for key, src_val in src.items():
+        if key not in dst:
+            dst[key] = src_val
+            changed = True
+            continue
+        dst_val = dst[key]
+        if (
+            isinstance(src_val, dict)
+            and isinstance(dst_val, dict)
+            and _merge_toml(src_val, dst_val)
+        ):
+            changed = True
+    return changed
+
+
+_BARE_TOML_KEY = re.compile(r"[A-Za-z0-9_-]+")
+
+
+def _toml_key(key: str) -> str:
+    if _BARE_TOML_KEY.fullmatch(key):
+        return key
+    # TOML basic strings share JSON's escape rules, so json.dumps is a
+    # valid quoted-key serializer.
+    return json.dumps(key)
+
+
+def _toml_inline(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        if value != value or value in (float("inf"), float("-inf")):
+            raise ValueError(f"non-finite float not serialized: {value!r}")
+        return repr(value)
+    if isinstance(value, str):
+        return json.dumps(value)
+    if isinstance(value, (datetime.datetime, datetime.date, datetime.time)):
+        return value.isoformat()
+    if isinstance(value, list):
+        return "[" + ", ".join(_toml_inline(v) for v in value) + "]"
+    if isinstance(value, dict):
+        pairs = ", ".join(
+            f"{_toml_key(str(k))} = {_toml_inline(v)}" for k, v in value.items()
+        )
+        return "{" + pairs + "}"
+    raise ValueError(f"unsupported TOML value type: {type(value).__name__}")
+
+
+def _emit_toml_table(
+    table: dict[str, Any], path: list[str], lines: list[str]
+) -> None:
+    plain = [(k, v) for k, v in table.items() if not isinstance(v, dict)]
+    subs = [(k, v) for k, v in table.items() if isinstance(v, dict)]
+    # A header is only needed for the table's own keys, or to make an empty
+    # table exist at all; sub-table headers imply their parents.
+    if path and (plain or not subs):
+        if lines:
+            lines.append("")
+        lines.append("[" + ".".join(_toml_key(p) for p in path) + "]")
+    for key, value in plain:
+        lines.append(f"{_toml_key(str(key))} = {_toml_inline(value)}")
+    for key, value in subs:
+        _emit_toml_table(value, [*path, str(key)], lines)
+
+
+def _toml_dumps(data: dict[str, Any]) -> str:
+    """Serialize the merged config back to TOML.
+
+    Deliberately minimal — covers the shapes tomllib can produce from the
+    configs we merge into (tables, arrays, inline tables inside arrays,
+    scalars, datetimes), not the whole spec. Lists containing tables are
+    emitted as arrays of inline tables rather than ``[[table]]`` blocks.
+    Raises ValueError on anything it can't faithfully re-emit; the caller
+    treats that as "leave the user's file alone".
+    """
+    lines: list[str] = []
+    _emit_toml_table(data, [], lines)
+    return "\n".join(lines) + "\n" if lines else ""
+
+
+def _install_toml_merge(
+    src: Path, dst: Path, result: InstallResult, rel_dst: str
+) -> None:
+    """config.toml-style: deep-merge our tables into a pre-existing TOML
+    file instead of skipping it. ``.codex/config.toml`` is codex's primary
+    config file, so a plain copy-or-skip would leave vouch unwired on any
+    project where codex is already configured (vouchdev/vouch#384).
+
+    States mirror :func:`_install_json_merge`:
+
+    * dst missing                 -> copy fresh (``written``)
+    * dst exists, merge adds keys -> merge + rewrite (``merged``)
+    * dst exists, nothing to add  -> skip (``skipped``); already installed
+    * dst exists, unparseable     -> skip (``skipped``); never clobber the user
+
+    Rewriting re-serializes the whole file (comments and formatting are not
+    preserved — same trade-off ``_install_json_merge`` already makes). The
+    serialized result must survive a tomllib round-trip back to the merged
+    data; anything the minimal serializer can't faithfully re-emit degrades
+    to ``skipped`` rather than risking the user's config.
+    """
+    if not dst.exists():
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+        result.written.append(rel_dst)
+        return
+
+    try:
+        dst_data = tomllib.loads(dst.read_text(encoding="utf-8"))
+        src_data = tomllib.loads(src.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        # Malformed or unreadable user file — leave it untouched.
+        result.skipped.append(rel_dst)
+        return
+
+    if not _merge_toml(src_data, dst_data):
+        result.skipped.append(rel_dst)
+        return
+
+    try:
+        text = _toml_dumps(dst_data)
+        if tomllib.loads(text) != dst_data:
+            raise ValueError("serializer round-trip mismatch")
+    except (ValueError, tomllib.TOMLDecodeError):
+        result.skipped.append(rel_dst)
+        return
+
+    dst.write_text(text, encoding="utf-8")
+    result.merged.append(rel_dst)

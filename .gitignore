@@ -6,6 +6,7 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .coverage
+coverage.xml
 htmlcov/
 bench.json
 .benchmarks/
@@ -13,3 +14,12 @@ dist/
 build/
 *.swp
 .DS_Store
+
+# local tool scratch
+.netlify/
+.playwright-mcp/
+
+# owner-local, never shipped (anchored to repo root so src/vouch/web
+# and adapters/claude-code/.claude stay tracked)
+/web/
+/.claude/

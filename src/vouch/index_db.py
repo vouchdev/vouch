@@ -12,7 +12,6 @@ second `backend` in the ContextItem response.
 from __future__ import annotations
 
 import datetime as _dt
-import json
 import sqlite3
 from collections.abc import Iterable
 from contextlib import contextmanager, suppress
@@ -32,14 +31,6 @@ CREATE VIRTUAL TABLE IF NOT EXISTS pages_fts USING fts5(
 
 CREATE VIRTUAL TABLE IF NOT EXISTS entities_fts USING fts5(
     id UNINDEXED, name, description, type UNINDEXED, aliases
-);
-
-CREATE TABLE IF NOT EXISTS embeddings (
-    kind TEXT NOT NULL,
-    id TEXT NOT NULL,
-    vec BLOB NOT NULL,
-    model TEXT NOT NULL DEFAULT 'all-MiniLM-L6-v2',
-    PRIMARY KEY (kind, id)
 );
 
 CREATE TABLE IF NOT EXISTS index_meta (
@@ -74,18 +65,6 @@ CREATE TABLE IF NOT EXISTS embedding_dupes (
     cosine          REAL NOT NULL,
     detected_at     TEXT NOT NULL
 );
-
-CREATE TABLE IF NOT EXISTS prov_edges (
-    src_id          TEXT NOT NULL,
-    dst_id          TEXT NOT NULL,
-    kind            TEXT NOT NULL,
-    event_ts        TEXT NOT NULL DEFAULT '',
-    session_id      TEXT,
-    PRIMARY KEY (src_id, dst_id, kind)
-);
-
-CREATE INDEX IF NOT EXISTS prov_edges_dst ON prov_edges(dst_id);
-CREATE INDEX IF NOT EXISTS prov_edges_kind ON prov_edges(kind);
 """
 
 
@@ -125,56 +104,8 @@ def reset(kb_dir: Path) -> None:
             "DELETE FROM embedding_index;"
             "DELETE FROM query_embedding_cache;"
             "DELETE FROM embedding_dupes;"
-            "DELETE FROM prov_edges;"
             "DELETE FROM index_meta WHERE key LIKE 'embedding_%';"
-            "DELETE FROM index_meta WHERE key LIKE 'prov_%';"
         )
-
-
-def index_embedding(conn: sqlite3.Connection, *, kind: str, id: str,
-                    vec: list[float]) -> None:
-    conn.execute(
-        "INSERT OR REPLACE INTO embeddings (kind, id, vec) VALUES (?, ?, ?)",
-        (kind, id, json.dumps(vec)),
-    )
-
-
-def search_embeddings(kb_dir: Path, query_vec: list[float], *,
-                      limit: int = 10
-                      ) -> list[tuple[str, str, str, float]]:
-    """Return (kind, id, snippet, cosine_score) via brute-force NumPy scan."""
-    import numpy as np  # type: ignore[import-not-found]
-    out: list[tuple[str, str, str, float]] = []
-    if not query_vec:
-        return out
-    q = np.array(query_vec, dtype=np.float32)
-    q_norm = np.linalg.norm(q)
-    if q_norm == 0.0:
-        return out
-    q = q / q_norm
-    with open_db(kb_dir) as conn:
-        rows = conn.execute(
-            "SELECT kind, id, vec FROM embeddings"
-        ).fetchall()
-    for kind, eid, vec_json in rows:
-        v = np.array(json.loads(vec_json), dtype=np.float32)
-        if v.ndim != 1 or v.shape[0] != q.shape[0]:
-            continue
-        score = float(np.dot(q, v))
-        snippet = _snippet_for(kb_dir, kind, eid)
-        out.append((kind, eid, snippet, score))
-    out.sort(key=lambda x: x[3], reverse=True)
-    return out[:limit]
-
-
-def _snippet_for(kb_dir: Path, kind: str, eid: str) -> str:
-    path = kb_dir / kind / f"{eid}.yaml"
-    if not path.exists():
-        path = kb_dir / kind / f"{eid}.md"
-    if not path.exists():
-        return eid
-    text = path.read_text(encoding="utf-8")
-    return text[:200].replace("\n", " ")
 
 
 def index_claim(conn: sqlite3.Connection, *, id: str, text: str,
@@ -184,49 +115,6 @@ def index_claim(conn: sqlite3.Connection, *, id: str, text: str,
         "INSERT INTO claims_fts (id, text, type, status, tags) VALUES (?, ?, ?, ?, ?)",
         (id, text, type, status, " ".join(tags)),
     )
-
-
-# --- provenance edges (derived cache for `vouch why/trace/impact`) --------
-
-
-def clear_prov_edges(conn: sqlite3.Connection) -> None:
-    conn.execute("DELETE FROM prov_edges")
-
-
-def index_prov_edge(
-    conn: sqlite3.Connection, *, src_id: str, dst_id: str, kind: str,
-    event_ts: str = "", session_id: str | None = None,
-) -> None:
-    conn.execute(
-        "INSERT OR REPLACE INTO prov_edges "
-        "(src_id, dst_id, kind, event_ts, session_id) VALUES (?, ?, ?, ?, ?)",
-        (src_id, dst_id, kind, event_ts, session_id),
-    )
-
-
-def read_prov_edges(kb_dir: Path) -> list[tuple[str, str, str, str, str | None]]:
-    """Return all cached provenance edges, deterministically ordered."""
-    with open_db(kb_dir) as conn:
-        rows = conn.execute(
-            "SELECT src_id, dst_id, kind, event_ts, session_id FROM prov_edges "
-            "ORDER BY src_id, dst_id, kind"
-        ).fetchall()
-    return [(r[0], r[1], r[2], r[3], r[4]) for r in rows]
-
-
-def set_meta(conn: sqlite3.Connection, key: str, value: str) -> None:
-    conn.execute(
-        "INSERT OR REPLACE INTO index_meta (key, value) VALUES (?, ?)",
-        (key, value),
-    )
-
-
-def get_meta(kb_dir: Path, key: str) -> str | None:
-    with open_db(kb_dir) as conn:
-        row = conn.execute(
-            "SELECT value FROM index_meta WHERE key = ?", (key,)
-        ).fetchone()
-    return row[0] if row else None
 
 
 def index_page(conn: sqlite3.Connection, *, id: str, title: str, body: str,
@@ -471,9 +359,7 @@ def search_semantic(
         return []
     try:
         embedder = get_embedder()
-    except (KeyError, ImportError):
-        # No embedder registered, or the adapter's heavy deps aren't
-        # installed -- semantic search is unavailable; let callers fall back.
+    except KeyError:
         return []
     qvec = lookup_query_vec(kb_dir, query=query)
     # The query cache is keyed by text only; if the embedder model or

@@ -1,0 +1,2 @@
+{"timestamp": "2026-07-01T09:00:00.300Z", "type": "event_msg", "payload": {"type": "user_message", "message": "hello"}}
+{"timestamp": "2026-07-01T09:00:02.000Z", "type": "response_item", "payload": {"type": "function_call", "id": "fc_1", "name": "exec_command", "arguments": "{\"cmd\":\"ls\"}", "call_id": "call_1"}}

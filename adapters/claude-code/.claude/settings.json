@@ -43,6 +43,18 @@
         ]
       }
     ],
+    "UserPromptSubmit": [
+      {
+        "comment": "inject KB context relevant to THIS prompt (per-prompt auto-recall, 0 tool calls); never blocks the turn",
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "vouch context-hook || true"
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "matcher": "*",
