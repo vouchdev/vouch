@@ -1,26 +1,26 @@
-/* vouch landing — review-gate demo, knowledge graph, ledger.
+/* vouch landing — review-gate demo, knowledge graphs, timeline, animations.
    plain js, no dependencies. all data below is a mock demonstration KB.
-   note on innerHTML: every string rendered comes from the static CLAIMS /
-   ledger constants in this file — no user, URL, or network input ever
-   reaches these templates. keep it that way if you edit. */
+   note on innerHTML: every string rendered comes from the static constants
+   in this file — no user, URL, or network input ever reaches these
+   templates. keep it that way if you edit. */
 
 (function () {
   'use strict';
 
   var REDUCED = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-  /* ---------- copy button ---------- */
+  /* ---------- copy buttons ---------- */
 
-  var copyBtn = document.getElementById('copy-btn');
-  if (copyBtn) {
-    copyBtn.addEventListener('click', function () {
-      var cmd = document.getElementById('install-cmd').textContent;
-      navigator.clipboard && navigator.clipboard.writeText(cmd).then(function () {
-        copyBtn.textContent = 'copied';
-        setTimeout(function () { copyBtn.textContent = 'copy'; }, 1600);
+  ['copy-btn', 'copy-btn-2'].forEach(function (id) {
+    var btn = document.getElementById(id);
+    if (!btn) return;
+    btn.addEventListener('click', function () {
+      navigator.clipboard && navigator.clipboard.writeText('pipx install vouch-kb').then(function () {
+        btn.textContent = 'copied';
+        setTimeout(function () { btn.textContent = 'copy'; }, 1600);
       });
     });
-  }
+  });
 
   /* ---------- scroll reveals ---------- */
 
@@ -30,12 +30,32 @@
         if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); }
       });
     }, { rootMargin: '0px 0px -8% 0px' });
-    document.querySelectorAll('.reveal').forEach(function (el) { io.observe(el); });
+    document.querySelectorAll('.reveal:not(.in)').forEach(function (el) { io.observe(el); });
   } else {
     document.querySelectorAll('.reveal').forEach(function (el) { el.classList.add('in'); });
   }
 
-  /* ---------- demo data (mock) ---------- */
+  /* ---------- theme colors (read once from tokens) ---------- */
+
+  var css = getComputedStyle(document.documentElement);
+  var C = {
+    claim: css.getPropertyValue('--k-claim').trim() || '#5dcaa5',
+    source: css.getPropertyValue('--k-source').trim() || '#9d8ed0',
+    entity: css.getPropertyValue('--k-entity').trim() || '#7ea8ff',
+    page: css.getPropertyValue('--k-page').trim() || '#8b7ff0',
+    person: css.getPropertyValue('--k-person').trim() || '#88a8d9',
+    concept: css.getPropertyValue('--k-concept').trim() || '#c9a2e0',
+    tool: css.getPropertyValue('--k-tool').trim() || '#7eb9c4',
+    ink: '#ebeef5',
+    dim: 'rgba(157,161,173,0.9)',
+    faint: 'rgba(90,93,104,0.95)',
+    edge: 'rgba(235,238,245,0.10)',
+    edgeFresh: 'rgba(93,202,165,0.55)'
+  };
+
+  /* =========================================================
+     PART 1 — hero review console (queue, mini graph, ledger)
+     ========================================================= */
 
   var CLAIMS = [
     { id: 'claim/deploy-tagged-commit', text: 'Production deploys run `make release` from a tagged commit.', src: 'RUNBOOK.md', hash: '9f31c4a8…e2', links: [{ to: 'source/runbook', type: 'cites' }, { to: 'entity/deploy', type: 'mentions' }], auto: 'approve', why: 'matches runbook', by: 'alice-example' },
@@ -46,7 +66,6 @@
     { id: 'claim/payments-own-retries', text: 'The payments service retries webhooks itself — clients must not.', src: 'services/payments/README.md', hash: 'e814a2c9…33', links: [{ to: 'entity/payments', type: 'mentions' }, { to: 'source/payments-readme', type: 'cites' }] }
   ];
 
-  /* seed graph: sources (squares), entities (diamonds), a page (rect) */
   var SEED_NODES = [
     { id: 'page/deployment', label: 'deployment', type: 'page' },
     { id: 'source/runbook', label: 'RUNBOOK.md', type: 'source' },
@@ -68,30 +87,17 @@
     { a: 'entity/staging', b: 'source/cron', type: '' }
   ];
 
-  /* ---------- graph canvas ---------- */
-
   var canvas = document.getElementById('kgraph');
   var ctx = canvas ? canvas.getContext('2d') : null;
   var nodes = [], edges = [], tick = 0;
 
-  var COLORS = {
-    claim: '#43c463',
-    source: '#a39d90',
-    entity: '#7fb4e8',
-    page: '#e0a32e',
-    edge: 'rgba(237,232,220,0.16)',
-    edgeFresh: 'rgba(67,196,99,0.55)',
-    label: 'rgba(163,157,144,0.85)',
-    type: 'rgba(110,106,96,0.9)'
-  };
-
-  function sizeCanvas() {
-    if (!canvas) return;
-    var r = canvas.getBoundingClientRect();
+  function sizeCanvas(cv, c2d) {
+    var r = cv.getBoundingClientRect();
     var dpr = window.devicePixelRatio || 1;
-    canvas.width = r.width * dpr;
-    canvas.height = r.height * dpr;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    cv.width = r.width * dpr;
+    cv.height = r.height * dpr;
+    c2d.setTransform(dpr, 0, 0, dpr, 0, 0);
+    return r;
   }
 
   function seedGraph() {
@@ -102,12 +108,9 @@
       var rad = n.type === 'page' ? 0 : (n.type === 'claim' ? Math.min(r.width, r.height) * 0.31 : Math.min(r.width, r.height) * 0.42);
       return {
         id: n.id, label: n.label, type: n.type,
-        x: cx + Math.cos(angle) * rad,
-        y: cy + Math.sin(angle) * rad * 0.8,
-        tx: cx + Math.cos(angle) * rad,
-        ty: cy + Math.sin(angle) * rad * 0.8,
-        born: -100, phase: Math.random() * Math.PI * 2,
-        labelUp: i % 2 === 0
+        x: cx + Math.cos(angle) * rad, y: cy + Math.sin(angle) * rad * 0.8,
+        tx: cx + Math.cos(angle) * rad, ty: cy + Math.sin(angle) * rad * 0.8,
+        born: -100, phase: Math.random() * Math.PI * 2, labelUp: i % 2 === 0
       };
     });
     edges = SEED_EDGES.map(function (e) { return { a: e.a, b: e.b, type: e.type, born: -100 }; });
@@ -121,57 +124,34 @@
   function addClaimNode(claim) {
     var r = canvas.getBoundingClientRect();
     var cx = r.width / 2, cy = r.height / 2;
-    /* target: ring between page and outer ring, angle from count */
     var claimCount = nodes.filter(function (n) { return n.type === 'claim'; }).length;
     var angle = claimCount * 2.4 + 1.2;
     var rad = Math.min(r.width, r.height) * 0.31;
-    var node = {
-      id: claim.id,
-      label: claim.id.replace('claim/', ''),
-      type: 'claim',
-      x: 12, y: cy,             /* enters from the queue side */
-      tx: cx + Math.cos(angle) * rad,
-      ty: cy + Math.sin(angle) * rad,
-      born: tick, phase: Math.random() * Math.PI * 2,
-      labelUp: claimCount % 2 === 1
-    };
-    nodes.push(node);
+    nodes.push({
+      id: claim.id, label: claim.id.replace('claim/', ''), type: 'claim',
+      x: 12, y: cy,
+      tx: cx + Math.cos(angle) * rad, ty: cy + Math.sin(angle) * rad,
+      born: tick, phase: Math.random() * Math.PI * 2, labelUp: claimCount % 2 === 1
+    });
     claim.links.forEach(function (l) {
       if (nodeById(l.to)) edges.push({ a: claim.id, b: l.to, type: l.type, born: tick });
     });
   }
 
-  function drawNode(n, wob) {
-    var x = n.x + Math.sin(tick / 90 + n.phase) * wob;
-    var y = n.y + Math.cos(tick / 110 + n.phase) * wob;
-    var appear = Math.min(1, (tick - n.born) / 30);
-    ctx.globalAlpha = appear;
-    ctx.fillStyle = COLORS[n.type];
-    if (n.type === 'claim') {
-      var rr = 6 + (1 - appear) * 6;
-      ctx.beginPath(); ctx.arc(x, y, rr, 0, Math.PI * 2); ctx.fill();
-      if (tick - n.born < 60 && tick - n.born > -50) {  /* fresh ring */
-        ctx.strokeStyle = 'rgba(67,196,99,' + (0.6 * (1 - (tick - n.born) / 60)) + ')';
-        ctx.lineWidth = 1.5;
-        ctx.beginPath(); ctx.arc(x, y, 6 + (tick - n.born) / 4, 0, Math.PI * 2); ctx.stroke();
-      }
+  function drawShape(c2d, n, x, y, rr) {
+    c2d.fillStyle = C[n.type] || C.entity;
+    if (n.type === 'claim' || n.type === 'person' || n.type === 'concept' || n.type === 'tool') {
+      c2d.beginPath(); c2d.arc(x, y, rr, 0, Math.PI * 2); c2d.fill();
     } else if (n.type === 'source') {
-      ctx.fillRect(x - 5, y - 5, 10, 10);
+      c2d.fillRect(x - rr, y - rr, rr * 2, rr * 2);
     } else if (n.type === 'entity') {
-      ctx.save(); ctx.translate(x, y); ctx.rotate(Math.PI / 4);
-      ctx.fillRect(-5, -5, 10, 10); ctx.restore();
+      c2d.save(); c2d.translate(x, y); c2d.rotate(Math.PI / 4);
+      c2d.fillRect(-rr, -rr, rr * 2, rr * 2); c2d.restore();
     } else { /* page */
-      ctx.beginPath();
-      if (ctx.roundRect) { ctx.roundRect(x - 8, y - 6, 16, 12, 3); } else { ctx.rect(x - 8, y - 6, 16, 12); }
-      ctx.fill();
+      c2d.beginPath();
+      if (c2d.roundRect) c2d.roundRect(x - rr * 1.3, y - rr, rr * 2.6, rr * 2, 3); else c2d.rect(x - rr * 1.3, y - rr, rr * 2.6, rr * 2);
+      c2d.fill();
     }
-    ctx.font = '10px "Plex Mono", monospace';
-    ctx.fillStyle = COLORS.label;
-    ctx.textAlign = 'center';
-    var label = n.label.length > 16 ? n.label.slice(0, 15) + '…' : n.label;
-    ctx.fillText(label, x, n.type === 'page' ? y + 24 : (n.labelUp ? y - 13 : y + 20));
-    ctx.globalAlpha = 1;
-    return { x: x, y: y };
   }
 
   function render() {
@@ -181,47 +161,56 @@
     tick++;
     var wob = REDUCED ? 0 : 2.2;
 
-    /* ease nodes toward targets */
     nodes.forEach(function (n) {
       n.x += (n.tx - n.x) * 0.06;
       n.y += (n.ty - n.y) * 0.06;
     });
 
-    /* edges first */
-    edges.forEach(function (e) {
+    edges.forEach(function (e, idx) {
       var a = nodeById(e.a), b = nodeById(e.b);
       if (!a || !b) return;
       var fresh = tick - e.born < 70;
-      ctx.strokeStyle = fresh ? COLORS.edgeFresh : COLORS.edge;
+      ctx.strokeStyle = fresh ? C.edgeFresh : C.edge;
       ctx.lineWidth = fresh ? 1.6 : 1;
-      ctx.beginPath();
-      ctx.moveTo(a.x, a.y);
-      ctx.lineTo(b.x, b.y);
-      ctx.stroke();
-      if (e.type && (fresh || edges.indexOf(e) < 3)) {
-        ctx.font = '9px "Plex Mono", monospace';
-        ctx.fillStyle = COLORS.type;
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+      if (e.type && (fresh || idx < 3)) {
+        ctx.font = '9px "Geist Mono", monospace';
+        ctx.fillStyle = C.faint;
         ctx.textAlign = 'center';
         ctx.fillText(e.type, (a.x + b.x) / 2, (a.y + b.y) / 2 - 4);
       }
     });
 
-    nodes.forEach(function (n) { drawNode(n, n.type === 'page' ? 0 : wob); });
+    nodes.forEach(function (n) {
+      var x = n.x + Math.sin(tick / 90 + n.phase) * (n.type === 'page' ? 0 : wob);
+      var y = n.y + Math.cos(tick / 110 + n.phase) * (n.type === 'page' ? 0 : wob);
+      var appear = Math.min(1, (tick - n.born) / 30);
+      ctx.globalAlpha = appear;
+      drawShape(ctx, n, x, y, n.type === 'page' ? 7 : 6);
+      if (n.type === 'claim' && tick - n.born < 60 && tick - n.born > -50) {
+        ctx.strokeStyle = 'rgba(93,202,165,' + (0.6 * (1 - (tick - n.born) / 60)) + ')';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.arc(x, y, 6 + (tick - n.born) / 4, 0, Math.PI * 2); ctx.stroke();
+      }
+      ctx.font = '10px "Geist Mono", monospace';
+      ctx.fillStyle = C.dim;
+      ctx.textAlign = 'center';
+      var label = n.label.length > 16 ? n.label.slice(0, 15) + '…' : n.label;
+      ctx.fillText(label, x, n.type === 'page' ? y + 24 : (n.labelUp ? y - 13 : y + 20));
+      ctx.globalAlpha = 1;
+    });
 
     if (!REDUCED || tick < 120) requestAnimationFrame(render);
   }
 
-  /* ---------- ledger ---------- */
-
+  /* ledger */
   var ledgerEl = document.getElementById('ledger-lines');
   var clockMin = 41, clockSec = 12;
-
   function ledgerTime() {
     clockSec += 7 + Math.floor(Math.random() * 40);
     if (clockSec >= 60) { clockMin += 1; clockSec -= 60; }
     return '10:' + String(clockMin).padStart(2, '0') + ':' + String(clockSec).padStart(2, '0');
   }
-
   function ledgerLine(ev, id, why, by, fresh) {
     var li = document.createElement('li');
     if (fresh) li.className = 'fresh';
@@ -234,21 +223,17 @@
     while (ledgerEl.children.length > 5) ledgerEl.removeChild(ledgerEl.firstChild);
   }
 
-  /* ---------- review queue ---------- */
-
+  /* queue */
   var queueEl = document.getElementById('queue-cards');
   var countEl = document.getElementById('queue-count');
   var yourTurnEl = document.getElementById('your-turn');
-  var qIndex = 0;         /* next claim not yet rendered */
-  var pendingLeft = CLAIMS.length;
-  var VISIBLE = 2;
-  var autoplayTimer = null;
-  var userActed = false;
+  var qIndex = 0, pendingLeft = CLAIMS.length, VISIBLE = 2;
+  var autoplayTimer = null, userActed = false;
 
   function shortSrc(c) {
     return c.hash
       ? c.src + ' <span class="hash">sha256:' + c.hash + '</span>'
-      : '<span style="color:var(--rejected)">' + c.src + '</span>';
+      : '<span class="nosrc">' + c.src + '</span>';
   }
 
   function makeCard(claim) {
@@ -286,25 +271,19 @@
   }
 
   function decide(card, claim, approved, by, why) {
-    /* prevent double decisions */
     if (card.dataset.done) return;
     card.dataset.done = '1';
     pendingLeft--;
-
     var mark = card.querySelector('.stamp-mark');
     mark.textContent = approved ? 'APPROVED' : 'REJECTED';
     mark.className = 'stamp-mark show ' + (approved ? 'ok' : 'no');
-    card.style.borderLeftColor = approved ? 'var(--approved)' : 'var(--rejected)';
-
+    card.style.borderLeftColor = approved ? C.claim : '#e07a8b';
     var delay = REDUCED ? 60 : 620;
     setTimeout(function () {
       card.classList.add(approved ? 'leaving-approved' : 'leaving-rejected');
       if (approved) addClaimNode(claim);
       ledgerLine(approved ? 'approve' : 'reject', claim.id, why || claim.why, by || claim.by || 'you', true);
-      setTimeout(function () {
-        card.remove();
-        fillQueue();
-      }, REDUCED ? 30 : 380);
+      setTimeout(function () { card.remove(); fillQueue(); }, REDUCED ? 30 : 380);
     }, delay);
   }
 
@@ -312,7 +291,7 @@
     userActed = true;
     if (autoplayTimer) { clearTimeout(autoplayTimer); autoplayTimer = null; }
     yourTurnEl.classList.remove('show');
-    decide(card, claim, approved, 'you', approved ? 'stamped from vouchai.dev' : 'stamped from vouchai.dev');
+    decide(card, claim, approved, 'you', 'stamped from vouchai.dev');
   }
 
   function autoplay(step) {
@@ -328,49 +307,338 @@
     }
   }
 
+  /* =========================================================
+     PART 2 — the big map (force-laid mock KB, hover to trace)
+     ========================================================= */
+
+  var big = document.getElementById('bigmap');
+  var bctx = big ? big.getContext('2d') : null;
+  var M = { nodes: [], edges: [], hover: -1, t: 0 };
+
+  function buildMapData() {
+    /* deterministic mock KB: pages ← claims ← sources, entities/people/concepts orbit */
+    var rng = (function (s) { return function () { s = (s * 1103515245 + 12345) % 2147483648; return s / 2147483648; }; })(42);
+    var pages = ['deployment', 'auth', 'payments', 'testing', 'infra', 'onboarding'];
+    var sources = ['RUNBOOK.md', 'SECURITY.md', 'CONTRIBUTING.md', 'cron.yaml', 'payments/README', 'ARCHITECTURE.md', 'ADR-0007', 'ADR-0012', 'api/openapi.yaml', 'Makefile'];
+    var entities = ['deploy', 'staging', 'tokens', 'webhooks', 'pnpm', 'migrations', 'canary', 'rollback', 'sso', 'rate-limits', 'ci', 'sandbox'];
+    var people = ['alice-example', 'bob-example'];
+    var concepts = ['idempotency', 'least-privilege', 'blue-green', 'backfill'];
+    var claimsPerPage = [5, 4, 5, 3, 4, 3];
+
+    var ns = [], es = [];
+    pages.forEach(function (p, i) { ns.push({ id: 'page/' + p, label: p, type: 'page', deg: 0 }); });
+    sources.forEach(function (s) { ns.push({ id: 'source/' + s, label: s, type: 'source', deg: 0 }); });
+    entities.forEach(function (e) { ns.push({ id: 'entity/' + e, label: e, type: 'entity', deg: 0 }); });
+    people.forEach(function (p) { ns.push({ id: 'person/' + p, label: p, type: 'person', deg: 0 }); });
+    concepts.forEach(function (c) { ns.push({ id: 'concept/' + c, label: c, type: 'concept', deg: 0 }); });
+
+    var claimN = 0;
+    pages.forEach(function (p, pi) {
+      for (var k = 0; k < claimsPerPage[pi]; k++) {
+        var cid = 'claim/' + p + '-' + (k + 1);
+        ns.push({ id: cid, label: p + '-' + (k + 1), type: 'claim', deg: 0 });
+        claimN++;
+        es.push({ a: 'page/' + p, b: cid, type: 'cites' });
+        es.push({ a: cid, b: 'source/' + sources[Math.floor(rng() * sources.length)], type: 'cites' });
+        es.push({ a: cid, b: 'entity/' + entities[Math.floor(rng() * entities.length)], type: 'mentions' });
+        if (rng() > 0.72) es.push({ a: cid, b: 'concept/' + concepts[Math.floor(rng() * concepts.length)], type: 'mentions' });
+        if (rng() > 0.65) es.push({ a: cid, b: 'person/' + people[Math.floor(rng() * people.length)], type: 'approved-by' });
+      }
+    });
+    /* a few page↔entity links */
+    es.push({ a: 'page/deployment', b: 'entity/deploy', type: 'mentions' });
+    es.push({ a: 'page/auth', b: 'entity/sso', type: 'mentions' });
+    es.push({ a: 'page/payments', b: 'entity/webhooks', type: 'mentions' });
+
+    var idx = {};
+    ns.forEach(function (n, i) { idx[n.id] = i; });
+    es.forEach(function (e) {
+      e.ai = idx[e.a]; e.bi = idx[e.b];
+      ns[e.ai].deg++; ns[e.bi].deg++;
+    });
+
+    document.getElementById('ms-claims').textContent = claimN;
+    document.getElementById('ms-sources').textContent = sources.length;
+    document.getElementById('ms-pages').textContent = pages.length;
+
+    return { nodes: ns, edges: es, rng: rng };
+  }
+
+  function layoutMap(data, w, h) {
+    var ns = data.nodes, es = data.edges, rng = data.rng;
+    ns.forEach(function (n) {
+      n.x = w / 2 + (rng() - 0.5) * w * 0.7;
+      n.y = h / 2 + (rng() - 0.5) * h * 0.7;
+      n.vx = 0; n.vy = 0;
+      n.r = n.type === 'page' ? 9 : n.type === 'claim' ? 4.5 : n.type === 'source' ? 5.5 : 4.5;
+      n.phase = rng() * Math.PI * 2;
+    });
+    /* frozen force sim: repulsion + springs + centering */
+    for (var it = 0; it < 260; it++) {
+      var alpha = 1 - it / 260;
+      for (var i = 0; i < ns.length; i++) {
+        for (var j = i + 1; j < ns.length; j++) {
+          var dx = ns[j].x - ns[i].x, dy = ns[j].y - ns[i].y;
+          var d2 = dx * dx + dy * dy + 0.01, d = Math.sqrt(d2);
+          if (d < 140) {
+            var f = 900 / d2 * alpha;
+            var fx = dx / d * f, fy = dy / d * f;
+            ns[i].vx -= fx; ns[i].vy -= fy;
+            ns[j].vx += fx; ns[j].vy += fy;
+          }
+        }
+      }
+      es.forEach(function (e) {
+        var a = ns[e.ai], b = ns[e.bi];
+        var dx = b.x - a.x, dy = b.y - a.y;
+        var d = Math.sqrt(dx * dx + dy * dy) + 0.01;
+        var want = 62;
+        var f = (d - want) * 0.02 * alpha;
+        var fx = dx / d * f, fy = dy / d * f;
+        a.vx += fx; a.vy += fy;
+        b.vx -= fx; b.vy -= fy;
+      });
+      ns.forEach(function (n) {
+        n.vx += (w / 2 - n.x) * 0.004 * alpha;
+        n.vy += (h / 2 - n.y) * 0.004 * alpha;
+        n.x += n.vx; n.y += n.vy;
+        n.vx *= 0.6; n.vy *= 0.6;
+        n.x = Math.max(30, Math.min(w - 30, n.x));
+        n.y = Math.max(26, Math.min(h - 30, n.y));
+      });
+    }
+  }
+
+  function renderMap() {
+    if (!bctx) return;
+    var r = big.getBoundingClientRect();
+    bctx.clearRect(0, 0, r.width, r.height);
+    M.t++;
+    var ns = M.nodes, es = M.edges;
+    var hov = M.hover;
+    var wob = REDUCED ? 0 : 1.6;
+
+    var connected = null;
+    if (hov >= 0) {
+      connected = new Set([hov]);
+      es.forEach(function (e) {
+        if (e.ai === hov) connected.add(e.bi);
+        if (e.bi === hov) connected.add(e.ai);
+      });
+    }
+
+    es.forEach(function (e) {
+      var a = ns[e.ai], b = ns[e.bi];
+      var lit = hov >= 0 && (e.ai === hov || e.bi === hov);
+      bctx.strokeStyle = lit ? 'rgba(139,127,240,0.6)' : (hov >= 0 ? 'rgba(235,238,245,0.04)' : C.edge);
+      bctx.lineWidth = lit ? 1.5 : 1;
+      bctx.beginPath();
+      bctx.moveTo(a.x + Math.sin(M.t / 120 + a.phase) * wob, a.y + Math.cos(M.t / 140 + a.phase) * wob);
+      bctx.lineTo(b.x + Math.sin(M.t / 120 + b.phase) * wob, b.y + Math.cos(M.t / 140 + b.phase) * wob);
+      bctx.stroke();
+      if (lit && e.type) {
+        bctx.font = '9px "Geist Mono", monospace';
+        bctx.fillStyle = 'rgba(157,161,173,0.9)';
+        bctx.textAlign = 'center';
+        bctx.fillText(e.type, (a.x + b.x) / 2, (a.y + b.y) / 2 - 4);
+      }
+    });
+
+    ns.forEach(function (n, i) {
+      var x = n.x + Math.sin(M.t / 120 + n.phase) * wob;
+      var y = n.y + Math.cos(M.t / 140 + n.phase) * wob;
+      var dimmed = connected && !connected.has(i);
+      bctx.globalAlpha = dimmed ? 0.18 : 1;
+      drawShape(bctx, n, x, y, n.r);
+      if (i === hov || (!connected && n.type === 'page') || (connected && connected.has(i) && (n.type === 'page' || i === hov))) {
+        bctx.font = (n.type === 'page' ? '11px' : '10px') + ' "Geist Mono", monospace';
+        bctx.fillStyle = i === hov ? C.ink : C.dim;
+        bctx.textAlign = 'center';
+        bctx.fillText(n.label, x, y - n.r - 7);
+      }
+      bctx.globalAlpha = 1;
+    });
+
+    if (!REDUCED || M.t < 120) requestAnimationFrame(renderMap);
+  }
+
+  function initMap() {
+    if (!big) return;
+    var r = sizeCanvas(big, bctx);
+    var data = buildMapData();
+    layoutMap(data, r.width, r.height);
+    M.nodes = data.nodes;
+    M.edges = data.edges;
+    renderMap();
+
+    var hint = document.getElementById('map-hint');
+    big.addEventListener('mousemove', function (ev) {
+      var rect = big.getBoundingClientRect();
+      var mx = ev.clientX - rect.left, my = ev.clientY - rect.top;
+      var best = -1, bd = 22 * 22;
+      M.nodes.forEach(function (n, i) {
+        var dx = n.x - mx, dy = n.y - my, d = dx * dx + dy * dy;
+        if (d < bd) { bd = d; best = i; }
+      });
+      M.hover = best;
+      if (hint) hint.textContent = best >= 0 ? M.nodes[best].id : 'demo data — hover a node';
+      if (REDUCED) { M.t = 0; renderMap(); }
+    });
+    big.addEventListener('mouseleave', function () {
+      M.hover = -1;
+      if (hint) hint.textContent = 'demo data — hover a node';
+      if (REDUCED) { M.t = 0; renderMap(); }
+    });
+    window.addEventListener('resize', function () {
+      var rr = sizeCanvas(big, bctx);
+      layoutMap({ nodes: M.nodes, edges: M.edges, rng: (function (s) { return function () { s = (s * 1103515245 + 12345) % 2147483648; return s / 2147483648; }; })(7) }, rr.width, rr.height);
+      if (REDUCED) { M.t = 0; renderMap(); }
+    });
+  }
+
+  /* =========================================================
+     PART 3 — pipeline flow stage cycling
+     ========================================================= */
+
+  function initFlow() {
+    var track = document.getElementById('flow-track');
+    if (!track) return;
+    var stages = [].slice.call(track.querySelectorAll('.flow-stage'));
+    var i = 0;
+    function step() {
+      stages.forEach(function (s, j) { s.classList.toggle('active', j === i); });
+      i = (i + 1) % stages.length;
+    }
+    step();
+    if (!REDUCED) setInterval(step, 1300);
+    else stages.forEach(function (s) { s.classList.add('active'); });
+  }
+
+  /* =========================================================
+     PART 4 — timeline stream
+     ========================================================= */
+
+  var TL_EVENTS = [
+    { ev: 'propose', c: '#e1b340', body: '<b>claim/canary-first</b> — deploys hit canary before fleet <i>· agent:claude-code</i>' },
+    { ev: 'approve', c: '#5dcaa5', body: '<b>claim/canary-first</b> <i>· alice-example: "matches ADR-0012"</i>' },
+    { ev: 'compile', c: '#8b7ff0', body: '<b>page/deployment</b> recompiled — 5 claims, 0 dangling citations' },
+    { ev: 'propose', c: '#e1b340', body: '<b>claim/redis-eviction-lru</b> — cache evicts LRU at 80% <i>· agent:cursor</i>' },
+    { ev: 'reject', c: '#e07a8b', body: '<b>claim/redis-eviction-lru</b> <i>· bob-example: "config says allkeys-lfu, recheck"</i>' },
+    { ev: 'supersede', c: '#7ea8ff', body: '<b>claim/tokens-rotate-30d → tokens-rotate-90d</b> <i>· policy change, provenance kept</i>' },
+    { ev: 'propose', c: '#e1b340', body: '<b>claim/webhook-idempotency-keys</b> — retries carry idempotency keys <i>· agent:claude-code</i>' },
+    { ev: 'approve', c: '#5dcaa5', body: '<b>claim/webhook-idempotency-keys</b> <i>· alice-example: "verified in payments/README"</i>' },
+    { ev: 'approve', c: '#5dcaa5', body: '<b>session f555c022 crystallized</b> — 6 proposals approved in one review' },
+    { ev: 'compile', c: '#8b7ff0', body: '<b>page/payments</b> recompiled — new claim cited, wikilinks verified' }
+  ];
+  var TL_COLORS = { propose: '#e1b340', approve: '#5dcaa5', reject: '#e07a8b', supersede: '#7ea8ff', compile: '#8b7ff0' };
+
+  function initTimeline() {
+    var feed = document.getElementById('tl-feed');
+    if (!feed) return;
+    var i = 0, h = 14, m = 6, s = 2;
+    function stamp() {
+      s += 11 + Math.floor(Math.random() * 37);
+      if (s >= 60) { m++; s -= 60; }
+      if (m >= 60) { h++; m -= 60; }
+      return String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0') + 'Z';
+    }
+    function addRow() {
+      var e = TL_EVENTS[i % TL_EVENTS.length];
+      i++;
+      var li = document.createElement('li');
+      li.className = 'tl-row';
+      li.innerHTML =
+        '<span class="tt">' + stamp() + '</span>' +
+        '<span class="lane" style="background:' + TL_COLORS[e.ev] + ';color:' + TL_COLORS[e.ev] + '"></span>' +
+        '<span class="ev" style="color:' + TL_COLORS[e.ev] + '">' + e.ev + '</span>' +
+        '<span class="body">' + e.body + '</span>';
+      feed.insertBefore(li, feed.firstChild);
+      while (feed.children.length > 12) feed.removeChild(feed.lastChild);
+    }
+    for (var k = 0; k < 8; k++) addRow();
+    if (!REDUCED) {
+      var timer = null;
+      var io2 = new IntersectionObserver(function (entries) {
+        entries.forEach(function (en) {
+          if (en.isIntersecting && !timer) timer = setInterval(addRow, 2100);
+          else if (!en.isIntersecting && timer) { clearInterval(timer); timer = null; }
+        });
+      }, { threshold: 0.2 });
+      io2.observe(feed);
+    }
+  }
+
+  /* =========================================================
+     PART 5 — count-up proof numbers
+     ========================================================= */
+
+  function initCountups() {
+    var els = [].slice.call(document.querySelectorAll('[data-count]'));
+    if (!els.length) return;
+    function run(el) {
+      var target = parseInt(el.dataset.count, 10);
+      if (REDUCED) { el.textContent = '−' + target + '%'; return; }
+      var start = null;
+      function frame(ts) {
+        if (!start) start = ts;
+        var p = Math.min(1, (ts - start) / 1100);
+        var eased = 1 - Math.pow(1 - p, 3);
+        el.textContent = '−' + Math.round(target * eased) + '%';
+        if (p < 1) requestAnimationFrame(frame);
+      }
+      requestAnimationFrame(frame);
+    }
+    var io3 = new IntersectionObserver(function (entries) {
+      entries.forEach(function (en) {
+        if (en.isIntersecting) { run(en.target); io3.unobserve(en.target); }
+      });
+    }, { threshold: 0.6 });
+    els.forEach(function (el) { io3.observe(el); });
+  }
+
   /* ---------- boot ---------- */
 
   function boot() {
-    if (!canvas) return;
-    sizeCanvas();
-    seedGraph();
-    render();
+    if (canvas) {
+      sizeCanvas(canvas, ctx);
+      seedGraph();
+      render();
+      ledgerLine('propose', 'claim/deploy-tagged-commit', null, 'agent:claude-code');
+      ledgerLine('propose', 'claim/skip-migration-tests', null, 'agent:claude-code');
+      ledgerLine('approve', 'claim/rollback-by-tag', 'verified against RUNBOOK.md', 'alice-example');
+      fillQueue();
 
-    /* seed the ledger with history */
-    ledgerLine('propose', 'claim/deploy-tagged-commit', null, 'agent:claude-code');
-    ledgerLine('propose', 'claim/skip-migration-tests', null, 'agent:claude-code');
-    ledgerLine('approve', 'claim/rollback-by-tag', 'verified against RUNBOOK.md', 'alice-example');
+      var started = false;
+      function start() {
+        if (started) return;
+        started = true;
+        autoplayTimer = setTimeout(function () { autoplay(0); }, REDUCED ? 400 : 1400);
+      }
+      if ('IntersectionObserver' in window) {
+        var cio = new IntersectionObserver(function (entries) {
+          entries.forEach(function (e) { if (e.isIntersecting) { start(); cio.disconnect(); } });
+        }, { threshold: 0.35 });
+        cio.observe(document.getElementById('console'));
+      } else { start(); }
 
-    fillQueue();
-
-    /* start autoplay when the console scrolls into view */
-    var started = false;
-    function start() {
-      if (started) return;
-      started = true;
-      autoplayTimer = setTimeout(function () { autoplay(0); }, REDUCED ? 400 : 1400);
-    }
-    if ('IntersectionObserver' in window) {
-      var cio = new IntersectionObserver(function (entries) {
-        entries.forEach(function (e) { if (e.isIntersecting) { start(); cio.disconnect(); } });
-      }, { threshold: 0.35 });
-      cio.observe(document.getElementById('console'));
-    } else { start(); }
-
-    window.addEventListener('resize', function () {
-      sizeCanvas();
-      /* retarget nodes relative to new size */
-      var r = canvas.getBoundingClientRect();
-      var cx = r.width / 2, cy = r.height / 2;
-      nodes.forEach(function (n, i) {
-        if (n.type === 'page') { n.tx = cx; n.ty = cy; return; }
-        var angle = (i / nodes.length) * Math.PI * 2 + 0.6;
-        var rad = n.type === 'claim' ? Math.min(r.width, r.height) * 0.31 : Math.min(r.width, r.height) * 0.42;
-        n.tx = cx + Math.cos(angle) * rad;
-        n.ty = cy + Math.sin(angle) * rad * 0.8;
+      window.addEventListener('resize', function () {
+        sizeCanvas(canvas, ctx);
+        var r = canvas.getBoundingClientRect();
+        var cx = r.width / 2, cy = r.height / 2;
+        nodes.forEach(function (n, i) {
+          if (n.type === 'page') { n.tx = cx; n.ty = cy; return; }
+          var angle = (i / nodes.length) * Math.PI * 2 + 0.6;
+          var rad = n.type === 'claim' ? Math.min(r.width, r.height) * 0.31 : Math.min(r.width, r.height) * 0.42;
+          n.tx = cx + Math.cos(angle) * rad;
+          n.ty = cy + Math.sin(angle) * rad * 0.8;
+        });
+        if (REDUCED) { tick = 0; render(); }
       });
-      if (REDUCED) { tick = 0; render(); }
-    });
+    }
+    initMap();
+    initFlow();
+    initTimeline();
+    initCountups();
   }
 
   if (document.readyState === 'loading') {

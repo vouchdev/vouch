@@ -9,50 +9,68 @@
   <meta property="og:description" content="A review-gated knowledge base for coding agents. Agents propose; you approve. Every claim cites a source.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://vouchai.dev/">
-  <meta name="theme-color" content="#121110">
+  <meta name="theme-color" content="#0b0d13">
   <link rel="icon" type="image/svg+xml" href="assets/img/favicon.svg">
-  <link rel="preload" href="assets/fonts/fraunces-var-latin.woff2" as="font" type="font/woff2" crossorigin>
-  <link rel="preload" href="assets/fonts/ibmplexmono-400-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="assets/fonts/geist-var-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="assets/fonts/geistmono-var-latin.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="assets/css/main.css">
 </head>
 <body>
+<div class="grid-bg" aria-hidden="true"></div>
+<div class="glow glow-1" aria-hidden="true"></div>
+<div class="glow glow-2" aria-hidden="true"></div>
 
 <nav class="nav" aria-label="main">
   <div class="wrap nav-inner">
     <a class="brand" href="#top" aria-label="vouch home">
       <svg viewBox="0 0 64 64" aria-hidden="true">
-        <circle cx="32" cy="32" r="24" fill="none" stroke="#E0A32E" stroke-width="5"/>
-        <path d="M22 33l7 7 14-15" fill="none" stroke="#43C463" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+        <circle cx="32" cy="32" r="24" fill="none" stroke="#8B7FF0" stroke-width="5"/>
+        <path d="M22 33l7 7 14-15" fill="none" stroke="#5DCAA5" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
       vouch
     </a>
     <div class="nav-links">
       <a href="#loop">how it works</a>
+      <a href="#map">the graph</a>
+      <a href="#timeline">audit log</a>
       <a href="#proof">proof</a>
-      <a href="#hosts">works with</a>
       <a href="#faq">faq</a>
-      <a href="https://github.com/vouchdev/vouch/tree/main/docs">docs</a>
       <a class="nav-gh" href="https://github.com/vouchdev/vouch">
         <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
         GitHub
       </a>
+      <a class="nav-cta" href="https://github.com/vouchdev/vouch/blob/main/docs/getting-started.md">Get started</a>
     </div>
   </div>
 </nav>
 
 <header class="hero wrap" id="top">
-  <p class="eyebrow">review-gated · git-native · local-first · MIT</p>
-  <h1>The memory your agent has to <span class="earn">earn<svg viewBox="0 0 100 10" preserveAspectRatio="none" aria-hidden="true"><path d="M2 7 Q 30 3, 55 6 T 98 5"/></svg></span>.</h1>
-  <p class="hero-sub">vouch is a knowledge base for coding agents where <strong>every write passes human review</strong>. Agents propose claims with cited, content-hashed sources; you approve them; approved knowledge compiles into a wiki that lives in your repo — diffs, blame, and audit log included.</p>
-  <div class="hero-actions">
-    <span class="install"><span class="ps1">$</span><span id="install-cmd">pipx install vouch-kb</span><button type="button" id="copy-btn" aria-label="copy install command">copy</button></span>
-    <a class="btn btn-primary" href="https://github.com/vouchdev/vouch/blob/main/docs/getting-started.md">Get started</a>
-    <a class="btn btn-ghost" href="https://github.com/vouchdev/vouch">Star on GitHub</a>
+  <div class="hero-grid">
+    <div>
+      <p class="eyebrow reveal in" style="--d:0"><b>review-gated</b> · git-native · local-first · MIT</p>
+      <h1 class="reveal in" style="--d:1">The memory your agent has to <span class="hl">earn</span>.</h1>
+      <div class="hero-actions reveal in" style="--d:2">
+        <span class="install"><span class="ps1">$</span><span id="install-cmd">pipx install vouch-kb</span><button type="button" id="copy-btn" aria-label="copy install command">copy</button></span>
+        <a class="btn btn-primary" href="https://github.com/vouchdev/vouch/blob/main/docs/getting-started.md">Get started →</a>
+        <a class="btn btn-ghost" href="https://github.com/vouchdev/vouch">Star on GitHub</a>
+      </div>
+    </div>
+    <p class="hero-blurb reveal in" style="--d:2">Agents propose claims with cited, content-hashed sources. <strong>You approve them.</strong> Approved knowledge compiles into a wiki that lives in your repo — YAML and markdown, diffs and blame, an append-only audit log. <strong>Every write passes review.</strong></p>
   </div>
-  <p class="hero-note">Python 3.10+ · works with any MCP host · <a href="https://pypi.org/project/vouch-kb/">vouch-kb on PyPI</a></p>
+
+  <div class="host-strip reveal in" style="--d:3">
+    <span class="lbl">works with your agent · one command</span>
+    <span class="host-chip">Claude Code</span>
+    <span class="host-chip">Cursor</span>
+    <span class="host-chip">Codex</span>
+    <span class="host-chip">Windsurf</span>
+    <span class="host-chip">Zed</span>
+    <span class="host-chip">Cline</span>
+    <span class="host-chip">OpenClaw</span>
+  </div>
 
   <!-- signature: the interactive review gate -->
-  <div class="console" id="console">
+  <div class="console reveal in" style="--d:4" id="console">
     <div class="console-bar">
       <span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>
       <span class="title">vouch review — demo knowledge base</span>
@@ -80,15 +98,66 @@
       <ol id="ledger-lines" aria-live="polite"></ol>
     </div>
   </div>
+
+  <div class="pill-strip reveal in" style="--d:5">
+    <span class="pill"><b>100%</b> on your machine</span>
+    <span class="pill"><b>Every write</b> human-reviewed</span>
+    <span class="pill"><b>Every claim</b> cites a hashed source</span>
+    <span class="pill"><b>MIT</b>, open source</span>
+  </div>
 </header>
 
 <main>
-  <!-- 01 propose -->
+  <!-- pipeline flow -->
   <section class="section wrap reveal" id="loop">
-    <p class="stage-eyebrow"><span class="n">stage 01</span> propose</p>
+    <div class="section-head">
+      <p class="eyebrow">the pipeline</p>
+      <h2>How a fact becomes <span class="hl">knowledge</span>.</h2>
+      <p>Five stages, one invariant: nothing lands without review.</p>
+    </div>
+    <div class="flow">
+      <div class="flow-track" id="flow-track">
+        <div class="flow-stage" data-k="propose">
+          <span class="fs-dot" aria-hidden="true"></span>
+          <span class="fs-num">01</span>
+          <span class="fs-name">propose</span>
+          <span class="fs-desc">the agent files a claim with a cited, content-hashed source</span>
+        </div>
+        <div class="flow-stage" data-k="review">
+          <span class="fs-dot" aria-hidden="true"></span>
+          <span class="fs-num">02</span>
+          <span class="fs-name">review</span>
+          <span class="fs-desc">it waits in the queue — PENDING, visible, diffable</span>
+        </div>
+        <div class="flow-stage" data-k="approve">
+          <span class="fs-dot" aria-hidden="true"></span>
+          <span class="fs-num">03</span>
+          <span class="fs-name">approve</span>
+          <span class="fs-desc">a human stamps it; the decision is one commit, audited</span>
+        </div>
+        <div class="flow-stage" data-k="compile">
+          <span class="fs-dot" aria-hidden="true"></span>
+          <span class="fs-num">04</span>
+          <span class="fs-name">compile</span>
+          <span class="fs-desc">approved claims compile into cited wiki pages</span>
+        </div>
+        <div class="flow-stage" data-k="recall">
+          <span class="fs-dot" aria-hidden="true"></span>
+          <span class="fs-num">05</span>
+          <span class="fs-name">recall</span>
+          <span class="fs-desc">every new session starts knowing what you approved</span>
+        </div>
+      </div>
+      <div class="flow-rail" aria-hidden="true"><span class="runner"></span></div>
+    </div>
+  </section>
+
+  <!-- 01 propose -->
+  <section class="section wrap reveal">
     <div class="section-body">
       <div class="section-copy">
-        <h2>Agents propose. <em>Nothing lands.</em></h2>
+        <p class="stage-eyebrow"><span class="n">stage 01</span> propose</p>
+        <h2>Agents propose. Nothing lands.</h2>
         <p>Every agent write becomes a <strong>pending proposal</strong> — a plain YAML file in <code>.vouch/</code>, not a row in an opaque database.</p>
         <p>A claim must cite a source, and sources are <strong>content-hashed</strong> at registration. A claim without evidence isn't low-confidence — it's a validation error.</p>
         <p class="fine">MCP · JSONL · CLI — three surfaces, one gate.</p>
@@ -109,7 +178,6 @@
 
   <!-- 02 review -->
   <section class="section wrap reveal">
-    <p class="stage-eyebrow"><span class="n">stage 02</span> review</p>
     <div class="section-body flip">
       <div class="audit-cards">
         <div class="audit-card">
@@ -126,7 +194,8 @@
         </div>
       </div>
       <div class="section-copy">
-        <h2>One gate. <em>Every surface.</em></h2>
+        <p class="stage-eyebrow"><span class="n">stage 02–03</span> review &amp; approve</p>
+        <h2>One gate. Every surface.</h2>
         <p>MCP tools, the JSONL server, and the CLI all call the same <code>proposals.approve()</code>. There is no side door — and the <strong>approver must differ from the proposer</strong>.</p>
         <p>Every decision appends to a committed, append-only audit log. Knowledge review works like code review: <strong>batch it, diff it, blame it</strong>.</p>
         <p class="fine">vouch review · web console · one decision = one commit</p>
@@ -136,10 +205,10 @@
 
   <!-- 03 compile -->
   <section class="section wrap reveal">
-    <p class="stage-eyebrow"><span class="n">stage 03</span> compile</p>
     <div class="section-body">
       <div class="section-copy">
-        <h2>Pages are <em>the product.</em></h2>
+        <p class="stage-eyebrow"><span class="n">stage 04</span> compile</p>
+        <h2>Pages are the product.</h2>
         <p><code>vouch compile</code> drafts wiki pages from approved claims — and <strong>machine-verifies every citation</strong> before a draft even enters review. A dangling <code>[claim: …]</code> or broken <code>[[wikilink]]</code> drops the draft, not your trust.</p>
         <p>The result is a cited, browsable wiki of what your team actually decided — <strong>compiled by the LLM, approved by you, compounding in git</strong>.</p>
         <p class="fine">the llm compiles · the human approves · the wiki compounds</p>
@@ -159,7 +228,6 @@
 
   <!-- 04 recall -->
   <section class="section wrap reveal">
-    <p class="stage-eyebrow"><span class="n">stage 04</span> recall</p>
     <div class="section-body flip">
       <div class="artifact">
         <div class="artifact-bar"><span>claude — session start</span><span>hook: SessionStart</span></div>
@@ -175,7 +243,8 @@
 <span class="y-green">→ the session starts knowing what your team approved.</span></pre>
       </div>
       <div class="section-copy">
-        <h2>Sessions start <em>knowing.</em></h2>
+        <p class="stage-eyebrow"><span class="n">stage 05</span> recall</p>
+        <h2>Sessions start knowing.</h2>
         <p>A session-start hook injects the approved digest; <code>kb.context</code> serves task-scoped, cited context on demand. The agent quotes decisions <strong>with claim ids</strong>, not vibes.</p>
         <p>When knowledge changes, it changes with provenance: <strong>supersede, contradict, archive</strong> — never silent edits.</p>
         <p class="fine">recall · context packs · salience · provenance: why / trace / impact</p>
@@ -183,40 +252,85 @@
     </div>
   </section>
 
+  <!-- the map -->
+  <section class="section wrap reveal" id="map">
+    <div class="section-head">
+      <p class="eyebrow">the graph</p>
+      <h2>Your knowledge, as a graph you can <span class="hl">audit</span>.</h2>
+      <p>Not co-occurrence guesses — typed edges between claims, sources, entities and pages, every one of them reviewed. Hover to trace connections.</p>
+    </div>
+    <div class="mapwrap">
+      <canvas id="bigmap" aria-label="interactive map of a demo vouch knowledge base"></canvas>
+      <div class="map-stats" aria-hidden="true">
+        <span class="map-stat"><b id="ms-claims">0</b> claims</span>
+        <span class="map-stat"><b id="ms-sources">0</b> sources</span>
+        <span class="map-stat"><b id="ms-pages">0</b> pages</span>
+        <span class="map-stat"><b>100%</b> cited</span>
+      </div>
+      <div class="map-legend" aria-hidden="true">
+        <span><i style="background:var(--k-claim)"></i>claim</span>
+        <span><i style="background:var(--k-source)"></i>source</span>
+        <span><i style="background:var(--k-entity)"></i>entity</span>
+        <span><i style="background:var(--k-page)"></i>page</span>
+        <span><i style="background:var(--k-person)"></i>person</span>
+        <span><i style="background:var(--k-concept)"></i>concept</span>
+      </div>
+      <p class="map-hint" id="map-hint">demo data — hover a node</p>
+    </div>
+  </section>
+
+  <!-- timeline -->
+  <section class="section wrap reveal" id="timeline">
+    <div class="section-head">
+      <p class="eyebrow">the record</p>
+      <h2>Every decision, <span class="hl">newest first</span>.</h2>
+      <p>The audit log is append-only and committed. Propose, approve, reject, supersede, compile — each event has an actor, a reason, and a diff behind it.</p>
+    </div>
+    <div class="timeline">
+      <div class="tl-head"><span>audit.log.jsonl — demo stream</span><span class="tl-live">live</span></div>
+      <ol class="tl-feed" id="tl-feed"></ol>
+    </div>
+  </section>
+
   <!-- proof -->
-  <section class="section wrap proof reveal" id="proof">
-    <p class="stage-eyebrow">measured, not claimed</p>
-    <h2>Every number comes with its <em>reproduction.</em></h2>
+  <section class="section wrap reveal" id="proof">
+    <div class="section-head">
+      <p class="eyebrow">measured, not claimed</p>
+      <h2>Every number comes with its <span class="hl">reproduction</span>.</h2>
+      <p>A/B on the same bug-fix task, with and without vouch, measured end-to-end.</p>
+    </div>
     <div class="proof-table">
       <div class="proof-row">
         <span class="tag">measured</span>
         <span class="metric">wall-clock, same bug-fix task</span>
-        <span class="delta">−17%</span>
+        <span class="delta" data-count="17">−0%</span>
         <span class="raw">111.9 s → 92.9 s</span>
         <a class="repro" href="https://github.com/vouchdev/vouch/blob/main/docs/tutorials/remember-across-sessions.md">reproduce ↗</a>
       </div>
       <div class="proof-row">
         <span class="tag">measured</span>
         <span class="metric">agent turns to finish</span>
-        <span class="delta">−32%</span>
+        <span class="delta" data-count="32">−0%</span>
         <span class="raw">16.5 → 11.3 turns</span>
         <a class="repro" href="https://github.com/vouchdev/vouch/blob/main/docs/tutorials/remember-across-sessions.md">reproduce ↗</a>
       </div>
       <div class="proof-row">
         <span class="tag">measured</span>
         <span class="metric">tokens &amp; cost</span>
-        <span class="delta">−18%</span>
+        <span class="delta" data-count="18">−0%</span>
         <span class="raw">$0.402 → $0.330</span>
         <a class="repro" href="https://github.com/vouchdev/vouch/blob/main/docs/tutorials/remember-across-sessions.md">reproduce ↗</a>
       </div>
     </div>
-    <p class="proof-caption">A/B on the same task, with and without vouch, measured end-to-end. The tutorial walks through the exact setup — run it on your own repo before believing us.</p>
+    <p class="proof-caption">The tutorial walks through the exact setup — run it on your own repo before believing us.</p>
   </section>
 
   <!-- contrast -->
-  <section class="section wrap contrast reveal">
-    <p class="stage-eyebrow">why a gate</p>
-    <h2>Memory tools remember everything. vouch remembers <em>what you approved.</em></h2>
+  <section class="section wrap reveal">
+    <div class="section-head">
+      <p class="eyebrow">why a gate</p>
+      <h2>Memory tools remember everything.<br>vouch remembers <span class="hl">what you approved</span>.</h2>
+    </div>
     <div class="contrast-grid">
       <div class="contrast-card">
         <span class="them">unreviewed memory accumulates whatever the agent felt like writing</span>
@@ -233,51 +347,48 @@
     </div>
   </section>
 
-  <!-- hosts -->
-  <section class="section wrap hosts reveal" id="hosts">
-    <p class="stage-eyebrow">works with your tools</p>
-    <h2 style="margin-inline:auto">One command per host.</h2>
-    <div class="host-row">
-      <span class="host-chip">Claude Code</span>
-      <span class="host-chip">Cursor</span>
-      <span class="host-chip">Codex</span>
-      <span class="host-chip">Windsurf</span>
-      <span class="host-chip">Zed</span>
-      <span class="host-chip">Cline</span>
-      <span class="host-chip">Continue</span>
-      <span class="host-chip">OpenClaw</span>
-      <span class="host-chip">any MCP host</span>
+  <!-- faq -->
+  <section class="section wrap reveal" id="faq">
+    <div class="section-head">
+      <p class="eyebrow">faq</p>
+      <h2>Straight answers.</h2>
     </div>
-    <p class="fine">vouch install-mcp claude-code · manifest-driven adapters, idempotent installs</p>
+    <div class="faq-list">
+      <details>
+        <summary>Doesn't a review gate slow everything down?</summary>
+        <p>The gate is per-write; the reviewing is when you choose. Batch a day's proposals in minutes with <code>vouch review</code> or the web console, or approve a whole session at once with <code>crystallize</code>. What it prevents — silently wrong "knowledge" steering every future session — costs far more than the minutes it takes.</p>
+      </details>
+      <details>
+        <summary>Where does my data live?</summary>
+        <p>In <code>.vouch/</code> inside your repo: YAML claims, markdown pages, a JSONL audit log. The search index is a derived, disposable SQLite file. No cloud, no account, no telemetry — this site doesn't even run analytics.</p>
+      </details>
+      <details>
+        <summary>Can my team use it?</summary>
+        <p>That's the point of being git-native. Knowledge changes arrive as diffs, get reviewed like code, and merge with authorship. Every approval is a commit by the human who made the call.</p>
+      </details>
+      <details>
+        <summary>What stops an agent approving its own writes?</summary>
+        <p>The approver must differ from the proposer, decisions are audit-logged with actors, and in team deployments the decision methods simply aren't in the agent's RPC scope — a stolen agent token can propose, but structurally cannot approve.</p>
+      </details>
+      <details>
+        <summary>How is this different from agent memory tools?</summary>
+        <p>Memory tools optimize recalling everything an agent did. vouch optimizes trusting what it knows: fewer facts, every one cited to a content-hashed source, every one reviewed by a human. It's the difference between a scratchpad and a knowledge base.</p>
+      </details>
+      <details>
+        <summary>What happens when knowledge goes stale?</summary>
+        <p>Claims are superseded, contradicted, or archived — with provenance, never silent edits. <code>vouch source verify</code> re-hashes cited evidence and flags drift; <code>kb.why</code> and <code>kb.impact</code> trace what a change touches.</p>
+      </details>
+    </div>
   </section>
 
-  <!-- faq -->
-  <section class="section wrap faq reveal" id="faq">
-    <h2>Straight answers.</h2>
-    <details>
-      <summary>Doesn't a review gate slow everything down?</summary>
-      <p>The gate is per-write; the reviewing is when you choose. Batch a day's proposals in minutes with <code>vouch review</code> or the web console, or approve a whole session at once with <code>crystallize</code>. What it prevents — silently wrong "knowledge" steering every future session — costs far more than the minutes it takes.</p>
-    </details>
-    <details>
-      <summary>Where does my data live?</summary>
-      <p>In <code>.vouch/</code> inside your repo: YAML claims, markdown pages, a JSONL audit log. The search index is a derived, disposable SQLite file. No cloud, no account, no telemetry — this site doesn't even run analytics.</p>
-    </details>
-    <details>
-      <summary>Can my team use it?</summary>
-      <p>That's the point of being git-native. Knowledge changes arrive as diffs, get reviewed like code, and merge with authorship. Every approval is a commit by the human who made the call.</p>
-    </details>
-    <details>
-      <summary>What stops an agent approving its own writes?</summary>
-      <p>The approver must differ from the proposer, decisions are audit-logged with actors, and in team deployments the decision methods simply aren't in the agent's RPC scope — a stolen agent token can propose, but structurally cannot approve.</p>
-    </details>
-    <details>
-      <summary>How is this different from agent memory tools?</summary>
-      <p>Memory tools optimize recalling everything an agent did. vouch optimizes trusting what it knows: fewer facts, every one cited to a content-hashed source, every one reviewed by a human. It's the difference between a scratchpad and a knowledge base.</p>
-    </details>
-    <details>
-      <summary>What happens when knowledge goes stale?</summary>
-      <p>Claims are superseded, contradicted, or archived — with provenance, never silent edits. <code>vouch source verify</code> re-hashes cited evidence and flags drift; <code>kb.why</code> and <code>kb.impact</code> trace what a change touches.</p>
-    </details>
+  <!-- final cta -->
+  <section class="final wrap reveal">
+    <p class="eyebrow" style="justify-content:center">give your agent a memory it earns</p>
+    <h2>Start reviewing what your agent <span class="hl">knows</span>.</h2>
+    <div class="hero-actions">
+      <span class="install"><span class="ps1">$</span><span>pipx install vouch-kb</span><button type="button" id="copy-btn-2" aria-label="copy install command">copy</button></span>
+      <a class="btn btn-primary" href="https://github.com/vouchdev/vouch/blob/main/docs/getting-started.md">Get started →</a>
+    </div>
   </section>
 </main>
 
