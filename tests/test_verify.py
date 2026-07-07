@@ -30,6 +30,24 @@ def test_verify_detects_external_drift(store: KBStore, tmp_path: Path) -> None:
     assert target.external_status == "drift"
 
 
+def test_verify_refuses_off_root_file_locator(store: KBStore, tmp_path: Path) -> None:
+    outside = tmp_path.parent / f"{tmp_path.name}-outside.txt"
+    outside.write_bytes(b"secret")
+    src = store.put_source(
+        b"placeholder",
+        title="outside",
+        locator=str(outside),
+        source_type="file",
+    )
+
+    result = verify.verify_source(store, src)
+
+    assert result.stored_ok is True
+    assert result.external_status == "missing"
+    assert result.note is not None
+    assert "unreadable" in result.note
+
+
 def test_verify_handles_missing_stored_content(store: KBStore, tmp_path: Path) -> None:
     # Regression for #30: verify_source caught FileNotFoundError, but
     # store.read_source_content() raises ArtifactNotFoundError (a KeyError

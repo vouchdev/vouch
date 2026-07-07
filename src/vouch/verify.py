@@ -9,8 +9,6 @@ warnings so the agent / human can re-evaluate the claims that cite it.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
-
 from . import audit
 from .models import Source
 from .storage import ArtifactNotFoundError, KBStore, sha256_hex
@@ -42,18 +40,15 @@ def verify_source(store: KBStore, source: Source) -> VerificationResult:
     external_status = "n/a"
     note: str | None = None
     if source.type.value == "file":
-        ext = Path(source.locator)
-        if ext.is_file():
-            try:
-                external_status = (
-                    "match" if sha256_hex(ext.read_bytes()) == source.id else "drift"
-                )
-            except OSError as e:
-                external_status = "missing"
-                note = f"unreadable: {e}"
-        else:
+        try:
+            _resolved, external_body = store.read_under_root(source.locator)
+        except (OSError, ValueError) as e:
             external_status = "missing"
-            note = "external file path no longer exists"
+            note = f"unreadable: {e}"
+        else:
+            external_status = (
+                "match" if sha256_hex(external_body) == source.id else "drift"
+            )
 
     return VerificationResult(
         source=source, stored_ok=stored_ok,
