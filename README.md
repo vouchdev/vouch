@@ -152,6 +152,10 @@ Pending drafts (`proposed/`) and the derived search index (`state.db`) are gitig
 * [vouch webapp](https://github.com/vouchdev/webApp) — the chat-first browser console from the video; [vouch-desktop](https://github.com/vouchdev/vouch-desktop) wraps the same loop as a desktop app
 * [CONTRIBUTING.md](CONTRIBUTING.md) — development setup and the test gate
 
+## Incubated by Gittensor
+
+Vouch was incubated and supported by [Gittensor](https://gittensor.io), a protocol that rewards open-source contributions. The knowledge-base-as-code pattern and review-gated persistence model emerged directly from conversations about trusted AI agents and long-term memory in collaborative development workflows.
+
 ## License
 
 MIT.
