@@ -154,16 +154,30 @@
     }
   }
 
+  /* layered-sine float: visible organic drift around a node's anchor.
+     amp scales by node type (hubs anchor the eye, satellites wander). */
+  function floatPos(n, t) {
+    if (REDUCED) return { x: n.x, y: n.y };
+    var amp = n.type === 'page' ? 2 : 6;
+    var s1 = n.s1 || (n.s1 = 0.008 + ((n.phase * 997) % 1) * 0.010);
+    var s2 = n.s2 || (n.s2 = 0.013 + ((n.phase * 613) % 1) * 0.012);
+    return {
+      x: n.x + Math.sin(t * s1 + n.phase) * amp + Math.sin(t * s2 + n.phase * 1.7) * amp * 0.45,
+      y: n.y + Math.cos(t * s1 * 0.85 + n.phase) * amp * 0.8 + Math.cos(t * s2 * 1.1 + n.phase * 2.3) * amp * 0.4
+    };
+  }
+
   function render() {
     if (!ctx) return;
     var r = canvas.getBoundingClientRect();
     ctx.clearRect(0, 0, r.width, r.height);
     tick++;
-    var wob = REDUCED ? 0 : 2.2;
 
     nodes.forEach(function (n) {
       n.x += (n.tx - n.x) * 0.06;
       n.y += (n.ty - n.y) * 0.06;
+      var p = floatPos(n, tick);
+      n.px = p.x; n.py = p.y;
     });
 
     edges.forEach(function (e, idx) {
@@ -172,18 +186,18 @@
       var fresh = tick - e.born < 70;
       ctx.strokeStyle = fresh ? C.edgeFresh : C.edge;
       ctx.lineWidth = fresh ? 1.6 : 1;
-      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(a.px, a.py); ctx.lineTo(b.px, b.py); ctx.stroke();
       if (e.type && (fresh || idx < 3)) {
         ctx.font = '9px "Geist Mono", monospace';
         ctx.fillStyle = C.faint;
         ctx.textAlign = 'center';
-        ctx.fillText(e.type, (a.x + b.x) / 2, (a.y + b.y) / 2 - 4);
+        ctx.fillText(e.type, (a.px + b.px) / 2, (a.py + b.py) / 2 - 4);
       }
     });
 
     nodes.forEach(function (n) {
-      var x = n.x + Math.sin(tick / 90 + n.phase) * (n.type === 'page' ? 0 : wob);
-      var y = n.y + Math.cos(tick / 110 + n.phase) * (n.type === 'page' ? 0 : wob);
+      var x = n.px;
+      var y = n.py;
       var appear = Math.min(1, (tick - n.born) / 30);
       ctx.globalAlpha = appear;
       drawShape(ctx, n, x, y, n.type === 'page' ? 7 : 6);
@@ -416,7 +430,11 @@
     M.t++;
     var ns = M.nodes, es = M.edges;
     var hov = M.hover;
-    var wob = REDUCED ? 0 : 1.6;
+
+    ns.forEach(function (n) {
+      var p = floatPos(n, M.t);
+      n.px = p.x; n.py = p.y;
+    });
 
     var connected = null;
     if (hov >= 0) {
@@ -433,20 +451,20 @@
       bctx.strokeStyle = lit ? 'rgba(139,127,240,0.6)' : (hov >= 0 ? 'rgba(235,238,245,0.04)' : C.edge);
       bctx.lineWidth = lit ? 1.5 : 1;
       bctx.beginPath();
-      bctx.moveTo(a.x + Math.sin(M.t / 120 + a.phase) * wob, a.y + Math.cos(M.t / 140 + a.phase) * wob);
-      bctx.lineTo(b.x + Math.sin(M.t / 120 + b.phase) * wob, b.y + Math.cos(M.t / 140 + b.phase) * wob);
+      bctx.moveTo(a.px, a.py);
+      bctx.lineTo(b.px, b.py);
       bctx.stroke();
       if (lit && e.type) {
         bctx.font = '9px "Geist Mono", monospace';
         bctx.fillStyle = 'rgba(157,161,173,0.9)';
         bctx.textAlign = 'center';
-        bctx.fillText(e.type, (a.x + b.x) / 2, (a.y + b.y) / 2 - 4);
+        bctx.fillText(e.type, (a.px + b.px) / 2, (a.py + b.py) / 2 - 4);
       }
     });
 
     ns.forEach(function (n, i) {
-      var x = n.x + Math.sin(M.t / 120 + n.phase) * wob;
-      var y = n.y + Math.cos(M.t / 140 + n.phase) * wob;
+      var x = n.px;
+      var y = n.py;
       var dimmed = connected && !connected.has(i);
       bctx.globalAlpha = dimmed ? 0.18 : 1;
       drawShape(bctx, n, x, y, n.r);
@@ -477,7 +495,7 @@
       var mx = ev.clientX - rect.left, my = ev.clientY - rect.top;
       var best = -1, bd = 22 * 22;
       M.nodes.forEach(function (n, i) {
-        var dx = n.x - mx, dy = n.y - my, d = dx * dx + dy * dy;
+        var dx = (n.px != null ? n.px : n.x) - mx, dy = (n.py != null ? n.py : n.y) - my, d = dx * dx + dy * dy;
         if (d < bd) { bd = d; best = i; }
       });
       M.hover = best;

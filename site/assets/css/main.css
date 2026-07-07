@@ -889,6 +889,70 @@ h2 .hl {
 .contrast-card .us { font-size: 15px; color: var(--ink); display: block; line-height: 1.6; }
 .contrast-card .us::before { content: '✓ '; color: var(--good); }
 
+/* ---------- powered by gittensor ---------- */
+
+.gt-hl {
+  background: linear-gradient(100deg, #ff6a00, #ffb066);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.gt-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin-top: 44px;
+}
+.gt-card {
+  position: relative;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  padding: 30px 32px;
+  overflow: hidden;
+  transition: transform 0.25s var(--ease), border-color 0.25s var(--ease);
+}
+.gt-card:hover { transform: translateY(-3px); border-color: #ff6a0045; }
+.gt-impact {
+  background:
+    radial-gradient(ellipse 90% 80% at 85% 0%, #ff6a0014, transparent 60%),
+    var(--surface);
+}
+.gt-tau {
+  position: absolute;
+  right: 18px;
+  top: 4px;
+  font-size: 120px;
+  font-weight: 500;
+  line-height: 1;
+  color: #ff6a00;
+  opacity: 0.14;
+  pointer-events: none;
+  user-select: none;
+}
+.gt-k {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #ff8c33;
+  margin-bottom: 12px;
+}
+.gt-card h3 {
+  font-size: 21px;
+  font-weight: 550;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+  margin-bottom: 12px;
+  max-width: 26ch;
+}
+.gt-d { color: var(--ink-dim); font-size: 14.5px; margin-bottom: 12px; max-width: 52ch; }
+.gt-d strong { color: var(--ink); font-weight: 500; }
+.gt-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 18px; }
+.gt-actions .btn { padding: 9px 17px; font-size: 13.5px; }
+.gt-actions .btn:hover { border-color: #ff6a0060; }
+
 /* ---------- faq ---------- */
 
 .faq-list { max-width: 760px; margin: 34px auto 0; }
@@ -970,6 +1034,7 @@ h2 .hl {
   #bigmap { height: 420px; }
   .section-body, .section-body.flip { grid-template-columns: 1fr; gap: 30px; }
   .contrast-grid { grid-template-columns: 1fr; }
+  .gt-grid { grid-template-columns: 1fr; }
   .proof-row { grid-template-columns: 1fr 1fr; row-gap: 6px; }
   .proof-row .tag { grid-column: 1 / -1; }
   .proof-row .repro { text-align: left; }
