@@ -18,6 +18,21 @@ All notable changes to vouch are documented here. Format follows
   extra isn't installed. Opt-in via `triage.enabled: true` in `config.yaml`.
   `vouch triage [proposal-id...]` mirrors it on the CLI with `--json` and
   `--reverse` (#322).
+- mcp now serves a **minimal tool profile by default** (8 core tools)
+  instead of the full 58-method surface; widen with
+  `VOUCH_TOOL_PROFILE=standard|full` or `mcp.tool_profile` in
+  `config.yaml`. approve/reject and maintenance tools live in
+  `standard`/`full` — they stay human/cli actions, not agent defaults.
+  the jsonl and cli surfaces are unaffected; all 58 methods remain
+  reachable there.
+- per-prompt auto-recall: the claude-code adapter's `UserPromptSubmit`
+  hook (`vouch context-hook`) injects relevant kb context on every
+  prompt, so recall no longer depends on the agent remembering to ask.
+
+### Changed
+- retrieval `auto`/`hybrid` now **fuses embedding + fts5** results via
+  reciprocal rank fusion instead of a waterfall (embedding-first,
+  fts5-fallback), with near-duplicate suppression over the fused list.
 
 ## [1.2.1] — 2026-07-06
 

@@ -19,7 +19,7 @@ from typing import Any
 import yaml
 from mcp.server.fastmcp import FastMCP
 
-from . import audit, bundle, health, volunteer_context
+from . import audit, bundle, health, mcp_profiles, volunteer_context
 from . import compile as compile_mod
 from . import digest as digest_mod
 from . import lifecycle as life
@@ -1041,4 +1041,12 @@ def run_stdio() -> None:
     """Entry point used by `vouch serve`."""
     configure_logging()
     trust_mod.set_stdio_default(trust_mod.MCP_STDIO)
+    try:
+        cfg: dict[str, Any] | None = _load_cfg(_store())
+    except Exception:
+        cfg = None
+    profile = mcp_profiles.resolve_profile_name(cfg)
+    mcp_profiles.apply_tool_profile(mcp, profile)
+    if profile != "full":
+        mcp_profiles.compact_descriptions(mcp)
     mcp.run()

@@ -91,9 +91,9 @@ def _starter_config() -> dict[str, Any]:
             "max_chars": 12000,
         },
         "retrieval": {
-            # auto = embedding -> fts5 -> substring; or pin one of
+            # hybrid/auto = fuse embedding + fts5 via RRF; or pin one of
             # embedding | fts5 | substring. See context._retrieve.
-            "backend": "auto",
+            "backend": "hybrid",
             "default_limit": 10,
         },
         "agents": {

@@ -1,0 +1,26 @@
+name: Gittensor Impact
+
+# renders the gittensor contributor-impact card and publishes it as release
+# assets. runs weekly and on demand; github's image proxy caches the badge in
+# the readme for a few hours, so more frequent runs would not change anything.
+on:
+  schedule:
+    - cron: "0 14 * * 1"
+  workflow_dispatch:
+
+# no ambient token scopes — the one job below opts into exactly what it needs
+permissions: {}
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # publish the rendered svg cards to release assets
+    steps:
+      # third-party action pinned to the v1.1.4 commit sha, not a mutable tag,
+      # so a later upstream retag cannot silently change what runs in ci.
+      - uses: matthewevans/gittensor-impact-action@cc83f449b75cbfbd3f7c70f796ad79f0f1d5d593 # v1.1.4
+        with:
+          accent-color: "#ff6a00"
+          neutral-color: "#85898b"
+          title: "${{ github.repository }} is part of the Gittensor community"

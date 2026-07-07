@@ -2416,6 +2416,30 @@ def context(
     _emit_json(pack)
 
 
+@cli.command(name="context-hook", hidden=True)
+def context_hook() -> None:
+    """Emit relevant KB context for a host UserPromptSubmit hook (reads stdin).
+
+    Wired by the claude-code adapter; not meant to be run by hand. Reads the
+    host's JSON hook payload on stdin, prints an additionalContext envelope,
+    and always exits 0 so it can never block a turn.
+    """
+    import sys
+
+    from . import hooks
+
+    stdin_text = sys.stdin.read()
+    store = _capture_store()
+    out = ""
+    if store is not None:
+        try:
+            out = hooks.build_claude_prompt_hook(store, stdin_text)
+        except Exception:
+            out = ""
+    if out:
+        click.echo(out)
+
+
 @cli.command()
 @click.argument("query")
 @click.option("--depth", default=3, show_default=True, type=int)

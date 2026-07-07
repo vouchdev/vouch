@@ -25,6 +25,13 @@ The server speaks MCP over stdin/stdout. Your host configures it as a
 subprocess. Method `kb.search` is exposed as MCP tool `kb_search`
 (dots aren't valid in MCP tool names).
 
+By default only a core set of `kb_*` tools is exposed (profile
+`minimal`) to keep the per-turn tool-choice cost down; set
+`VOUCH_TOOL_PROFILE` (env var, wins) or `mcp.tool_profile` in
+`config.yaml` to `standard` or `full` to widen the surface. Outside
+`full`, each exposed tool's description is also trimmed to its first
+line.
+
 ### Resources
 
 vouch also exposes read-only views as MCP resources:
