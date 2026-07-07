@@ -524,7 +524,13 @@ def approve(
         _ensure_no_existing_artifact(store, proposal.kind, payload["id"])
     result: Claim | Page | Entity | Relation
     if proposal.kind == ProposalKind.CLAIM:
-        claim = Claim(approved_by=approved_by, **payload)
+        is_auto_approved = approved_by == proposal.proposed_by
+        claim = Claim(
+            approved_by=approved_by,
+            proposed_by=proposal.proposed_by,
+            auto_approved=is_auto_approved,
+            **payload
+        )
         store.put_claim(claim)
         with index_db.open_db(store.kb_dir) as conn:
             index_db.index_claim(
