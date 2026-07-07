@@ -871,6 +871,16 @@ def test_contradict_marks_both_contested(store: KBStore) -> None:
     assert rel.relation == RelationType.CONTRADICTS
 
 
+def test_contradict_rejects_self_reference(store: KBStore) -> None:
+    src = store.put_source(b"e")
+    store.put_claim(Claim(id="a", text="x", evidence=[src.id]))
+    with pytest.raises(lifecycle.LifecycleError, match="cannot contradict itself"):
+        lifecycle.contradict(store, claim_a="a", claim_b="a", actor="u")
+    claim = store.get_claim("a")
+    assert claim.contradicts == []
+    assert claim.status != ClaimStatus.CONTESTED
+
+
 def test_archive_changes_status(store: KBStore) -> None:
     src = store.put_source(b"e")
     store.put_claim(Claim(id="c1", text="x", evidence=[src.id]))
