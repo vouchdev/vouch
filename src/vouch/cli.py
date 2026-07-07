@@ -11,6 +11,7 @@ import getpass
 import io
 import json
 import os
+import sqlite3
 import sys
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
@@ -2312,14 +2313,20 @@ def search(
         )
         used = "embedding" if hits else used
     if not hits and backend in ("auto", "fts5"):
-        hits = index_db.search(store.kb_dir, q, limit=fetch_limit)
-        used = "fts5" if hits else used
+        try:
+            hits = index_db.search(store.kb_dir, q, limit=fetch_limit)
+            used = "fts5" if hits else used
+        except sqlite3.Error:
+            hits = []
     if not hits and backend in ("auto", "substring"):
         hits = store.search_substring(q, limit=fetch_limit)
         used = "substring"
     if backend == "hybrid":
         emb = index_db.search_semantic(store.kb_dir, q, limit=fetch_limit * 2)
-        fts = index_db.search(store.kb_dir, q, limit=fetch_limit * 2)
+        try:
+            fts = index_db.search(store.kb_dir, q, limit=fetch_limit * 2)
+        except sqlite3.Error:
+            fts = []
         hits = rrf_fuse(emb, fts, limit=fetch_limit)
         used = "hybrid"
 
