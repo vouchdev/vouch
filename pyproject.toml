@@ -1,6 +1,6 @@
 [project]
-name = "vouch-kb"
-version = "1.2.1"
+name = "vouch"
+version = "0.0.1"
 description = "Git-native, review-gated knowledge base for LLM agents. MCP server + CLI."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -19,34 +19,24 @@ classifiers = [
 dependencies = [
     "pydantic>=2.13.4,<3",
     "click>=8.4.0,<9",
+    "click>=8.1,<9",
     "pyyaml>=6,<7",
     "mcp>=1.0,<2",
 ]
 
 [project.optional-dependencies]
-embeddings = [
-    "sentence-transformers>=3,<4",
-    "numpy>=1.26,<2",
-]
-web = [
-    "fastapi>=0.115,<1",
-    "jinja2>=3,<4",
-    "python-multipart>=0.0.9",
-    "uvicorn>=0.30,<1",
-    # uvicorn needs a websockets implementation to serve the /ws realtime
-    # channel; without it the WebSocket handshake 500s at runtime.
-    "websockets>=12,<16",
-]
 dev = [
     "pytest>=9.0.3,<10",
-    "pytest-benchmark>=5,<6",
     "pytest-cov>=5,<6",
     "mypy>=2.1.0",
     "ruff>=0.15.13",
+    "mypy>=1.10",
     "types-pyyaml",
-    "httpx>=0.28,<1",
-    # the wheel-contents regression test builds with the real backend
-    "hatchling>=1.21",
+]
+embeddings = [
+    "sentence-transformers>=2.7,<4",
+    "numpy>=1.26,<3",
+    "sqlite-vec>=0.1,<1",
 ]
 embeddings-fast = [
     "fastembed>=0.3,<1",
@@ -71,12 +61,6 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/vouch"]
-
-# `vouch install-mcp <host>` copies templates out of adapters/. Ship them
-# inside the wheel so installed (pip/pipx) copies can find them; from a
-# checkout the repo-root adapters/ still wins (see install_adapter.py).
-[tool.hatch.build.targets.wheel.force-include]
-"adapters" = "vouch/adapters"
 
 [tool.ruff]
 line-length = 100
@@ -112,12 +96,4 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = ["fastembed", "fastembed.*"]
-ignore_missing_imports = true
-
-# fastapi + jinja2 + uvicorn live behind the [web] extra; the base CI install
-# only has [dev], so mypy can't resolve them when scanning src/vouch/web/.
-# The web module guards its own imports with a clean ImportError message so
-# the runtime story stays clean even without the extra.
-[[tool.mypy.overrides]]
-module = ["fastapi", "fastapi.*", "uvicorn", "uvicorn.*", "starlette", "starlette.*"]
 ignore_missing_imports = true
