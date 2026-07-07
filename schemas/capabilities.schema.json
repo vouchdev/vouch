@@ -12,6 +12,17 @@
       "title": "Context Engines",
       "type": "array"
     },
+    "host_compat": {
+      "additionalProperties": {
+        "additionalProperties": {
+          "type": "string"
+        },
+        "type": "object"
+      },
+      "description": "Host compatibility metadata keyed by host/plugin id.",
+      "title": "Host Compat",
+      "type": "object"
+    },
     "knowledge_capability": {
       "additionalProperties": true,
       "title": "Knowledge Capability",

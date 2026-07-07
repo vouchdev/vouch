@@ -101,6 +101,12 @@ def test_package_json_declares_entry_and_compat(package_json: dict) -> None:
     assert openclaw["compat"]["pluginApi"]
 
 
+def test_manifest_declares_openclaw_compat(manifest: dict, package_json: dict) -> None:
+    assert manifest["openclaw"]["compat"]["pluginApi"] == (
+        package_json["openclaw"]["compat"]["pluginApi"]
+    )
+
+
 def test_manifest_skills_are_publishable_dirs(manifest: dict) -> None:
     """Each skills entry must resolve to dirs OpenClaw can publish.
 
@@ -144,7 +150,6 @@ def test_manifest_carries_no_dead_dialect_fields(manifest: dict) -> None:
         "mcpServers",
         "shared_deps",
         "excluded_from_install",
-        "openclaw",
         "contracts",
     )
     for dead in dead_fields:
