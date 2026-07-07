@@ -33,7 +33,6 @@ All notable changes to vouch are documented here. Format follows
 - retrieval `auto`/`hybrid` now **fuses embedding + fts5** results via
   reciprocal rank fusion instead of a waterfall (embedding-first,
   fts5-fallback), with near-duplicate suppression over the fused list.
-
 ## [1.2.2] — 2026-07-07
 
 ### Packaging
