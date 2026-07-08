@@ -6,6 +6,16 @@ All notable changes to vouch are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+- `retrieval.rerank.enabled` (default false) wires the existing
+  cross-encoder reranker (`embeddings/rerank.py`, already used by
+  `vouch search --rerank`) into the `kb.context` / `kb.search` hybrid read
+  path. When enabled, fused RRF hits are reordered by the reranker before
+  scoping filters run; `retrieval.rerank.top_k` controls the rerank window
+  (default: the query's context limit). Off by default, so existing
+  rankings are byte-identical until a kb opts in; degrades to the fused
+  order if the optional reranker extra isn't installed.
+
 ## [1.2.2] — 2026-07-07
 
 ### Packaging
