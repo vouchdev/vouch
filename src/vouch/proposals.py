@@ -682,6 +682,64 @@ _ARTIFACT_GETTERS = {
 }
 
 
+_DELETE_KINDS = {"claim", "page", "entity", "relation"}
+
+_DELETE_GETTERS = {
+    "claim": "get_claim",
+    "page": "get_page",
+    "entity": "get_entity",
+    "relation": "get_relation",
+}
+
+
+def referenced_by(store: KBStore, target_kind: str, target_id: str) -> list[str]:
+    """Inbound referrers to `target_id` — the "block if referenced" gate.
+
+    Returns human-readable descriptions of artifacts that point AT the
+    target. Only inbound refs count; outbound refs (what the target itself
+    points at) are never returned, because deleting the holder simply drops
+    its own pointers. An empty list means the artifact is safe to delete.
+    """
+    if target_kind not in _DELETE_KINDS:
+        raise ProposalError(
+            f"unknown target_kind {target_kind!r}; expected one of "
+            f"{sorted(_DELETE_KINDS)}"
+        )
+    refs: list[str] = []
+    if target_kind == "claim":
+        for page in store.list_pages():
+            if target_id in page.claims:
+                refs.append(f"page {page.id!r}")
+        for rel in store.list_relations():
+            if target_id in (rel.source, rel.target):
+                refs.append(f"relation {rel.id!r}")
+        for claim in store.list_claims():
+            if claim.id == target_id:
+                continue
+            if (
+                target_id in claim.supersedes
+                or claim.superseded_by == target_id
+                or target_id in claim.contradicts
+            ):
+                refs.append(f"claim {claim.id!r}")
+    elif target_kind == "page":
+        for rel in store.list_relations():
+            if target_id in (rel.source, rel.target):
+                refs.append(f"relation {rel.id!r}")
+    elif target_kind == "entity":
+        for claim in store.list_claims():
+            if target_id in claim.entities:
+                refs.append(f"claim {claim.id!r}")
+        for page in store.list_pages():
+            if target_id in page.entities:
+                refs.append(f"page {page.id!r}")
+        for rel in store.list_relations():
+            if target_id in (rel.source, rel.target):
+                refs.append(f"relation {rel.id!r}")
+    # target_kind == "relation": edges have no inbound refs → refs stays empty
+    return refs
+
+
 def _ensure_no_existing_artifact(
     store: KBStore, kind: ProposalKind, artifact_id: str
 ) -> None:

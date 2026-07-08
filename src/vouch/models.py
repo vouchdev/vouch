@@ -394,6 +394,7 @@ class ProposalKind(StrEnum):
     PAGE = "page"
     ENTITY = "entity"
     RELATION = "relation"
+    DELETE = "delete"
 
 
 class ProposalStatus(StrEnum):

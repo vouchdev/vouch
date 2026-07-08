@@ -7,7 +7,8 @@ from pathlib import Path
 import pytest
 
 from vouch import index_db
-from vouch.models import Claim, Entity, EntityType, Page, Relation, RelationType
+from vouch.models import Claim, Entity, EntityType, Page, ProposalKind, Relation, RelationType
+from vouch.proposals import ProposalError, referenced_by
 from vouch.storage import ArtifactNotFoundError, KBStore
 
 
@@ -92,3 +93,54 @@ def test_deindex_relation_only_touches_embedding_and_prov(store: KBStore) -> Non
         assert conn.execute(
             "SELECT count(*) FROM prov_edges WHERE src_id='r1' OR dst_id='r1'"
         ).fetchone()[0] == 0
+
+
+def test_proposalkind_has_delete() -> None:
+    assert ProposalKind.DELETE.value == "delete"
+
+
+def test_claim_referenced_by_page(store: KBStore) -> None:
+    _claim(store, "c1")
+    store.put_page(Page(id="p1", title="P", body="", claims=["c1"]))
+    refs = referenced_by(store, "claim", "c1")
+    assert any("p1" in r for r in refs)
+
+
+def test_claim_referenced_by_relation_and_supersede(store: KBStore) -> None:
+    _claim(store, "c1")
+    _claim(store, "c2")
+    store.put_relation(Relation(
+        id="c2--supports--c1", source="c2",
+        relation=RelationType.SUPPORTS, target="c1",
+    ))
+    refs = referenced_by(store, "claim", "c1")
+    assert any("relation" in r for r in refs)
+
+
+def test_unreferenced_claim_is_deletable(store: KBStore) -> None:
+    _claim(store, "lonely")
+    assert referenced_by(store, "claim", "lonely") == []
+
+
+def test_entity_referenced_by_claim(store: KBStore) -> None:
+    store.put_entity(Entity(id="e1", name="E", type=EntityType.CONCEPT))
+    src = store.put_source(b"s")
+    store.put_claim(Claim(id="c1", text="mentions e1", evidence=[src.id], entities=["e1"]))
+    refs = referenced_by(store, "entity", "e1")
+    assert any("c1" in r for r in refs)
+
+
+def test_relation_never_blocked(store: KBStore) -> None:
+    _claim(store, "c1")
+    _claim(store, "c2")
+    store.put_relation(Relation(
+        id="c1--supports--c2", source="c1",
+        relation=RelationType.SUPPORTS, target="c2",
+    ))
+    # nothing points at an edge → always deletable
+    assert referenced_by(store, "relation", "c1--supports--c2") == []
+
+
+def test_referenced_by_unknown_kind_raises(store: KBStore) -> None:
+    with pytest.raises(ProposalError):
+        referenced_by(store, "source", "x")
