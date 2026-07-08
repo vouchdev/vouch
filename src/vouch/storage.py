@@ -664,6 +664,34 @@ class KBStore:
         )
         return rel
 
+    def delete_claim(self, claim_id: str) -> None:
+        """Remove a claim file. Pure I/O; ref checks live in `proposals`."""
+        path = self._claim_path(claim_id)
+        if not path.exists():
+            raise ArtifactNotFoundError(f"claim {claim_id}")
+        path.unlink()
+
+    def delete_page(self, page_id: str) -> None:
+        """Remove a page file. Pure I/O; ref checks live in `proposals`."""
+        path = self._page_path(page_id)
+        if not path.exists():
+            raise ArtifactNotFoundError(f"page {page_id}")
+        path.unlink()
+
+    def delete_entity(self, entity_id: str) -> None:
+        """Remove an entity file. Pure I/O; ref checks live in `proposals`."""
+        path = self._entity_path(entity_id)
+        if not path.exists():
+            raise ArtifactNotFoundError(f"entity {entity_id}")
+        path.unlink()
+
+    def delete_relation(self, relation_id: str) -> None:
+        """Remove a relation file. Pure I/O; ref checks live in `proposals`."""
+        path = self._relation_path(relation_id)
+        if not path.exists():
+            raise ArtifactNotFoundError(f"relation {relation_id}")
+        path.unlink()
+
     def get_relation(self, rid: str) -> Relation:
         p = self._relation_path(rid)
         if not p.exists():
