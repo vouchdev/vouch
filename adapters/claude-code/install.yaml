@@ -2,8 +2,10 @@
 #
 # T1 = MCP wire (project-local `.mcp.json` picked up by `claude` on launch).
 # T2 = CLAUDE.md fenced snippet (idempotent append, see install_adapter._install_fenced).
-# T3 = four custom slash commands (`/vouch-recall`, `/vouch-status`,
-#      `/vouch-resolve-issue`, `/vouch-propose-from-pr`).
+# T3 = custom slash commands (`/vouch-recall`, `/vouch-status`,
+#      `/vouch-resolve-issue`, `/vouch-propose-from-pr`, plus the
+#      company-brain set: `/vouch-ask`, `/vouch-remember`, `/vouch-record`,
+#      `/vouch-followup`, `/vouch-standup`).
 # T4 = `.claude/settings.json`: SessionStart (kb status + capture review banner +
 #      recall digest of approved knowledge), PostToolUse (capture observe),
 #      SessionEnd (capture finalize), plus read-only kb_* auto-allow.
@@ -22,5 +24,10 @@ tiers:
     - { src: .claude/commands/vouch-status.md, dst: .claude/commands/vouch-status.md }
     - { src: .claude/commands/vouch-resolve-issue.md, dst: .claude/commands/vouch-resolve-issue.md }
     - { src: .claude/commands/vouch-propose-from-pr.md, dst: .claude/commands/vouch-propose-from-pr.md }
+    - { src: .claude/commands/vouch-ask.md, dst: .claude/commands/vouch-ask.md }
+    - { src: .claude/commands/vouch-remember.md, dst: .claude/commands/vouch-remember.md }
+    - { src: .claude/commands/vouch-record.md, dst: .claude/commands/vouch-record.md }
+    - { src: .claude/commands/vouch-followup.md, dst: .claude/commands/vouch-followup.md }
+    - { src: .claude/commands/vouch-standup.md, dst: .claude/commands/vouch-standup.md }
   T4:
     - { src: .claude/settings.json, dst: .claude/settings.json, json_merge: true }

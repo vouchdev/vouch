@@ -27,6 +27,18 @@ it went into the docs. If a feature isn't verified yet, it's in the
   while it works), and the review loop where you approve what lands. About 10
   minutes; needs a KB from the first tutorial.
 
+- [**Carry what one Claude Code session learned into the next**](remember-across-sessions.md)
+  — the two-session story, told entirely through prompts typed into the Claude
+  Code window (real captured transcripts). Monday you type a bug report;
+  Claude fixes it and proposes what it learned to vouch on its own (MCP +
+  hooks — you never type a vouch command except the 30-second approve).
+  Tuesday you type a PR-review question into a brand-new session: the
+  SessionStart hook has already injected the approved claims, and Claude
+  answers in 2 turns and 15 seconds citing the incident and the regression
+  test — while the same question without vouch is 33% slower and generic.
+  Includes a measured A/B benchmark (~17% faster, ~32% fewer turns, ~18%
+  cheaper on the same bug-fix task). About 15 minutes.
+
 - [**Share a knowledge base across machines and teammates**](share-a-knowledge-base.md)
   — bundle a reviewed KB into a portable `.tar.gz`, preview the diff before you
   apply it, and import it into another KB with conflict-safe merging. Shows why

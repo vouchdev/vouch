@@ -19,6 +19,7 @@ from typing import Any, Literal, cast
 import yaml
 
 from . import graph, index_db
+from .embeddings.fusion import rrf_fuse
 from .models import ClaimStatus, ContextItem, ContextPack, ContextQuality
 from .scoping import (
     ViewerContext,
@@ -42,7 +43,7 @@ _RETRACTED_CLAIM_STATUSES = frozenset({
 
 ContextItemKind = Literal["claim", "page", "entity", "relation", "source"]
 
-_VALID_BACKENDS = ("auto", "embedding", "fts5", "substring")
+_VALID_BACKENDS = ("auto", "hybrid", "embedding", "fts5", "substring")
 
 
 def _configured_backend(store: KBStore) -> str:
@@ -82,7 +83,8 @@ def _retrieve(
     """Return list of (kind, id, summary, score, backend).
 
     The backend is chosen by `retrieval.backend` in config.yaml:
-      - "auto" (default): embedding -> FTS5 -> substring
+      - "auto" (default) / "hybrid": fuse embedding + FTS5 via RRF, falling
+        back to a substring scan only if both retrievers are empty
       - "embedding": semantic search only
       - "fts5": lexical FTS5 only
       - "substring": substring scan only
@@ -90,34 +92,38 @@ def _retrieve(
     backend = _configured_backend(store)
     fetch_limit = scoped_fetch_limit(limit, viewer)
 
-    if backend in ("auto", "embedding"):
+    if backend in ("auto", "hybrid"):
+        sem = index_db.search_semantic(store.kb_dir, query, limit=fetch_limit)
+        try:
+            lex = index_db.search(store.kb_dir, query, limit=fetch_limit)
+        except sqlite3.Error:
+            lex = []
+        fused = rrf_fuse(sem, lex, limit=fetch_limit)
+        if fused:
+            filtered = filter_hits(store, fused, viewer, limit=limit)
+            return [(k, i, s, sc, "hybrid") for k, i, s, sc in filtered]
+        # both retrievers empty -> fall through to the substring scan below.
+
+    if backend == "embedding":
         raw = index_db.search_semantic(store.kb_dir, query, limit=fetch_limit)
         if raw:
             filtered = filter_hits(store, raw, viewer, limit=limit)
             return [(k, i, s, sc, "embedding") for k, i, s, sc in filtered]
-        if backend == "embedding":
-            return []
+        return []
 
-    if backend in ("auto", "fts5"):
+    if backend == "fts5":
         try:
             hits = index_db.search(store.kb_dir, query, limit=fetch_limit)
             if hits:
                 filtered = filter_hits(store, hits, viewer, limit=limit)
                 return [(k, i, s, sc, "fts5") for k, i, s, sc in filtered]
         except sqlite3.Error:
-            # FTS5 unavailable, db missing, or schema mismatch — fall through
-            # to substring scan (auto) or empty (explicit fts5). Other
-            # exceptions are real bugs and propagate.
             pass
-        if backend == "fts5":
-            return []
+        return []
 
     substring_hits = store.search_substring(query, limit=fetch_limit)
     filtered = filter_hits(store, substring_hits, viewer, limit=limit)
-    return [
-        (k, i, s, sc, "substring")
-        for k, i, s, sc in filtered
-    ]
+    return [(k, i, s, sc, "substring") for k, i, s, sc in filtered]
 
 
 def _enrich_summary(store: KBStore, kind: str, artifact_id: str, summary: str) -> str:
@@ -197,6 +203,36 @@ def _append_graph_neighbors(
     return warnings
 
 
+def _jaccard(a: set[str], b: set[str]) -> float:
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a | b)
+
+
+def _dedupe_near_duplicates(items: list[ContextItem]) -> list[ContextItem]:
+    """Drop items whose summary is near-identical to a higher-scored one.
+
+    The *keep* decision runs in descending-score order so the highest-scored
+    member of a near-duplicate cluster survives; survivors are returned in the
+    caller's original order. build_context_pack appends lower-priority items
+    (graph-expansion neighbours) after the ranked hits and relies on that tail
+    ordering for budget eviction, so this pass must not re-rank the pack.
+
+    Cheap greedy heuristic (token-set Jaccard >= 0.85 over the first 40 tokens);
+    it can over-merge long near-templated claims that differ by a single token.
+    """
+    dropped: set[int] = set()
+    kept_tokens: list[set[str]] = []
+    order = sorted(range(len(items)), key=lambda i: items[i].score, reverse=True)
+    for idx in order:
+        toks = set(items[idx].summary.lower().split()[:40])
+        if any(_jaccard(toks, seen) >= 0.85 for seen in kept_tokens):
+            dropped.add(idx)
+            continue
+        kept_tokens.append(toks)
+    return [it for i, it in enumerate(items) if i not in dropped]
+
+
 def build_context_pack(
     store: KBStore,
     *,
@@ -255,6 +291,9 @@ def build_context_pack(
                 rel_types=graph_rel_types,
             )
         )
+
+    items = _dedupe_near_duplicates(items)
+
     failed: list[str] = []
     uncited: list[str] = []
     budget_truncated = False

@@ -19,8 +19,11 @@ from typing import Any
 import yaml
 from mcp.server.fastmcp import FastMCP
 
-from . import audit, bundle, health, volunteer_context
+from . import audit, bundle, health, mcp_profiles, volunteer_context
+from . import compile as compile_mod
+from . import digest as digest_mod
 from . import lifecycle as life
+from . import metrics as metrics_mod
 from . import salience as salience_mod
 from . import sessions as sess_mod
 from . import trust as trust_mod
@@ -30,6 +33,7 @@ from .context import build_context_pack
 from .eval.effectiveness import compute_effectiveness
 from .logging_config import configure_logging
 from .models import ProposalStatus
+from .page_filters import filter_pages
 from .proposals import (
     EXPIRE_ACTOR,
     ProposalError,
@@ -91,6 +95,28 @@ def kb_stats(*, days: int = 30) -> dict[str, Any]:
     """
     since = None if days == 0 else days
     return collect_stats(_store(), since_days=since)
+
+
+@mcp.tool()
+def kb_digest(
+    *,
+    since: str = digest_mod.DEFAULT_SINCE_SPEC,
+    stale_days: int = metrics_mod.DEFAULT_STALE_DAYS,
+    limit: int = digest_mod.DEFAULT_LIMIT,
+) -> dict[str, Any]:
+    """Read-only reviewer briefing: pending proposals oldest-first, recent
+    decisions, stale claims, and followups due.
+
+    since: window spec — a duration ("7d", "12h"), an ISO date, or "all".
+    """
+    store = _store()
+    d = digest_mod.build(
+        store,
+        since=metrics_mod.parse_since(since),
+        stale_after_days=stale_days,
+        limit=limit,
+    )
+    return d.to_dict()
 
 
 # === read tools (unrestricted) ============================================
@@ -299,10 +325,42 @@ def kb_read_relation(relation_id: str) -> dict[str, Any]:
 
 
 @mcp.tool()
-def kb_list_pages() -> list[dict[str, Any]]:
+def kb_diff(old_id: str, new_id: str | None = None) -> dict[str, Any]:
+    """Field-level diff between two claim revisions or two page revisions.
+
+    new_id is optional for a superseded claim: resolves to superseded_by.
+    """
+    from dataclasses import asdict
+
+    from .diff import diff_artifacts
+    return asdict(diff_artifacts(_store(), old_id, new_id))
+
+
+@mcp.tool()
+def kb_list_pages(
+    *,
+    type: str | None = None,
+    meta: dict[str, str] | None = None,
+    meta_before: dict[str, str] | None = None,
+    meta_after: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
+    """List pages, optionally filtered by kind and frontmatter.
+
+    type: page kind (built-in or config-declared, e.g. "followup").
+    meta: frontmatter equality, e.g. {"followup_status": "open"}.
+    meta_before / meta_after: inclusive bounds — numbers or ISO dates,
+    e.g. meta_before={"due_at": "2026-07-10"} for followups due by then.
+    """
+    pages = filter_pages(
+        _store().list_pages(),
+        kind=type,
+        equals=meta,
+        before=meta_before,
+        after=meta_after,
+    )
     return [
-        {"id": p.id, "title": p.title, "type": p.type, "tags": p.tags}
-        for p in _store().list_pages()
+        {"id": p.id, "title": p.title, "type": p.type, "tags": p.tags, "metadata": p.metadata}
+        for p in pages
     ]
 
 
@@ -349,6 +407,23 @@ def kb_list_pending() -> list[dict[str, Any]]:
         p.model_dump(mode="json")
         for p in _store().list_proposals(ProposalStatus.PENDING)
     ]
+
+
+@mcp.tool()
+def kb_triage_pending(proposal_ids: list[str] | None = None) -> list[dict[str, Any]]:
+    """Advisory triage scoring over the pending-review queue.
+
+    Attaches `_meta.vouch_triage` (recommendation/score/signals/rationale)
+    to each pending proposal's view. Read-only — never approves, rejects,
+    or otherwise decides; a human still calls `kb_approve` / `kb_reject`.
+    Opt-in: disabled unless `triage.enabled: true` is set in config.yaml.
+    """
+    from . import triage as triage_mod
+
+    try:
+        return triage_mod.triage_pending(_store(), proposal_ids=proposal_ids)
+    except (ValueError, ArtifactNotFoundError) as e:
+        raise ValueError(str(e)) from e
 
 
 # === write tools — gated (produce proposals) =============================
@@ -442,6 +517,29 @@ def kb_propose_page(
     except (ProposalError, ArtifactNotFoundError, ValueError) as e:
         raise ValueError(str(e)) from e
     return _proposal_response(pr, dry_run)
+
+
+@mcp.tool()
+def kb_compile(
+    max_pages: int | None = None,
+    dry_run: bool = False,
+    session_id: str | None = None,
+) -> dict[str, Any]:
+    """Compile live approved claims into topic-page proposals.
+
+    Runs the deployment-configured LLM (compile.llm_cmd in config.yaml),
+    validates every citation in the drafts, and files survivors as PENDING
+    page proposals by the wiki-compiler actor. Long-running (the LLM call is
+    synchronous); never approves.
+    """
+    try:
+        report = compile_mod.compile_kb(
+            _store(), triggered_by=_agent(),
+            max_pages=max_pages, dry_run=dry_run, session_id=session_id,
+        )
+    except compile_mod.CompileError as e:
+        raise ValueError(str(e)) from e
+    return report.to_dict()
 
 
 @mcp.tool()
@@ -958,4 +1056,12 @@ def run_stdio() -> None:
     """Entry point used by `vouch serve`."""
     configure_logging()
     trust_mod.set_stdio_default(trust_mod.MCP_STDIO)
+    try:
+        cfg: dict[str, Any] | None = _load_cfg(_store())
+    except Exception:
+        cfg = None
+    profile = mcp_profiles.resolve_profile_name(cfg)
+    mcp_profiles.apply_tool_profile(mcp, profile)
+    if profile != "full":
+        mcp_profiles.compact_descriptions(mcp)
     mcp.run()

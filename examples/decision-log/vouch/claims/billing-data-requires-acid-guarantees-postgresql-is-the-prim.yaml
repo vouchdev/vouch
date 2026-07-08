@@ -1,0 +1,20 @@
+id: billing-data-requires-acid-guarantees-postgresql-is-the-prim
+text: Billing data requires ACID guarantees; PostgreSQL is the primary data store.
+type: decision
+status: working
+confidence: 0.95
+evidence:
+- 1f8ef21996a0f59eeb5174071f5293fc3b864defe928b9ce7879022a8230dbc8
+entities: []
+supersedes: []
+superseded_by: null
+contradicts: []
+scope:
+  visibility: project
+  project: null
+  agent: null
+tags: []
+created_at: '2026-07-03T09:15:19.459070Z'
+updated_at: '2026-07-03T09:15:19.459072Z'
+last_confirmed_at: null
+approved_by: a

@@ -238,10 +238,82 @@ def test_build_summary_body_has_sections() -> None:
         {"ts": 2.0, "tool": "Bash", "summary": "Ran: pytest", "cmd": "pytest"},
     ]
     title, body = cap.build_summary_body("s1", obs, ["a.py"], "a.py | 2 +-")
-    assert "s1" in title
+    # the title describes what changed, never the uuid; the uuid stays in the body
+    assert "a.py" in title
+    assert "s1" not in title
+    assert "- session: `s1`" in body
     assert "files modified this session" in body.lower()
     assert "## activity" in body.lower()
     assert "a.py" in body
+
+
+def test_title_uses_first_prompt_excerpt() -> None:
+    obs = [{"ts": 1.0, "tool": "Edit", "summary": "Edited a.py", "files": ["a.py"]}]
+    title, body = cap.build_summary_body(
+        "s1", obs, ["a.py"], "", first_prompt="fix the login redirect bug in oauth",
+    )
+    assert title == "session: fix the login redirect bug in oauth"
+    assert "## prompt" in body
+    assert "> fix the login redirect bug in oauth" in body
+
+    long_prompt = "p" * 300
+    title, _ = cap.build_summary_body("s1", obs, [], "", first_prompt=long_prompt)
+    assert len(title) <= len("session: ") + 64
+    assert title.endswith("…")
+
+
+def test_title_fallback_names_dirs_and_date() -> None:
+    files = ["web/app.css", "web/index.html", "docs/guide.md"]
+    title, _ = cap.build_summary_body(
+        "s1", [], files, "", generated_at="2026-07-04T10:00:00+00:00",
+    )
+    assert title == "session 2026-07-04: web, docs — 3 file(s)"
+
+    title, _ = cap.build_summary_body("s1", [{"ts": 1.0, "tool": "Read", "summary": "x"}], [], "")
+    assert "no file changes" in title
+
+
+def test_first_user_prompt_skips_host_wrappers(tmp_path: Path) -> None:
+    transcript = tmp_path / "t.jsonl"
+    lines = [
+        {"type": "queue-operation", "operation": "enqueue"},
+        {
+            "type": "user",
+            "message": {"role": "user", "content": "<command-name>/model</command-name>"},
+        },
+        {
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": "<local-command-stdout>ok</local-command-stdout>",
+            },
+        },
+        {"type": "user", "isMeta": True, "message": {"role": "user", "content": "meta noise"}},
+        {"type": "user", "message": {"role": "user", "content": [
+            {"type": "text", "text": "  please add   retry logic\nto the fetcher  "},
+        ]}},
+        {"type": "user", "message": {"role": "user", "content": "a later prompt"}},
+    ]
+    transcript.write_text(
+        "\n".join(_json.dumps(entry) for entry in lines), encoding="utf-8"
+    )
+    assert cap.first_user_prompt(transcript) == "please add retry logic to the fetcher"
+    assert cap.first_user_prompt(tmp_path / "missing.jsonl") is None
+
+
+def test_finalize_reads_transcript_for_title(store: KBStore, tmp_path: Path) -> None:
+    from vouch.models import ProposalStatus
+
+    _seed(store, "s1", 3)
+    transcript = tmp_path / "t.jsonl"
+    transcript.write_text(
+        _json.dumps({"type": "user", "message": {"role": "user", "content": "ship the digest"}}),
+        encoding="utf-8",
+    )
+    cap.finalize(store, "s1", cwd=tmp_path, transcript_path=transcript)
+    pend = store.list_proposals(ProposalStatus.PENDING)
+    assert len(pend) == 1
+    assert pend[0].payload["title"] == "session: ship the digest"
 
 
 def test_pending_count_counts_capture_actor(store: KBStore, tmp_path: Path) -> None:

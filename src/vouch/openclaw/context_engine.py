@@ -5,9 +5,16 @@ memory into a single ``systemPromptAddition`` block. Compaction stays with the
 legacy OpenClaw runtime (``ownsCompaction: false``), matching gbrain-context's
 delegation posture.
 
-Enable in ``openclaw.json``::
+Enable in ``openclaw.json`` (the OpenClaw installer auto-binds this when it
+installs a ``kind: context-engine`` plugin)::
 
-    plugins.slots.contextEngine: "vouch-context"
+    plugins.slots.contextEngine: "vouch"
+
+The engine id deliberately equals the plugin id in ``openclaw.plugin.json``:
+OpenClaw's installer binds the contextEngine slot to the *plugin* id, and
+``resolveContextEngine`` looks the slot value up in the *engine* registry —
+distinct ids would quarantine the engine as "not registered" and silently
+fall back to the legacy engine.
 """
 
 from __future__ import annotations
@@ -37,7 +44,7 @@ from .types import (
 
 logger = logging.getLogger(__name__)
 
-ENGINE_ID = "vouch-context"
+ENGINE_ID = "vouch"
 ENGINE_NAME = "Vouch Context Engine"
 ENGINE_API_VERSION = "0.1.0"
 

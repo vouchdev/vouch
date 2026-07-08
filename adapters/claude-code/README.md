@@ -112,3 +112,6 @@ To upgrade or check your extension version, see [Claude Code releases](https://g
   (`kb_supersede`, `kb_contradict`, …) without you asking each time,
   add: "When you find a stale claim, supersede it rather than
   proposing a contradicting one."
+- Only a core set of `kb_*` tools is visible by default (`mcp.tool_profile:
+  minimal` in `.vouch/config.yaml`, or the `VOUCH_TOOL_PROFILE` env var).
+  Set it to `standard` or `full` to expose lifecycle/admin tools.

@@ -5,6 +5,7 @@ only the subprocess boundary is mocked; all stage logic is real.
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -54,6 +55,32 @@ def test_changed_files_extracts_paths_from_git_diff():
         "+++ b/src/new.py\n"
     )
     assert ds.changed_files(diff) == ["README.md", "src/new.py"]
+
+
+def test_recommendation_prefers_smaller_successful_diff():
+    claude = ds.Candidate(
+        "claude", "b-claude", Path("/w/claude"),
+        diff="diff --git a/a.txt b/a.txt\n+one\n", ok=True,
+    )
+    codex = ds.Candidate(
+        "codex", "b-codex", Path("/w/codex"),
+        diff="diff --git a/a.txt b/a.txt\n+one\n+two\n", ok=True,
+    )
+
+    rec = ds.recommendation([codex, claude])
+
+    assert rec["engine"] == "claude"
+    assert "smaller scoped diff" in (rec["reason"] or "")
+
+
+def test_recommendation_avoids_tiebreaking_equal_scope():
+    claude = ds.Candidate("claude", "b1", Path("/a"), diff="d", ok=True)
+    codex = ds.Candidate("codex", "b2", Path("/b"), diff="x", ok=True)
+
+    rec = ds.recommendation([claude, codex])
+
+    assert rec["engine"] is None
+    assert "equally scoped" in (rec["reason"] or "")
 
 
 def test_require_engines_raises_when_missing(monkeypatch):
@@ -140,6 +167,7 @@ def test_run_candidate_success_commits_and_captures_sha(tmp_path):
     assert cand.engine == "claude"
     assert cand.branch == "vouch-dual/3-fix-bug-claude"
     assert cand.diff == "patch text" and cand.sha == "abc123"
+    assert cand.log == "done"
     assert any(c[:5] == ["git", "-C", str(root), "worktree", "add"] for c in fr.calls)
     assert any(c[:4] == ["git", "-C", str(wt), "commit"] for c in fr.calls)
     assert any(c and c[0] == "claude" for c in fr.calls)
@@ -390,8 +418,16 @@ def test_cli_dual_solve_json_is_noninteractive(monkeypatch, tmp_path):
     from vouch.cli import cli
 
     issue = ds.Issue("t", "b", number=1)
-    cands = [ds.Candidate("claude", "b1", tmp_path / "a", diff="DA", ok=True),
-             ds.Candidate("codex", "b2", tmp_path / "b", diff="DB", ok=True)]
+    cands = [
+        ds.Candidate(
+            "claude", "b1", tmp_path / "a",
+            diff="diff --git a/a b/a\n+1\n", log="claude log", ok=True,
+        ),
+        ds.Candidate(
+            "codex", "b2", tmp_path / "b",
+            diff="diff --git a/b b/b\n+1\n+2\n", log="codex log", ok=True,
+        ),
+    ]
     monkeypatch.setattr("vouch.dual_solve._require_engines", lambda: None)
     monkeypatch.setattr("vouch.dual_solve.repo_root", lambda r, c: tmp_path)
     monkeypatch.setattr("vouch.dual_solve.prepare",
@@ -403,7 +439,10 @@ def test_cli_dual_solve_json_is_noninteractive(monkeypatch, tmp_path):
 
     r = CliRunner().invoke(cli, ["dual-solve", "o/n#1", "--json"])
     assert r.exit_code == 0, r.output
-    assert '"engine"' in r.output and "DA" in r.output and "DB" in r.output
+    body = json.loads(r.output)
+    assert body["recommendation"]["engine"] == "claude"
+    assert body["candidates"][0]["log"] == "claude log"
+    assert body["candidates"][1]["log"] == "codex log"
     # --json must not prompt and must not finalize/record.
     assert finalize_called["n"] == 0
 
