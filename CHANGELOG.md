@@ -6,6 +6,14 @@ All notable changes to vouch are documented here. Format follows
 
 ## [Unreleased]
 
+### Fixed
+- `compile_kb()` no longer lets two same-titled drafts in one LLM batch both
+  survive validation — the second collided with the first on approval and
+  silently overwrote it via the `update_page` vault-edit path. accepted
+  titles are now folded into `taken_names` as soon as they survive, so a
+  same-batch duplicate is dropped just like a collision with an existing
+  page or pending proposal.
+
 ## [1.2.2] — 2026-07-07
 
 ### Packaging

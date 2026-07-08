@@ -343,6 +343,11 @@ def compile_kb(
             report.dropped.append({"title": title, "reason": problem})
             continue
         survivors.append((draft, title))
+        # fold the accepted title into taken_names immediately: a later draft
+        # in this same batch colliding with it must be dropped too, mirroring
+        # how phase 2 folds survivors back in for wikilink resolution below.
+        taken_names.add(title.lower())
+        taken_names.add(_slugify(title))
 
     # phase 2: wikilinks resolve against existing pages + the *surviving*
     # batch, to a fixpoint — dropping a draft may dangle a link in another,

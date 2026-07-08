@@ -317,6 +317,27 @@ def test_collision_with_pending_proposal_dropped(
     assert "pending review" in second.dropped[0]["reason"]
 
 
+def test_same_batch_duplicate_titles_second_dropped(
+    store: KBStore, tmp_path: Path,
+) -> None:
+    """Two same-titled drafts in one compile_kb() call must not both survive
+    validation — the second would collide with the first on approval and
+    silently overwrite it via the update_page vault-edit path (#439)."""
+    c1 = _approved_claim(store, "a fact")
+    report = compile_kb(store, config=_cfg(_stub_llm(tmp_path, [
+        {"title": "Deploy Workflow", "type": "workflow",
+         "body": f"first body [claim: {c1}]", "claims": [c1]},
+        {"title": "Deploy Workflow", "type": "workflow",
+         "body": f"SECOND BODY totally different [claim: {c1}]",
+         "claims": [c1]},
+    ])))
+    assert len(report.proposed) == 1
+    assert "already exists" in report.dropped[0]["reason"]
+
+    approve(store, report.proposed[0]["proposal_id"], approved_by="human-B")
+    assert store.get_page("deploy-workflow").body == f"first body [claim: {c1}]"
+
+
 def test_dropped_sibling_dangles_wikilink_and_cascades(
     store: KBStore, tmp_path: Path,
 ) -> None:
