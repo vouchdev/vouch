@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from vouch import index_db
 from vouch.models import Claim, Entity, EntityType, Page, Relation, RelationType
 from vouch.storage import ArtifactNotFoundError, KBStore
 
@@ -56,3 +57,38 @@ def test_delete_relation_removes_file(store: KBStore) -> None:
     ))
     store.delete_relation(rel.id)
     assert not store._relation_path(rel.id).exists()
+
+
+def test_deindex_removes_fts_and_prov(store: KBStore) -> None:
+    _claim(store, "c1", "searchable claim text")
+    with index_db.open_db(store.kb_dir) as conn:
+        index_db.index_claim(
+            conn, id="c1", text="searchable claim text",
+            type="observation", status="working", tags=[],
+        )
+        index_db.index_prov_edge(conn, src_id="c1", dst_id="src-x", kind="cites")
+        index_db.index_prov_edge(conn, src_id="other", dst_id="c1", kind="cites")
+    # sanity: the fts row is present
+    with index_db.open_db(store.kb_dir) as conn:
+        pre = conn.execute("SELECT count(*) FROM claims_fts WHERE id='c1'").fetchone()[0]
+        assert pre == 1
+
+    with index_db.open_db(store.kb_dir) as conn:
+        index_db.deindex(conn, kind="claim", id="c1")
+
+    with index_db.open_db(store.kb_dir) as conn:
+        assert conn.execute("SELECT count(*) FROM claims_fts WHERE id='c1'").fetchone()[0] == 0
+        prov = conn.execute(
+            "SELECT count(*) FROM prov_edges WHERE src_id='c1' OR dst_id='c1'"
+        ).fetchone()[0]
+        assert prov == 0
+
+
+def test_deindex_relation_only_touches_embedding_and_prov(store: KBStore) -> None:
+    # relations have no FTS table; deindex must not raise for them.
+    with index_db.open_db(store.kb_dir) as conn:
+        index_db.index_prov_edge(conn, src_id="r1", dst_id="c2", kind="edge")
+        index_db.deindex(conn, kind="relation", id="r1")
+        assert conn.execute(
+            "SELECT count(*) FROM prov_edges WHERE src_id='r1' OR dst_id='r1'"
+        ).fetchone()[0] == 0
