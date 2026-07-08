@@ -228,3 +228,80 @@ def test_starter_config_has_split_defaults() -> None:
     split = _starter_config()["capture"]["split"]
     assert split["threshold_observations"] == 40
     assert split["enabled"] is True
+
+
+# --- kb.list_sessions: the session-review pipeline view --------------------
+
+
+def test_build_session_rows_lists_open_buffer(store: KBStore) -> None:
+    _observe(store, "sess-open", 3)
+    rows = session_split.build_session_rows(store)
+    row = next(r for r in rows if r["session_id"] == "sess-open")
+    assert row["stage"] == "buffer"
+    assert row["summarized"] is False
+    assert row["observations"] == 3
+    assert row["proposal_id"] is None
+    assert row["last_activity"] is not None
+
+
+def test_build_session_rows_lists_pending_summary(store: KBStore) -> None:
+    from vouch import capture
+    _observe(store, "sess-filed", 5)
+    capture.finalize(store, "sess-filed", cwd=None, generated_at="2026-07-09T00:00:00Z")
+    rows = session_split.build_session_rows(store)
+    row = next(r for r in rows if r["session_id"] == "sess-filed")
+    assert row["stage"] == "pending"
+    assert row["summarized"] is True
+    assert row["proposal_id"] is not None
+    assert row["kind"] == "page"
+    assert row["title"]
+
+
+def test_finalized_session_not_double_listed_as_buffer(store: KBStore) -> None:
+    from vouch import capture
+    _observe(store, "sess-x", 5)
+    capture.finalize(store, "sess-x", cwd=None, generated_at="2026-07-09T00:00:00Z")
+    rows = [r for r in session_split.build_session_rows(store) if r["session_id"] == "sess-x"]
+    assert len(rows) == 1
+    assert rows[0]["stage"] == "pending"
+
+
+def test_summarize_returns_webapp_keys_on_split(store: KBStore, tmp_path: Path) -> None:
+    _observe(store, "s1", 5)
+    cmd = _stub_llm(tmp_path, [{"title": "did the work", "body": "narrative " * 20}])
+    _config_with_split(store, cmd, threshold=3)
+    res = session_split.summarize(store, "s1", mode="auto")
+    assert res["session_id"] == "s1"
+    assert res["summarized"] is True
+    assert res["proposal_id"] == res["summary_proposal_ids"][0]
+
+
+def test_summarize_webapp_keys_on_skip(store: KBStore) -> None:
+    from vouch import capture
+    capture.observe(store, "s1", tool="Edit", summary="one", now=1.0)
+    res = session_split.summarize(store, "s1")
+    assert res["summarized"] is False
+    assert res["session_id"] == "s1"
+    assert res["proposal_id"] is None
+
+
+def test_summarize_fallback_flags_llm_failed(store: KBStore) -> None:
+    _observe(store, "s1", 50)  # over default threshold, no llm_cmd configured
+    res = session_split.summarize(store, "s1", mode="auto")
+    assert res["mode"] == "fallback"
+    assert res["summarized"] is False
+    assert res["skipped"] == "llm-failed"
+
+
+def test_kb_list_sessions_registered_and_returns_sessions(
+    store: KBStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import vouch.jsonl_server as js
+    from vouch import capabilities
+    assert "kb.list_sessions" in capabilities.METHODS
+    assert "kb.list_sessions" in js.HANDLERS
+    _observe(store, "sess-open", 3)
+    monkeypatch.setattr(js, "_store", lambda: store)
+    res = js.HANDLERS["kb.list_sessions"]({})
+    assert "sessions" in res
+    assert any(s["session_id"] == "sess-open" for s in res["sessions"])

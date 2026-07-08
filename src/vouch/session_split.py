@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,7 @@ from . import audit as audit_mod
 from . import capture, llm_draft
 from . import compile as compile_mod
 from .llm_draft import LLMDraftError
+from .models import ProposalStatus
 from .proposals import _slugify, propose_page
 from .storage import KBStore
 
@@ -107,7 +109,8 @@ def summarize(
     observations = capture._read_observations(path)
     if not cfg.enabled:
         return {"captured": len(observations), "summary_proposal_id": None,
-                "summary_proposal_ids": [], "mode": "skipped", "skipped": "disabled"}
+                "summary_proposal_ids": [], "mode": "skipped", "skipped": "disabled",
+                "session_id": session_id, "summarized": False, "proposal_id": None}
     if cwd is not None:
         changed_files, git_stat = capture._git_changes(cwd)
     else:
@@ -117,7 +120,8 @@ def summarize(
         if path.exists():
             path.unlink()
         return {"captured": total, "summary_proposal_id": None,
-                "summary_proposal_ids": [], "mode": "skipped", "skipped": "below-min"}
+                "summary_proposal_ids": [], "mode": "skipped", "skipped": "below-min",
+                "session_id": session_id, "summarized": False, "proposal_id": None}
 
     split_cfg = load_split_config(store)
     want_split = mode == "split" or (
@@ -134,7 +138,9 @@ def summarize(
                     path.unlink()
                 return {"captured": total, "summary_proposal_id": ids[0],
                         "summary_proposal_ids": ids, "mode": "split",
-                        "dropped": dropped, "truncated": truncated}
+                        "dropped": dropped, "truncated": truncated,
+                        "session_id": session_id, "summarized": True,
+                        "proposal_id": ids[0]}
             logger.warning(
                 "session_split: no valid drafts for %s; falling back to mechanical",
                 session_id,
@@ -151,8 +157,17 @@ def summarize(
     if path.exists():
         path.unlink()
     final_mode = "fallback" if (mode != "mechanical" and want_split) else "mechanical"
-    return {"captured": total, "summary_proposal_id": pid,
-            "summary_proposal_ids": [pid], "mode": final_mode}
+    result: dict[str, Any] = {
+        "captured": total, "summary_proposal_id": pid,
+        "summary_proposal_ids": [pid], "mode": final_mode,
+        "session_id": session_id, "summarized": final_mode == "mechanical",
+        "proposal_id": pid,
+    }
+    if final_mode == "fallback":
+        # the LLM was attempted and fell back; the mechanical page is a backstop,
+        # but surface the failure so the UI can prompt a retry / config fix.
+        result["skipped"] = "llm-failed"
+    return result
 
 
 def _propose_mechanical(
@@ -350,3 +365,65 @@ def _audit_split(
         data={"proposed": len(ids), "dropped": len(dropped),
               "observations": n_observations, "truncated": truncated},
     )
+
+
+def build_session_rows(store: KBStore) -> list[dict[str, Any]]:
+    """Assemble the session-review pipeline view (`kb.list_sessions`).
+
+    Two stages, host-blind (reads the same buffers + proposals every adapter's
+    capture feeds):
+
+    - "pending": a filed session-summary page proposal awaiting review.
+      `summarized=True` — it already has a summary (mechanical or LLM-split).
+    - "buffer": an open capture buffer that has not been summarized yet.
+      `summarized=False` — it still needs a summary.
+
+    A session with a filed proposal is not also listed as a buffer (finalize
+    deletes the buffer, but guard against a race). Newest activity first.
+    """
+    rows: list[dict[str, Any]] = []
+    pending_session_ids: set[str] = set()
+
+    for prop in store.list_proposals(ProposalStatus.PENDING):
+        if prop.kind.value != "page":
+            continue
+        if str(prop.payload.get("type") or "") != capture.CAPTURE_PAGE_TYPE:
+            continue
+        if prop.session_id:
+            pending_session_ids.add(prop.session_id)
+        rows.append({
+            "session_id": prop.session_id,
+            "stage": "pending",
+            "proposal_id": prop.id,
+            "kind": "page",
+            "title": prop.payload.get("title"),
+            "summarized": True,
+            "observations": None,
+            "last_activity": prop.proposed_at.isoformat(),
+        })
+
+    caps = capture.captures_dir(store)
+    if caps.exists():
+        for path in sorted(caps.glob("*.jsonl")):
+            sid = path.stem
+            if sid in pending_session_ids:
+                continue
+            obs = capture._read_observations(path)
+            ts_vals = [float(o["ts"]) for o in obs if o.get("ts") is not None]
+            last = (
+                datetime.fromtimestamp(max(ts_vals), tz=UTC).isoformat()
+                if ts_vals else None
+            )
+            rows.append({
+                "session_id": sid,
+                "stage": "buffer",
+                "proposal_id": None,
+                "kind": None,
+                "title": None,
+                "summarized": False,
+                "observations": len(obs),
+                "last_activity": last,
+            })
+
+    rows.sort(key=lambda r: r["last_activity"] or "", reverse=True)
+    return rows

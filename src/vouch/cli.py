@@ -1968,6 +1968,13 @@ def session_end_cmd(session_id: str, note: str | None) -> None:
     _emit_json({"session": sess.id, "proposals": sess.proposal_ids})
 
 
+@session.command("list")
+def session_list_cmd() -> None:
+    """List captured sessions in the review pipeline (buffers + pending summaries)."""
+    store = _load_store()
+    _emit_json({"sessions": session_split.build_session_rows(store)})
+
+
 @cli.group()
 def capture() -> None:
     """Automatic session capture (driven by claude code hooks)."""

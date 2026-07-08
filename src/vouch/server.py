@@ -544,6 +544,18 @@ def kb_summarize_session(
 
 
 @mcp.tool()
+def kb_list_sessions() -> dict[str, Any]:
+    """List captured sessions in the review pipeline: open buffers awaiting a
+    summary, and filed summary proposals awaiting review.
+
+    Read-only. Each row: session_id, stage ("buffer" | "pending"), proposal_id,
+    kind, title, summarized, observations, last_activity.
+    """
+    from . import session_split
+    return {"sessions": session_split.build_session_rows(_store())}
+
+
+@mcp.tool()
 def kb_propose_entity(
     name: str,
     entity_type: str,
