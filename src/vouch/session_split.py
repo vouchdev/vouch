@@ -17,8 +17,11 @@ from typing import Any
 
 import yaml
 
-from . import capture
-from .proposals import propose_page
+from . import audit as audit_mod
+from . import capture, llm_draft
+from . import compile as compile_mod
+from .llm_draft import LLMDraftError
+from .proposals import _slugify, propose_page
 from .storage import KBStore
 
 logger = logging.getLogger(__name__)
@@ -116,7 +119,30 @@ def summarize(
         return {"captured": total, "summary_proposal_id": None,
                 "summary_proposal_ids": [], "mode": "skipped", "skipped": "below-min"}
 
-    # Task 4 inserts the LLM split branch here.
+    split_cfg = load_split_config(store)
+    want_split = mode == "split" or (
+        mode == "auto" and split_cfg.enabled and total >= split_cfg.threshold_observations
+    )
+    if mode != "mechanical" and want_split:
+        try:
+            ids, dropped, truncated = _propose_split(
+                store, session_id, observations, changed_files, git_stat,
+                intent=intent, split_cfg=split_cfg,
+            )
+            if ids:
+                if path.exists():
+                    path.unlink()
+                return {"captured": total, "summary_proposal_id": ids[0],
+                        "summary_proposal_ids": ids, "mode": "split",
+                        "dropped": dropped, "truncated": truncated}
+            logger.warning(
+                "session_split: no valid drafts for %s; falling back to mechanical",
+                session_id,
+            )
+        except (LLMDraftError, SplitConfigError) as e:
+            logger.warning(
+                "session_split: llm split failed for %s (%s); falling back", session_id, e
+            )
 
     pid = _propose_mechanical(
         store, session_id, observations, changed_files, git_stat,
@@ -124,8 +150,9 @@ def summarize(
     )
     if path.exists():
         path.unlink()
+    final_mode = "fallback" if (mode != "mechanical" and want_split) else "mechanical"
     return {"captured": total, "summary_proposal_id": pid,
-            "summary_proposal_ids": [pid], "mode": "mechanical"}
+            "summary_proposal_ids": [pid], "mode": final_mode}
 
 
 def _propose_mechanical(
@@ -152,3 +179,174 @@ def _propose_mechanical(
         rationale="auto-captured session summary",
     )
     return proposal.id
+
+
+def _propose_split(
+    store: KBStore,
+    session_id: str,
+    observations: list[dict[str, Any]],
+    changed_files: list[str],
+    git_stat: str,
+    *,
+    intent: str | None,
+    split_cfg: SplitConfig,
+) -> tuple[list[str], list[dict[str, Any]], bool]:
+    cmd = split_cfg.llm_cmd or compile_mod.load_config(store).llm_cmd
+    if not cmd:
+        raise SplitConfigError(
+            "capture.split.llm_cmd is not configured (and compile.llm_cmd is unset)"
+        )
+    prompt, truncated = build_split_prompt(
+        store, observations, changed_files, git_stat,
+        intent=intent, max_pages=split_cfg.max_pages,
+        max_input_chars=split_cfg.max_input_chars,
+    )
+    raw = llm_draft.run_llm(
+        cmd, prompt, timeout_seconds=split_cfg.timeout_seconds,
+        label="capture.split.llm_cmd",
+    )
+    drafts = llm_draft.parse_drafts(raw, noun="page")
+    ids, dropped = _file_drafts(store, session_id, drafts, split_cfg.max_pages)
+    _audit_split(store, session_id, ids, dropped, len(observations), truncated)
+    return ids, dropped, truncated
+
+
+def _render_obs(obs: dict[str, Any]) -> str:
+    tool = str(obs.get("tool", "")).strip()
+    summary = str(obs.get("summary", "")).strip()
+    files = obs.get("files") or []
+    line = f"[{tool}] {summary}" if tool else summary
+    if files:
+        line += f" (files: {', '.join(str(f) for f in files[:5])})"
+    return line
+
+
+def build_split_prompt(
+    store: KBStore,
+    observations: list[dict[str, Any]],
+    changed_files: list[str],
+    git_stat: str,
+    *,
+    intent: str | None,
+    max_pages: int,
+    max_input_chars: int,
+) -> tuple[str, bool]:
+    """Assemble the host-neutral topical-split prompt. Returns (prompt, truncated).
+
+    `tool` labels are opaque — the model clusters on the `summary` prose, so any
+    host's tool vocabulary works. If the rendered activity exceeds
+    `max_input_chars`, keep the most-recent observations that fit and prepend an
+    explicit elision note (no silent cap).
+    """
+    obs_lines = [_render_obs(o) for o in observations]
+    truncated = False
+    if sum(len(x) + 1 for x in obs_lines) > max_input_chars:
+        truncated = True
+        kept: list[str] = []
+        size = 0
+        for line in reversed(obs_lines):
+            if size + len(line) + 1 > max_input_chars:
+                break
+            kept.append(line)
+            size += len(line) + 1
+        obs_lines = list(reversed(kept))
+        elided = len(observations) - len(obs_lines)
+        obs_lines.insert(0, f"(... {elided} older observations elided ...)")
+
+    lines: list[str] = [
+        "You are the session historian for this project's knowledge base. You",
+        "summarize one work session into a small set of durable, human-readable",
+        "session records — one per distinct thread of work.",
+        "",
+    ]
+    if intent:
+        lines += ["SESSION INTENT:", f"  {intent}", ""]
+    lines += ["SESSION ACTIVITY (one line per observation, oldest first):"]
+    lines += [f"- {line}" for line in obs_lines]
+    lines += [""]
+    if changed_files:
+        lines += ["FILES CHANGED:"]
+        lines += [f"- {f}" for f in changed_files[:50]]
+        lines += [""]
+    if git_stat:
+        lines += ["GIT STAT:", "```", git_stat, "```", ""]
+
+    pages = store.list_pages()
+    pending = compile_mod._pending_page_names(store)
+    taken = [f"- {p.title}" for p in pages] + [f"- {n} [pending]" for n in sorted(pending)]
+    lines += ["TAKEN TOPICS (do NOT redraft any of these):"]
+    lines += taken or ["- (none)"]
+    lines += [
+        "",
+        "RULES",
+        f"- Cluster the activity into at most {max_pages} coherent TOPICS —",
+        "  distinct threads of work in this session. Draft one page per topic.",
+        "- Each page needs a specific title (\"fixed the audit-log write race\",",
+        "  not \"bug fixes\") and an 80-200 word markdown body summarizing that",
+        "  thread of work.",
+        "- These are session records, NOT wiki topic pages: do NOT add",
+        "  [claim: id] markers, and do NOT invent facts beyond the activity shown.",
+        "- Skip any topic already listed under TAKEN TOPICS.",
+        "",
+        "OUTPUT: print ONLY a JSON array, no code fences, no commentary.",
+        "Each element: {\"title\": str, \"body\": str}",
+    ]
+    return "\n".join(lines), truncated
+
+
+def _file_drafts(
+    store: KBStore,
+    session_id: str,
+    drafts: list[dict[str, Any]],
+    max_pages: int,
+) -> tuple[list[str], list[dict[str, Any]]]:
+    existing = store.list_pages()
+    taken = {p.title.strip().lower() for p in existing}
+    taken |= {p.id.strip().lower() for p in existing}
+    taken |= compile_mod._pending_page_names(store)
+    ids: list[str] = []
+    dropped: list[dict[str, Any]] = []
+    for i, draft in enumerate(drafts):
+        title = str(draft.get("title") or "").strip()
+        body = str(draft.get("body") or "").strip()
+        if not title:
+            dropped.append({"title": f"draft {i}", "reason": "draft has no title"})
+            continue
+        if not body:
+            dropped.append({"title": title, "reason": "draft has no body"})
+            continue
+        if len(ids) >= max_pages:
+            dropped.append({"title": title, "reason": f"over max_pages={max_pages}"})
+            continue
+        if title.lower() in taken or _slugify(title) in taken:
+            dropped.append({"title": title, "reason": "title already exists or is pending"})
+            continue
+        proposal = propose_page(
+            store, title=title, body=body,
+            page_type=capture.CAPTURE_PAGE_TYPE,  # "session" — forced, ignore any LLM type
+            proposed_by=SPLIT_ACTOR,
+            tags=["session", "split"],
+            session_id=session_id,
+            metadata={"session_id": session_id},
+            rationale=f"llm topical split of session {session_id}",
+        )
+        ids.append(proposal.id)
+        taken.add(title.lower())
+        taken.add(_slugify(title))
+    return ids, dropped
+
+
+def _audit_split(
+    store: KBStore,
+    session_id: str,
+    ids: list[str],
+    dropped: list[dict[str, Any]],
+    n_observations: int,
+    truncated: bool,
+) -> None:
+    audit_mod.log_event(
+        store.kb_dir, event="session.split", actor=SPLIT_ACTOR,
+        object_ids=ids,
+        data={"proposed": len(ids), "dropped": len(dropped),
+              "observations": n_observations, "truncated": truncated},
+    )
