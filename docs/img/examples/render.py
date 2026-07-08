@@ -71,15 +71,19 @@ SHOTS: list[Shot] = [
     Shot("tiny-search", "tiny", ["search", "auth"], "tiny/ — vouch search auth"),
     Shot("tiny-show", "tiny", ["show", "prop-001"], "tiny/ — vouch show prop-001"),
     Shot("tiny-audit", "tiny", ["audit"], "tiny/ — vouch audit"),
-    # decision-log/ — demonstrates supersession across two pricing claims.
+    # decision-log/ — decisions as claims; diff shows how one evolved.
     Shot(
-        "decision-log-search", "decision-log", ["search", "free-tier"],
-        "decision-log/ — vouch search free-tier",
+        "decision-log-search", "decision-log", ["search", "postgresql"],
+        "decision-log/ — vouch search postgresql",
     ),
     Shot(
         "decision-log-diff", "decision-log",
-        ["diff", "free-tier-100-req-superseded", "free-tier-500-req"],
-        "decision-log/ — vouch diff (supersession)",
+        [
+            "diff",
+            "billing-data-requires-acid-guarantees-postgresql-is-the-prim",
+            "use-postgresql-15-for-enhanced-replication-and-monitoring-fe",
+        ],
+        "decision-log/ — vouch diff (decision evolution)",
     ),
 ]
 

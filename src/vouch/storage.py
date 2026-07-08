@@ -93,9 +93,9 @@ def _starter_config() -> dict[str, Any]:
             "max_chars": 12000,
         },
         "retrieval": {
-            # auto = embedding -> fts5 -> substring; or pin one of
+            # hybrid/auto = fuse embedding + fts5 via RRF; or pin one of
             # embedding | fts5 | substring. See context._retrieve.
-            "backend": "auto",
+            "backend": "hybrid",
             "default_limit": 10,
         },
         "agents": {
@@ -850,6 +850,20 @@ class KBStore:
             raise ValueError(
                 f"proposal {proposal.id} already exists -- choose a different id"
             ) from e
+        return proposal
+
+    def update_proposal(self, proposal: Proposal) -> Proposal:
+        """Overwrite an existing *pending* proposal file in place.
+
+        Pure I/O: the caller decides whether a refresh is legitimate (only
+        pending proposals may be rewritten — a decided one is history).
+        """
+        path = self._proposal_path(proposal.id)
+        if not path.exists():
+            raise ArtifactNotFoundError(f"proposal {proposal.id}")
+        path.write_text(
+            _yaml_dump(proposal.model_dump(mode="json")), encoding="utf-8"
+        )
         return proposal
 
     def get_proposal(self, proposal_id: str) -> Proposal:

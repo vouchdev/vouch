@@ -72,11 +72,28 @@ def _line_diff(old: str, new: str) -> list[str]:
     ))
 
 
-def diff_artifacts(store: KBStore, old_id: str, new_id: str) -> ArtifactDiff:
-    """Diff two same-kind artifacts (both claims or both pages) by id."""
+def diff_artifacts(store: KBStore, old_id: str, new_id: str | None = None) -> ArtifactDiff:
+    """Diff two same-kind artifacts (both claims or both pages) by id.
+
+    ``new_id`` is optional for claims: when omitted, it resolves to
+    ``old_id``'s ``superseded_by`` field. Pages have no successor pointer, so
+    omitting ``new_id`` for a page is an error.
+    """
     old_kind = _kind_of(store, old_id)
     if old_kind is None:
         raise DiffError(f"unknown artifact: {old_id}")
+
+    if new_id is None:
+        if old_kind != "claim":
+            raise DiffError(
+                f"{old_id} is a {old_kind}; pages have no successor pointer, "
+                "pass new_id explicitly"
+            )
+        old_claim = store.get_claim(old_id)
+        if not old_claim.superseded_by:
+            raise DiffError(f"{old_id} has not been superseded; pass new_id explicitly")
+        new_id = old_claim.superseded_by
+
     new_kind = _kind_of(store, new_id)
     if new_kind is None:
         raise DiffError(f"unknown artifact: {new_id}")

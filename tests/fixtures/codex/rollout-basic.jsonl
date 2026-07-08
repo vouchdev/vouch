@@ -1,0 +1,17 @@
+{"timestamp": "2026-07-01T09:00:00.000Z", "type": "session_meta", "payload": {"session_id": "0197aaaa-1111-7000-8000-000000000001", "id": "0197aaaa-1111-7000-8000-000000000001", "timestamp": "2026-07-01T09:00:00.000Z", "cwd": "/home/alice-example/projects/acme-app", "originator": "codex_exec", "cli_version": "0.142.0", "source": "exec"}}
+{"timestamp": "2026-07-01T09:00:00.100Z", "type": "event_msg", "payload": {"type": "task_started", "turn_id": "0197aaaa-1111-7000-8000-0000000000t1"}}
+{"timestamp": "2026-07-01T09:00:00.200Z", "type": "turn_context", "payload": {"turn_id": "0197aaaa-1111-7000-8000-0000000000t1", "cwd": "/home/alice-example/projects/acme-app", "model": "example-model"}}
+{"timestamp": "2026-07-01T09:00:00.300Z", "type": "event_msg", "payload": {"type": "user_message", "message": "add a health endpoint to the acme api"}}
+{"timestamp": "2026-07-01T09:00:01.000Z", "type": "response_item", "payload": {"type": "reasoning", "id": "rs_example", "summary": [], "encrypted_content": "opaque"}}
+{"timestamp": "2026-07-01T09:00:02.000Z", "type": "response_item", "payload": {"type": "function_call", "id": "fc_1", "name": "exec_command", "arguments": "{\"cmd\":\"pytest -q\",\"workdir\":\"/home/alice-example/projects/acme-app\"}", "call_id": "call_1"}}
+{"timestamp": "2026-07-01T09:00:03.000Z", "type": "response_item", "payload": {"type": "function_call_output", "call_id": "call_1", "output": "Process exited with code 1\nOutput:\n2 failed, 10 passed"}}
+{"timestamp": "2026-07-01T09:00:04.000Z", "type": "response_item", "payload": {"type": "function_call", "id": "fc_2", "name": "exec_command", "arguments": "{\"cmd\":\"apply_patch <<'EOF'\\n*** Begin Patch\\n*** Update File: src/acme/api.py\\n@@\\n-old\\n+new\\n*** End Patch\\nEOF\",\"workdir\":\"/home/alice-example/projects/acme-app\"}", "call_id": "call_2"}}
+{"timestamp": "2026-07-01T09:00:05.000Z", "type": "response_item", "payload": {"type": "function_call_output", "call_id": "call_2", "output": "Process exited with code 0\nOutput:\nDone!"}}
+{"timestamp": "2026-07-01T09:00:06.000Z", "type": "response_item", "payload": {"type": "function_call", "id": "fc_3", "name": "update_plan", "arguments": "{\"plan\":[{\"step\":\"example\",\"status\":\"completed\"}]}", "call_id": "call_3"}}
+{"timestamp": "2026-07-01T09:00:07.000Z", "type": "response_item", "payload": {"type": "function_call", "id": "fc_4", "name": "kb_search", "arguments": "{\"query\":\"health endpoint\"}", "call_id": "call_4"}}
+{"timestamp": "2026-07-01T09:00:08.000Z", "type": "response_item", "payload": {"type": "function_call_output", "call_id": "call_4", "output": "{\"results\":[]}"}}
+{"timestamp": "2026-07-01T09:00:09.000Z", "type": "response_item", "payload": {"type": "function_call", "id": "fc_5", "name": "exec_command", "arguments": "{\"cmd\":\"pytest -q\",\"workdir\":\"/home/alice-example/projects/acme-app\"}", "call_id": "call_5"}}
+{"timestamp": "2026-07-01T09:00:10.000Z", "type": "response_item", "payload": {"type": "function_call_output", "call_id": "call_5", "output": "Process exited with code 0\nOutput:\n12 passed"}}
+{"timestamp": "2026-07-01T09:00:11.000Z", "type": "world_state", "payload": {"unknown_future_field": true}}
+{"timestamp": "2026-07-01T09:00:12.000Z", "type": "event_msg", "payload": {"type": "agent_message", "message": "added the endpoint and the tests pass"}}
+{"timestamp": "2026-07-01T09:00:13.000Z", "type": "event_msg", "payload": {"type": "task_complete", "turn_id": "0197aaaa-1111-7000-8000-0000000000t1", "last_agent_message": "added the endpoint and the tests pass"}}

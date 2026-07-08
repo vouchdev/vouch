@@ -62,7 +62,7 @@ def _load_theme_config(store: KBStore) -> dict[str, Any]:
     and falls back to its default rather than crashing on malformed input.
     """
     try:
-        raw = yaml.safe_load(store.config_path.read_text())
+        raw = yaml.safe_load(store.config_path.read_text(encoding="utf-8"))
         cfg = raw if isinstance(raw, dict) else {}
     except Exception:
         cfg = {}

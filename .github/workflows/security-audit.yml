@@ -1,0 +1,40 @@
+name: security-audit
+
+# Non-blocking dependency vulnerability scan (pip-audit). Runs weekly so
+# newly-disclosed advisories surface without waiting for a push, plus on
+# any change to the dependency set, plus on demand. continue-on-error
+# keeps a fresh CVE from turning the tree red — triage it, don't gate on
+# it. (the blocking gates are ci.yml / schema-check.yml / eval.yml.)
+on:
+  schedule:
+    - cron: "0 6 * * 1"   # mondays 06:00 utc
+  pull_request:
+    paths:
+      - "pyproject.toml"
+      - ".github/workflows/security-audit.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: pip-audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: install
+        run: |
+          python -m pip install --upgrade pip pip-audit
+          pip install -e .
+
+      - name: audit
+        run: pip-audit --desc

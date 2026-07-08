@@ -234,3 +234,17 @@ def test_jsonl_self_approval_allowed_with_trusted_agent_config(
     resp = handle_request({"id": "2", "method": "kb.approve",
                            "params": {"proposal_id": pid}})
     assert resp["ok"]
+
+
+def test_jsonl_internal_error_omits_traceback(monkeypatch) -> None:
+    """HTTP /rpc clients must not receive server tracebacks on unexpected errors."""
+    from vouch import jsonl_server
+
+    def _boom(_params: dict) -> dict:
+        raise RuntimeError("secret internals")
+
+    monkeypatch.setitem(jsonl_server.HANDLERS, "kb.status", _boom)
+    resp = handle_request({"id": "x", "method": "kb.status", "params": {}})
+    assert resp["ok"] is False
+    assert resp["error"]["code"] == "internal_error"
+    assert "traceback" not in resp["error"]

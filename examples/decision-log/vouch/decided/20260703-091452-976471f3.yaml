@@ -1,0 +1,19 @@
+id: 20260703-091452-976471f3
+kind: claim
+proposed_by: a
+session_id: null
+proposed_at: '2026-07-03T09:14:52.982480Z'
+payload:
+  id: critical-system-incidents-must-have-a-15-minute-response-sla
+  text: Critical system incidents must have a 15-minute response SLA.
+  type: decision
+  confidence: 0.9
+  evidence:
+  - 1f8ef21996a0f59eeb5174071f5293fc3b864defe928b9ce7879022a8230dbc8
+  entities: []
+  tags: []
+rationale: null
+status: approved
+decided_at: '2026-07-03T09:15:19.464569Z'
+decided_by: a
+decision_reason: approved in Q1 decision review

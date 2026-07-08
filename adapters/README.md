@@ -10,7 +10,7 @@ file you need into your project and edit it.
 |---|---|---|
 | [claude-code/](claude-code/) | Anthropic's Claude Code CLI | `.mcp.json` snippet, `CLAUDE.md` excerpt |
 | [cursor/](cursor/) | Cursor IDE | `mcp.json` snippet |
-| [codex/](codex/) | OpenAI's Codex CLI | `config.toml` snippet |
+| [codex/](codex/) | OpenAI's Codex CLI | tiered install: `.codex/config.toml` merge, `AGENTS.md` excerpt, skills, capture hook |
 | [continue/](continue/) | Continue.dev | `config.json` snippet |
 | [openclaw/](openclaw/) | OpenClaw plugin host | `.openclaw/plugins.json`, `AGENTS.md` excerpt |
 | [generic-mcp/](generic-mcp/) | Any MCP-speaking host | annotated reference |

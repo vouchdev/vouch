@@ -11,6 +11,107 @@ All notable changes to vouch are documented here. Format follows
   statuses, `kb.propose_goal`, `kb.list_goals`, and `kb.goal_set_status` across mcp/jsonl/capabilities/cli.
   goals persist under `.vouch/goals/`, status transitions are audited and mirrored into `decided/`,
   and session-start recall now surfaces open goals alongside approved claims/pages (#427).
+## [1.2.2] — 2026-07-07
+
+### Packaging
+- published to the mcp registry (`registry.modelcontextprotocol.io`, mirrored
+  at `github.com/mcp/vouchdev/vouch`) as `io.github.vouchdev/vouch`. a
+  `server.json` at the repo root carries the metadata; the pypi `vouch-kb`
+  package is the artifact, run over stdio via `uvx vouch-kb serve`.
+- `vouch-kb` console-script alias (alongside `vouch`) so `uvx vouch-kb serve`
+  resolves — the registry launches a package by its pypi identifier, which
+  otherwise wouldn't match the `vouch` script name.
+- README carries an `<!-- mcp-name: io.github.vouchdev/vouch -->` marker;
+  the registry verifies package ownership by matching it against `server.json`.
+
+## [1.2.1] — 2026-07-06
+
+### Fixed
+- `vouch --version` (and `__version__`) reported 1.1.0 from the released
+  1.2.0 wheel — `src/vouch/__init__.py` was a fourth version site nothing
+  kept in step. the manifest lockstep test now ties it to pyproject.toml,
+  openclaw.plugin.json and package.json. (pypi's 1.2.0 dists are immutable,
+  hence this patch release.)
+
+### Packaging
+- container image: the docker build context now carries `adapters/`
+  (dockerfile copy + dockerignore), which the wheel force-include requires
+  — without it `pip install` failed the 1.2.0 image build with "Forced
+  include not found", so no 1.2.0 images were published.
+
+## [1.2.0] — 2026-07-06
+
+### Added
+- `vouch compile` — the llm-wiki ingest pass: a deployment-configured LLM
+  (`compile.llm_cmd` in `.vouch/config.yaml`) drafts topic pages from live
+  approved claims; every inline `[claim: …]` marker and `[[wikilink]]` is
+  verified mechanically against the store, and surviving drafts are filed as
+  PENDING page proposals by the `wiki-compiler` actor. never approves — the
+  review gate is the ingest review. `--dry-run`, `--max-pages`, `--llm-cmd`,
+  `--json`. see `docs/compile.md`.
+- review-ui: a **compile wiki** button on the queue (shown once
+  `compile.llm_cmd` is configured) runs the same ingest pass and lands the
+  drafts in the queue; success and per-draft drop counts surface as a notice.
+- company-brain template: `vouch init --template company-brain` declares
+  typed record kinds (contact, org, project-record, meeting-notes, followup,
+  decision-record, voice) as `page_kinds` config and seeds a cited guide
+  page. operator-declared kinds always win; the merge is additive and
+  idempotent. see `docs/company-brain.md`.
+- `vouch init --template <name>` dispatches the onboarding template registry
+  (starter stays the default; templates layer on top of it).
+- frontmatter filters on `kb.list_pages` across mcp/jsonl/cli: kind equality,
+  field equality, and inclusive ordered bounds (numbers, iso dates), plus the
+  `vouch pages` human mirror. a viewport over `store.list_pages()`, not a
+  query language.
+- `kb.digest` / `vouch digest`: read-only reviewer briefing — pending
+  proposals oldest-first, recent decisions, stale claims, followups due, and
+  citation coverage. `--format text|json|markdown`; writes nothing, so it is
+  safe to run from cron.
+- five company-brain slash commands in the claude-code adapter (mirrored to
+  the plugin skills list): `/vouch-ask`, `/vouch-remember`, `/vouch-record`,
+  `/vouch-followup`, `/vouch-standup`. every flow terminates at
+  `kb_propose_*` — none may call `kb_approve`.
+- `vouch source fetch <url>`: snapshot a url's exact bytes as a
+  content-addressed source so claims cite immutable evidence. conservative
+  intake: http/https only, redirects re-validated, private-network hosts
+  refused, 2 mib cap, `fetched_at` recorded in source metadata.
+- `vouch inbox --dir <path> [--watch]`: dropped `.md`/`.txt` files become a
+  registered source plus one pending page proposal each — mechanical, no
+  model in the loop, never approves. content-hash seen-state makes re-runs
+  idempotent; bounded stdlib poll, no daemon.
+- `vouch notify sweep|test`: config-declared reviewer webhooks
+  (`proposal.created`, `queue.backlogged`, `proposal.aged`) with optional
+  hmac-signed envelopes and `env:` secret refs. read-and-notify only;
+  best-effort delivery; idempotent per (event, proposal).
+- protected page kinds: `page_kinds.<kind>.protected: true` exempts a kind
+  from the `trusted-agent` self-approval opt-out — its pages always need a
+  reviewer other than the proposer. the template marks `voice` and
+  `decision-record` protected.
+- string-typed frontmatter schema fields now accept yaml's native
+  date/datetime scalars, fixing approve-time re-validation of pages whose
+  frontmatter round-tripped through disk (e.g. `due_at: 2026-07-01`).
+
+### Fixed
+- installer: the curl one-liner no longer dead-ends on pep 668 hosts
+  (debian 12+, ubuntu 23.04+, homebrew python). when `pip install --user
+  pipx` is refused, pipx is hosted in a private venv under
+  `~/.local/share/vouch/pipx-venv` — still no sudo. re-runs recreate that
+  venv (brew pythons ship read-only activate scripts), an existing
+  `~/.local/bin/pipx` is preferred and never overwritten, and installer
+  failures now print the actual pip/venv errors instead of a guess.
+- cli: non-utf-8 locales (e.g. `LANG=en_US.ISO-8859-1`) crashed
+  `vouch status` / `vouch search` / `vouch --help` with UnicodeEncodeError
+  on the `•` / `…` / `—` output glyphs. stdio is reconfigured to utf-8
+  (`errors="replace"`) at module import — before click renders eager help —
+  covering the mcp/jsonl servers too; the last locale-dependent file i/o
+  sites (capture/themes config reads, the migration rewriter) pin
+  `encoding="utf-8"`.
+- `vouch install-mcp <host>`: works from pip/pipx installs. adapter
+  templates now ship inside the wheel (`vouch/adapters/`) and the resolver
+  falls back to that packaged copy when no repo checkout is present.
+  previously every installed copy failed with "unknown adapter …
+  (available: (none))"; source checkouts keep resolving the repo's
+  `adapters/` directory.
 
 ## [1.1.0] — 2026-07-03
 
@@ -35,6 +136,11 @@ All notable changes to vouch are documented here. Format follows
   strategy) instead of skipping it, so the capture / recall hooks land on
   projects that already have a settings file. idempotent; user entries are
   preserved.
+- `vouch new <kind>` — scaffold a typed page or entity proposal from the
+  page-kind registry: stubs required frontmatter fields, supports
+  `--field key=value`, `--interactive`, `--dry-run`, and `--json`; entity
+  kinds (`person`, `project`, …) route to `propose_entity`, with page kinds
+  taking precedence on name collisions unless `--entity` is set (#330).
 - GitHub PR auto-labeling: a pull-request metadata-only labeler workflow now
   applies vouch surface labels from `.github/labeler.yml`, keeps those labels
   in sync as files change, and adds OpenClaw-style `size: XS` through
