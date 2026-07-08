@@ -343,6 +343,12 @@ def compile_kb(
             report.dropped.append({"title": title, "reason": problem})
             continue
         survivors.append((draft, title))
+        # fold the accepted title into taken_names immediately — a later
+        # draft in the same batch colliding with this one must be dropped,
+        # same as if it collided with a pre-existing page (see
+        # _draft_problem's collision-guard comment above).
+        taken_names.add(title.lower())
+        taken_names.add(_slugify(title))
 
     # phase 2: wikilinks resolve against existing pages + the *surviving*
     # batch, to a fixpoint — dropping a draft may dangle a link in another,

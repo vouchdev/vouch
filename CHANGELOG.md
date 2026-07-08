@@ -6,6 +6,14 @@ All notable changes to vouch are documented here. Format follows
 
 ## [Unreleased]
 
+### Fixed
+- `compile_kb` no longer lets two same-titled (or same-slugifying) page
+  drafts in a single LLM response both survive validation. The second
+  draft is now dropped as a collision, same as if it collided with a
+  pre-existing page — previously, approving both proposals in order would
+  silently overwrite the first approved page via the `update_page`
+  vault-edit path, with no error or diff surfaced to the reviewer.
+
 ## [1.2.2] — 2026-07-07
 
 ### Packaging
