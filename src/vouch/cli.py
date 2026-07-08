@@ -64,6 +64,7 @@ from .proposals import (
     check_approvable,
     expire_pending,
     propose_claim,
+    propose_delete,
     propose_entity,
     propose_page,
     propose_relation,
@@ -1887,6 +1888,30 @@ def archive(claim_id: str) -> None:
     with _cli_errors():
         life.archive(store, claim_id=claim_id, actor=_whoami())
     click.echo(f"archived {claim_id}")
+
+
+@cli.command(name="propose-delete")
+@click.argument(
+    "target_kind",
+    type=click.Choice(["claim", "page", "entity", "relation"]),
+)
+@click.argument("target_id")
+@click.option("--rationale", default=None, help="why this should be deleted")
+def propose_delete_cmd(
+    target_kind: str, target_id: str, rationale: str | None
+) -> None:
+    """File a review-gated hard-delete request for an artifact.
+
+    A different reviewer approves it with `vouch approve <id>`. Refused if the
+    target is still referenced (supersede the claim instead, usually).
+    """
+    store = _load_store()
+    with _cli_errors():
+        pr = propose_delete(
+            store, target_kind=target_kind, target_id=target_id,
+            proposed_by=_whoami(), rationale=rationale,
+        )
+    click.echo(f"filed delete proposal {pr.id} for {target_kind} {target_id}")
 
 
 @cli.command()

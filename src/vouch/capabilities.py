@@ -54,6 +54,7 @@ METHODS = [
     "kb.propose_page",
     "kb.propose_entity",
     "kb.propose_relation",
+    "kb.propose_delete",
     "kb.approve",
     "kb.reject",
     "kb.reject_extracted",

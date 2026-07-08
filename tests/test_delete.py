@@ -6,7 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from vouch import audit, index_db
+from vouch import audit, capabilities, index_db
+from vouch.jsonl_server import handle_request
 from vouch.models import (
     Claim,
     Entity,
@@ -274,3 +275,22 @@ def test_check_approvable_flags_referenced_delete(store: KBStore) -> None:
     store.put_page(Page(id="p1", title="P", body="", claims=["c1"]))
     reason = check_approvable(store, pr.id, approved_by="reviewer")
     assert reason is not None and "referenced by" in reason
+
+
+def test_method_registered_in_capabilities() -> None:
+    assert "kb.propose_delete" in capabilities.METHODS
+
+
+def test_jsonl_propose_delete_end_to_end(store: KBStore, monkeypatch) -> None:
+    monkeypatch.chdir(store.root)
+    _claim(store, "c1", "kill via jsonl")
+    resp = handle_request({
+        "id": "r1",
+        "method": "kb.propose_delete",
+        "params": {"target_kind": "claim", "target_id": "c1"},
+    })
+    assert resp["ok"] is True, resp
+    result = resp["result"]
+    assert result["kind"] == "delete"
+    assert result["status"] == "pending"
+    assert result["proposal_id"]

@@ -48,6 +48,7 @@ from .proposals import (
     approve,
     expire_pending,
     propose_claim,
+    propose_delete,
     propose_entity,
     propose_page,
     propose_relation,
@@ -438,6 +439,24 @@ def _h_propose_relation(p: dict) -> dict:
     return {"proposal_id": pr.id, "status": pr.status.value, "kind": pr.kind.value}
 
 
+def _h_propose_delete(p: dict) -> dict:
+    pr = propose_delete(
+        _store(),
+        target_kind=p["target_kind"],
+        target_id=p["target_id"],
+        rationale=p.get("rationale"),
+        session_id=p.get("session_id"),
+        dry_run=bool(p.get("dry_run", False)),
+        proposed_by=_agent(),
+    )
+    return {
+        "proposal_id": pr.id,
+        "status": pr.status.value,
+        "kind": pr.kind.value,
+        "dry_run": bool(p.get("dry_run", False)),
+    }
+
+
 def _h_approve(p: dict) -> dict:
     a = approve(_store(), p["proposal_id"], approved_by=_agent(),
                 reason=p.get("reason"))
@@ -768,6 +787,7 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.list_sessions": _h_list_sessions,
     "kb.propose_entity": _h_propose_entity,
     "kb.propose_relation": _h_propose_relation,
+    "kb.propose_delete": _h_propose_delete,
     "kb.approve": _h_approve,
     "kb.reject": _h_reject,
     "kb.reject_extracted": _h_reject_extracted,
