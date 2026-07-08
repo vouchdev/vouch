@@ -6,6 +6,13 @@ All notable changes to vouch are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+- `vouch import <format> <path>` — conversation-export importers that parse
+  chat-json, markdown-vault, or memory-export dumps and file pending
+  proposals via the existing review gate. supports `--dry-run` for counts
+  without enqueuing and `--max-proposals` to cap a single run. imported
+  claims are de-duped against approved artifacts via propose-time
+  similarity (#431).
 ## [1.2.2] — 2026-07-07
 
 ### Packaging

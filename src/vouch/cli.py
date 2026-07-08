@@ -25,6 +25,7 @@ import yaml
 from . import __version__, bundle, health, volunteer_context
 from . import audit as audit_mod
 from . import capture as capture_mod
+from . import corpus_import as corpus_import_mod
 from . import codex_rollout as codex_rollout_mod
 from . import compile as compile_mod
 from . import digest as digest_mod
@@ -2826,6 +2827,83 @@ def export(out_path: str) -> None:
             "out": out_path,
         }
     )
+
+
+@cli.command("import")
+@click.argument(
+    "format",
+    type=click.Choice(list(corpus_import_mod.IMPORT_FORMATS)),
+)
+@click.argument("path", type=click.Path(exists=True))
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Report would-propose counts without enqueuing proposals.",
+)
+@click.option(
+    "--max-proposals",
+    type=int,
+    default=None,
+    help="Cap proposals filed in one run (claims + pages combined).",
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable summary.")
+def import_cmd(
+    format: str,
+    path: str,
+    dry_run: bool,
+    max_proposals: int | None,
+    as_json: bool,
+) -> None:
+    """Import conversation exports as review-gated proposals (#431).
+
+    Formats: chat-json, markdown-vault, memory-export. Every item lands in
+    ``.vouch/proposed/`` — nothing is auto-approved.
+    """
+    store = _load_store()
+    try:
+        result = corpus_import_mod.run_import(
+            store,
+            format,  # type: ignore[arg-type]
+            Path(path),
+            dry_run=dry_run,
+            max_proposals=max_proposals,
+            actor=_whoami(),
+        )
+    except corpus_import_mod.CorpusImportError as e:
+        raise click.ClickException(str(e)) from e
+
+    payload = {
+        "format": result.format,
+        "path": result.path,
+        "dry_run": result.dry_run,
+        "claims_proposed": result.claims_proposed,
+        "pages_proposed": result.pages_proposed,
+        "claims_skipped_dedup": result.claims_skipped_dedup,
+        "pages_skipped_dedup": result.pages_skipped_dedup,
+        "cap_hit": result.cap_hit,
+        "proposal_ids": result.proposal_ids,
+        "warnings": result.warnings,
+    }
+    if as_json:
+        _emit_json(payload)
+        return
+
+    mode = "dry-run" if dry_run else "import"
+    click.echo(
+        f"{mode}: {result.claims_proposed} claim(s), "
+        f"{result.pages_proposed} page(s) proposed"
+    )
+    if result.claims_skipped_dedup or result.pages_skipped_dedup:
+        click.echo(
+            f"  skipped dedup: {result.claims_skipped_dedup} claim(s), "
+            f"{result.pages_skipped_dedup} page(s)"
+        )
+    if result.cap_hit:
+        click.echo("  cap hit: --max-proposals limit reached")
+    for pid in result.proposal_ids:
+        click.echo(f"  + {pid}")
+    for w in result.warnings:
+        click.echo(f"  warning: {w}", err=True)
 
 
 @cli.command("export-check")
