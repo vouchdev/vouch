@@ -23,7 +23,7 @@ from click.testing import CliRunner
 from vouch import audit as audit_mod
 from vouch.cli import cli
 from vouch.models import ProposalStatus
-from vouch.proposals import propose_claim
+from vouch.proposals import approve, propose_claim
 from vouch.storage import KBStore
 from vouch.web import create_app
 
@@ -394,3 +394,61 @@ def test_compile_run_attributed_in_audit_log(
               if e.event == "compile.run"]
     assert len(events) == 1
     assert events[0].actor == "human-reviewer"
+
+
+# --- clear auto-claims (issue #433) --------------------------------------
+
+
+def _auto_approved_claim(store: KBStore, text: str, actor: str = "agent-Z") -> str:
+    """Seed a durable claim auto-approved in trusted-agent mode (approver ==
+    proposer), so `auto_approved` is set — the state the clear view targets."""
+    store.config_path.write_text(
+        "review:\n  approver_role: trusted-agent\n", encoding="utf-8",
+    )
+    src = store.put_source(text.encode())
+    pr = propose_claim(store, text=text, evidence=[src.id], proposed_by=actor)
+    return approve(store, pr.id, approved_by=actor).id
+
+
+def test_clear_view_lists_only_auto_approved(
+    client: TestClient, store: KBStore,
+) -> None:
+    auto_id = _auto_approved_claim(store, "auto-approved cruft")
+    human_id = _approved_claim(store, "human-reviewed fact")
+    r = client.get("/clear-claims")
+    assert r.status_code == 200
+    assert "text/html" in r.headers["content-type"]
+    assert auto_id in r.text
+    # human-reviewed knowledge is never a clear candidate
+    assert human_id not in r.text
+
+
+def test_clear_apply_archives_auto_preserves_human_and_audits(
+    client: TestClient, store: KBStore, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VOUCH_AGENT", "human-reviewer")
+    auto_id = _auto_approved_claim(store, "auto cruft to clear")
+    human_id = _approved_claim(store, "keep me")
+
+    r = client.post("/clear-claims", follow_redirects=False)
+    assert r.status_code == 303
+
+    # auto-approved claim archived; human-approved claim untouched
+    assert store.get_claim(auto_id).status.value == "archived"
+    assert store.get_claim(human_id).status.value != "archived"
+
+    # exactly one bulk_clear event, routed through lifecycle, attributed to
+    # the web reviewer — identical audit shape to `vouch claims-clear`
+    events = [e for e in audit_mod.read_events(store.kb_dir)
+              if e.event == "claim.bulk_clear"]
+    assert len(events) == 1
+    assert events[0].actor == "human-reviewer"
+    assert auto_id in events[0].object_ids
+
+
+def test_clear_invalid_before_shows_inline_error(
+    client: TestClient, store: KBStore,
+) -> None:
+    r = client.get("/clear-claims?before=not-a-date")
+    assert r.status_code == 200
+    assert "invalid date" in r.text
