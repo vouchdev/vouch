@@ -27,6 +27,7 @@ from . import trust as trust_mod
 from . import verify as verify_mod
 from .capabilities import capabilities as build_caps
 from .context import build_context_pack
+from .eval.effectiveness import compute_effectiveness
 from .logging_config import configure_logging
 from .models import ProposalStatus
 from .proposals import (
@@ -230,8 +231,22 @@ def kb_context(
         min_items=min_items, require_citations=require_citations,
         project=project, agent=agent,
         expand_graph=expand_graph, graph_depth=graph_depth, graph_limit=graph_limit,
+        session_id=session_id,
     )
     return salience_mod.attach_salience(result, store, session_id, cfg)
+
+
+@mcp.tool()
+def kb_effectiveness(
+    window: str = "90d",
+    min_samples: int = 5,
+) -> dict[str, Any]:
+    """Per-artifact effect estimate from surfaced context vs session outcomes."""
+    return compute_effectiveness(
+        _store(),
+        window=window,
+        min_samples=min_samples,
+    )
 
 
 @mcp.tool()

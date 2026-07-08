@@ -86,6 +86,18 @@ CREATE TABLE IF NOT EXISTS prov_edges (
 
 CREATE INDEX IF NOT EXISTS prov_edges_dst ON prov_edges(dst_id);
 CREATE INDEX IF NOT EXISTS prov_edges_kind ON prov_edges(kind);
+
+CREATE TABLE IF NOT EXISTS context_surface (
+    session_id      TEXT,
+    artifact_kind   TEXT NOT NULL,
+    artifact_id     TEXT NOT NULL,
+    query           TEXT NOT NULL DEFAULT '',
+    surfaced_at     TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS context_surface_session ON context_surface(session_id);
+CREATE INDEX IF NOT EXISTS context_surface_artifact ON context_surface(artifact_kind, artifact_id);
+CREATE INDEX IF NOT EXISTS context_surface_time ON context_surface(surfaced_at);
 """
 
 
@@ -126,6 +138,7 @@ def reset(kb_dir: Path) -> None:
             "DELETE FROM query_embedding_cache;"
             "DELETE FROM embedding_dupes;"
             "DELETE FROM prov_edges;"
+            "DELETE FROM context_surface;"
             "DELETE FROM index_meta WHERE key LIKE 'embedding_%';"
             "DELETE FROM index_meta WHERE key LIKE 'prov_%';"
         )
@@ -212,6 +225,62 @@ def read_prov_edges(kb_dir: Path) -> list[tuple[str, str, str, str, str | None]]
             "ORDER BY src_id, dst_id, kind"
         ).fetchall()
     return [(r[0], r[1], r[2], r[3], r[4]) for r in rows]
+
+
+def index_context_surface(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str | None,
+    query: str,
+    surfaced_at: str,
+    items: Iterable[tuple[str, str]],
+) -> None:
+    rows = [
+        (session_id, kind, artifact_id, query, surfaced_at)
+        for kind, artifact_id in items
+    ]
+    if not rows:
+        return
+    conn.executemany(
+        "INSERT INTO context_surface "
+        "(session_id, artifact_kind, artifact_id, query, surfaced_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        rows,
+    )
+
+
+def read_context_surfaces(
+    kb_dir: Path,
+    *,
+    since: _dt.datetime | None = None,
+    until: _dt.datetime | None = None,
+) -> list[dict[str, str | None]]:
+    clauses: list[str] = []
+    params: list[str] = []
+    if since is not None:
+        clauses.append("surfaced_at >= ?")
+        params.append(since.isoformat())
+    if until is not None:
+        clauses.append("surfaced_at <= ?")
+        params.append(until.isoformat())
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    with open_db(kb_dir) as conn:
+        rows = conn.execute(
+            "SELECT session_id, artifact_kind, artifact_id, query, surfaced_at "
+            f"FROM context_surface {where} "
+            "ORDER BY surfaced_at ASC, artifact_kind ASC, artifact_id ASC",
+            params,
+        ).fetchall()
+    return [
+        {
+            "session_id": row[0],
+            "artifact_kind": row[1],
+            "artifact_id": row[2],
+            "query": row[3],
+            "surfaced_at": row[4],
+        }
+        for row in rows
+    ]
 
 
 def set_meta(conn: sqlite3.Connection, key: str, value: str) -> None:

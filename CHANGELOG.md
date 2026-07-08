@@ -6,6 +6,18 @@ All notable changes to vouch are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+- `vouch health effectiveness` and `kb.effectiveness`: a read-only
+  per-artifact outcome signal that correlates context-pack surfacing with
+  session outcomes over a time window. Reports surfaced good/bad counts,
+  lift vs baseline, 95% wilson interval, and conservative verdicts
+  (`useful`/`harmful` only when confidence clears baseline and sample size is
+  sufficient; otherwise `unverified`/`insufficient`).
+- derived `context_surface` cache in `.vouch/state.db`, populated from
+  `build_context_pack` and cleared by `index_db.reset`, to record which
+  artifacts were surfaced to which sessions without changing durable yaml/audit
+  authority.
+
 ## [1.1.0] — 2026-07-03
 
 ### Added

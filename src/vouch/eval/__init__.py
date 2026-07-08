@@ -13,10 +13,12 @@ from .recall import (
     run_recall,
     score_query,
 )
+from .effectiveness import compute_effectiveness
 
 __all__ = [
     "compare_baseline",
     "load_queries",
     "run_recall",
     "score_query",
+    "compute_effectiveness",
 ]

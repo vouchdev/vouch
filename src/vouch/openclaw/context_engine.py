@@ -244,6 +244,7 @@ class VouchContextEngine:
             require_citations=False,
             project=project,
             agent=agent,
+            session_id=session_id,
         )
         salience_mod.attach_salience(pack, store, session_id, cfg)
         salience = (pack.get("_meta") or {}).get("vouch_salience") or []

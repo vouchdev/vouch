@@ -214,6 +214,7 @@ def build_context_pack(
     graph_depth: int = 1,
     graph_limit: int = 20,
     graph_rel_types: list[str] | None = None,
+    session_id: str | None = None,
 ) -> ContextPack | dict[str, Any]:
     viewer = viewer_from(
         config_path=store.config_path,
@@ -305,6 +306,20 @@ def build_context_pack(
     )
 
     pack = ContextPack(query=query, items=items, quality=quality, warnings=warnings)
+    if items:
+        try:
+            with index_db.open_db(store.kb_dir) as conn:
+                index_db.index_context_surface(
+                    conn,
+                    session_id=session_id,
+                    query=query,
+                    surfaced_at=pack.generated_at.isoformat(),
+                    items=((item.type, item.id) for item in items),
+                )
+        except sqlite3.Error:
+            # The surfacing log is derived cache only; retrieval must still work
+            # if state.db is unavailable or stale.
+            pass
     result: dict[str, Any] = pack.model_dump()
     result["viewer"] = {
         "project": viewer.project,

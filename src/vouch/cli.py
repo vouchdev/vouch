@@ -40,6 +40,7 @@ from . import vault_sync as vault_sync_mod
 from . import verify as verify_mod
 from .capabilities import capabilities as build_caps
 from .context import build_context_pack
+from .eval.effectiveness import compute_effectiveness
 from .lifecycle import LifecycleError
 from .logging_config import configure_logging
 from .models import Proposal, ProposalKind, ProposalStatus
@@ -318,6 +319,65 @@ def fsck() -> None:
     if not report.findings:
         click.echo("clean")
     sys.exit(0 if report.ok else 1)
+
+
+@cli.group(name="health")
+def health_group() -> None:
+    """Health-oriented diagnostics and evaluation commands."""
+
+
+@health_group.command("effectiveness")
+@click.option(
+    "--window",
+    default="90d",
+    show_default=True,
+    help="Time window (e.g. 90d, 12h, 2w, or ISO date).",
+)
+@click.option(
+    "--min-samples",
+    default=5,
+    show_default=True,
+    type=int,
+    help="Minimum surfaced sessions before a confident verdict is allowed.",
+)
+@click.option(
+    "--format",
+    "output_format",
+    type=click.Choice(["text", "json"]),
+    default="text",
+    show_default=True,
+)
+def health_effectiveness(window: str, min_samples: int, output_format: str) -> None:
+    """Measure whether surfaced artifacts correlate with better outcomes."""
+    store = _load_store()
+    with _cli_errors():
+        report = compute_effectiveness(
+            store,
+            window=window,
+            min_samples=min_samples,
+        )
+    if output_format == "json":
+        _emit_json(report)
+        return
+
+    sessions = report["sessions"]
+    base = sessions["baseline_rate"]
+    base_str = "n/a" if base is None else f"{base * 100:.1f}%"
+    click.echo(
+        f"effectiveness window={report['window']['spec']} "
+        f"classified={sessions['classified']} baseline={base_str}"
+    )
+    if not report["artifacts"]:
+        click.echo("no surfaced artifacts with enough classified sessions")
+        return
+    for row in report["artifacts"]:
+        lo = row["wilson_95"]["low"]
+        hi = row["wilson_95"]["high"]
+        click.echo(
+            f"{row['artifact_kind']}/{row['artifact_id']}  "
+            f"verdict={row['verdict']}  samples={row['samples']}  "
+            f"lift={row['lift']:+.3f}  ci95=[{lo:.3f},{hi:.3f}]"
+        )
 
 
 @cli.group(invoke_without_command=True)

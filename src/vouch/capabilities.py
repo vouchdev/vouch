@@ -21,6 +21,7 @@ METHODS = [
     "kb.search",
     "kb.neighbors",
     "kb.context",
+    "kb.effectiveness",
     "kb.synthesize",
     "kb.read_page",
     "kb.read_claim",
