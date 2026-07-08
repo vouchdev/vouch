@@ -1,6 +1,6 @@
 [project]
 name = "vouch-kb"
-version = "1.1.0"
+version = "1.2.2"
 description = "Git-native, review-gated knowledge base for LLM agents. MCP server + CLI."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -45,6 +45,8 @@ dev = [
     "ruff>=0.15.13",
     "types-pyyaml",
     "httpx>=0.28,<1",
+    # the wheel-contents regression test builds with the real backend
+    "hatchling>=1.21",
 ]
 embeddings-fast = [
     "fastembed>=0.3,<1",
@@ -58,6 +60,10 @@ rerank = [
 
 [project.scripts]
 vouch = "vouch.cli:cli"
+# alias so `uvx vouch-kb serve` resolves — the mcp registry runs the package
+# by its pypi identifier (vouch-kb), which otherwise wouldn't match the `vouch`
+# console script. keep both pointing at the same entry point.
+vouch-kb = "vouch.cli:cli"
 
 [project.urls]
 Homepage = "https://github.com/plind-junior/vouch"
@@ -69,6 +75,12 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/vouch"]
+
+# `vouch install-mcp <host>` copies templates out of adapters/. Ship them
+# inside the wheel so installed (pip/pipx) copies can find them; from a
+# checkout the repo-root adapters/ still wins (see install_adapter.py).
+[tool.hatch.build.targets.wheel.force-include]
+"adapters" = "vouch/adapters"
 
 [tool.ruff]
 line-length = 100

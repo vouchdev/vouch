@@ -5,7 +5,8 @@
 #
 # What this does, in order:
 #   1. Pick a Python interpreter (>=3.11) — exits with a hint if none found.
-#   2. Make sure pipx is installed (offers a user-scope install if missing).
+#   2. Make sure pipx is installed (user-scope install if missing; falls
+#      back to a private venv on PEP 668 externally-managed systems).
 #   3. Install or upgrade the `vouch-kb` package via pipx.
 #   4. Smoke-test: run `vouch --version` and report success.
 #   5. If Claude Code config is detected, point you at `vouch install-mcp`.
@@ -157,19 +158,55 @@ ensure_pipx_bin_on_path() {
 
 ensure_pipx() {
     py="$1"
-    if has_cmd pipx; then
+    # Put the usual pipx bin dir on PATH *before* probing: a fresh
+    # non-login shell often misses ~/.local/bin, so an already-installed
+    # pipx would look absent and get shadowed by a needless reinstall.
+    ensure_pipx_bin_on_path "$py"
+    # `pipx --version` and not just `has_cmd`: a leftover shim whose venv
+    # died (e.g. a brew python upgrade) must fall through to the
+    # recreation path below, not get accepted as installed.
+    if has_cmd pipx && pipx --version >/dev/null 2>&1; then
         ok "pipx already installed ($(pipx --version 2>/dev/null | head -1))"
-        ensure_pipx_bin_on_path "$py"
         return 0
     fi
     info "pipx not found — installing into user site (no sudo)"
-    if ! "$py" -m pip install --user --upgrade pipx >/dev/null 2>&1; then
-        err "pip install --user pipx failed — try installing it manually"
-        err "  sudo apt install pipx     # Debian/Ubuntu"
-        err "  brew install pipx         # macOS"
+    pipx_log=$(mktemp "${TMPDIR:-/tmp}/vouch-install-pipx.XXXXXX") || {
+        err "could not create the pipx install log"
         return 1
+    }
+    if "$py" -m pip install --user --upgrade pipx >"$pipx_log" 2>&1; then
+        "$py" -m pipx ensurepath >/dev/null 2>&1 || true
+    else
+        # Common causes: PEP 668 externally-managed interpreters
+        # (Debian 12+ / Ubuntu 23.04+ / Homebrew) refusing --user, or a
+        # missing pip module. Host pipx in a private venv instead —
+        # still no sudo.
+        info "user-site install failed — using a private venv instead"
+        pipx_venv="$HOME/.local/share/vouch/pipx-venv"
+        # Recreate from scratch: brew pythons ship read-only activate
+        # scripts, so `python -m venv` over a previous run's venv dies
+        # with EACCES.
+        rm -rf "$pipx_venv"
+        if ! "$py" -m venv "$pipx_venv" >>"$pipx_log" 2>&1 || \
+           ! "$pipx_venv/bin/pip" install --quiet --upgrade pipx >>"$pipx_log" 2>&1; then
+            err "could not install pipx (user site failed, private venv failed)"
+            err "last errors ($pipx_log):"
+            tail -5 "$pipx_log" 1>&2 || true
+            err "install it manually, then re-run:"
+            err "  sudo apt install pipx python3-venv   # Debian/Ubuntu"
+            err "  brew install pipx                    # macOS"
+            return 1
+        fi
+        PATH="$pipx_venv/bin:$PATH"; export PATH
+        # keep pipx reachable in later shells too (~/.local/bin is what
+        # `pipx ensurepath` puts on PATH) — but never shadow a pipx the
+        # user already has there.
+        mkdir -p "$HOME/.local/bin"
+        if [ ! -e "$HOME/.local/bin/pipx" ] && [ ! -L "$HOME/.local/bin/pipx" ]; then
+            ln -s "$pipx_venv/bin/pipx" "$HOME/.local/bin/pipx"
+        fi
+        pipx ensurepath >/dev/null 2>&1 || true
     fi
-    "$py" -m pipx ensurepath >/dev/null 2>&1 || true
 
     # `ensurepath` edits ~/.profile / ~/.zshrc to add pipx's bin dir, but
     # the current process's PATH is already fixed. Add it explicitly so

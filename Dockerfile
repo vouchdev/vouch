@@ -32,8 +32,11 @@ WORKDIR /app
 # Install from this checkout so local dev images never need a PyPI release
 # in the loop. The web extra pulls in the review-ui / fastapi surface;
 # embeddings stay out (torch does not belong in the default image).
+# adapters/ is force-included into the wheel (vouch install-mcp resolves
+# the templates from the installed package), so the context must carry it.
 COPY pyproject.toml README.md ./
 COPY src ./src
+COPY adapters ./adapters
 RUN pip install --no-cache-dir '.[web]'
 
 # /data is the KB volume mount point: the host's project root, containing

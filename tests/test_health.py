@@ -100,6 +100,38 @@ def test_lint_surfaces_legacy_uncited_claim_yaml_without_crashing(
     assert all(f.severity != "error" for f in good_findings), good_findings
 
 
+def test_lint_surfaces_unreadable_source_meta(store: KBStore) -> None:
+    """A source meta.yaml can carry a raw C1 control character — e.g. a
+    hand edit or an external writer under a mismatched locale landing a
+    utf-8 em dash double-decoded into latin-1 mojibake. pyyaml's reader
+    rejects the character outright, and storage._load_or_skip
+    deliberately skips the file so bulk listings survive. For lint that
+    skip is the bug: the corrupt meta silently vanishes from the sweep,
+    and any claim citing the source is misreported as broken_citation.
+    Lint must surface the file as an `unreadable_source` error and keep
+    citation checks honest — the source id is its directory name,
+    readable even when the yaml is not."""
+    src = store.put_source(b"e")
+    store.put_claim(Claim(id="c1", text="t", evidence=[src.id]))
+    meta = store.kb_dir / "sources" / src.id / "meta.yaml"
+    meta.write_text(
+        meta.read_text(encoding="utf-8") + "title: conversation \u00e2\u0080\u0094 vouch\n",
+        encoding="utf-8",
+    )
+
+    report = health.lint(store)
+
+    unreadable = [f for f in report.findings if f.code == "unreadable_source"]
+    assert unreadable, [f.code for f in report.findings]
+    assert src.id in unreadable[0].object_ids
+    assert report.ok is False  # unreadable_source is severity=error
+    # The source directory still exists — the citation isn't broken, the
+    # meta is. Reporting broken_citation here would send the user hunting
+    # for a missing source that is right there on disk.
+    codes = {f.code for f in report.findings}
+    assert "broken_citation" not in codes
+
+
 def test_list_claims_filtered_by_status(store: KBStore) -> None:
     src = store.put_source(b"e")
     store.put_claim(Claim(id="c1", text="x", evidence=[src.id],

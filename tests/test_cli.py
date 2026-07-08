@@ -11,15 +11,20 @@ which slipped past the except and surfaced as a traceback.
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 import pytest
+import yaml
 from click.testing import CliRunner
 
 from vouch import sessions as sess_mod
 from vouch.cli import cli
-from vouch.models import ProposalStatus
+from vouch.models import ProposalKind, ProposalStatus
 from vouch.proposals import propose_claim
 from vouch.storage import KBStore
 
@@ -427,3 +432,218 @@ def test_propose_claim_corrupt_source_surfaces_real_error(store: KBStore) -> Non
         isinstance(excinfo.value, ProposalError)
         and "unknown source/evidence id" in str(excinfo.value)
     ), f"real parse error was masked: {excinfo.value}"
+
+
+# --- vouch new (issue #330) ------------------------------------------------
+
+
+def _declare_page_kinds(store: KBStore, kinds: dict[str, Any]) -> None:
+    cfg = yaml.safe_load(store.config_path.read_text())
+    assert isinstance(cfg, dict)
+    cfg["page_kinds"] = kinds
+    store.config_path.write_text(yaml.safe_dump(cfg))
+
+
+def test_new_decision_page_stubs_frontmatter(store: KBStore) -> None:
+    runner = CliRunner()
+    res = runner.invoke(cli, ["new", "decision", "--title", "pick X"])
+    assert res.exit_code == 0, res.output
+    proposal_id = res.output.strip()
+    pr = store.get_proposal(proposal_id)
+    assert pr.kind == ProposalKind.PAGE
+    assert pr.status == ProposalStatus.PENDING
+    assert pr.payload["type"] == "decision"
+    assert pr.payload["title"] == "pick X"
+    assert pr.payload["metadata"] == {}
+
+
+def test_new_person_entity(store: KBStore) -> None:
+    runner = CliRunner()
+    res = runner.invoke(cli, ["new", "person", "--name", "alice-example"])
+    assert res.exit_code == 0, res.output
+    pr = store.get_proposal(res.output.strip())
+    assert pr.kind == ProposalKind.ENTITY
+    assert pr.payload["type"] == "person"
+    assert pr.payload["name"] == "alice-example"
+
+
+def test_new_field_prefill_parsed_as_yaml(store: KBStore) -> None:
+    _declare_page_kinds(store, {"meeting-notes": {"required_fields": ["attendees", "date"]}})
+    runner = CliRunner()
+    res = runner.invoke(
+        cli,
+        [
+            "new",
+            "meeting-notes",
+            "--title",
+            "Sync",
+            "--field",
+            "attendees=[alice-example, bob-example]",
+            "--field",
+            "date=2026-07-01",
+        ],
+    )
+    assert res.exit_code == 0, res.output
+    pr = store.get_proposal(res.output.strip())
+    assert pr.payload["metadata"]["attendees"] == ["alice-example", "bob-example"]
+    assert pr.payload["metadata"]["date"] == "2026-07-01"
+
+
+def test_new_interactive_prompts_required_fields(store: KBStore) -> None:
+    _declare_page_kinds(store, {"meeting-notes": {"required_fields": ["attendees", "date"]}})
+    runner = CliRunner()
+    res = runner.invoke(
+        cli,
+        ["new", "meeting-notes", "--title", "Sync", "--interactive"],
+        input="[alice-example, bob-example]\n2026-07-01\n",
+    )
+    assert res.exit_code == 0, res.output
+    pending = store.list_proposals(ProposalStatus.PENDING)
+    assert len(pending) == 1
+    pr = pending[0]
+    assert pr.payload["metadata"]["attendees"] == ["alice-example", "bob-example"]
+    assert pr.payload["metadata"]["date"] == "2026-07-01"
+
+
+def test_new_dry_run_writes_nothing(store: KBStore) -> None:
+    _declare_page_kinds(store, {"meeting-notes": {"required_fields": ["attendees"]}})
+    runner = CliRunner()
+    res = runner.invoke(
+        cli,
+        ["new", "meeting-notes", "--title", "Sync", "--dry-run"],
+    )
+    assert res.exit_code == 0, res.output
+    assert "missing required fields: attendees" in res.output
+    assert store.list_proposals(ProposalStatus.PENDING) == []
+
+
+def test_new_dry_run_json(store: KBStore) -> None:
+    runner = CliRunner()
+    res = runner.invoke(
+        cli,
+        ["new", "decision", "--title", "pick X", "--dry-run", "--json"],
+    )
+    assert res.exit_code == 0, res.output
+    body = json.loads(res.output)
+    assert body["dry_run"] is True
+    assert body["target"] == "page"
+    assert body["kind"] == "decision"
+    assert body["title"] == "pick X"
+    assert "id" in body
+    assert store.list_proposals(ProposalStatus.PENDING) == []
+
+
+def test_new_collision_decision_defaults_to_page(store: KBStore) -> None:
+    runner = CliRunner()
+    res = runner.invoke(cli, ["new", "decision", "--title", "pick Y"])
+    assert res.exit_code == 0, res.output
+    pr = store.get_proposal(res.output.strip())
+    assert pr.kind == ProposalKind.PAGE
+
+
+def test_new_collision_decision_entity_flag(store: KBStore) -> None:
+    runner = CliRunner()
+    res = runner.invoke(
+        cli,
+        ["new", "decision", "--entity", "--name", "pick-z"],
+    )
+    assert res.exit_code == 0, res.output
+    pr = store.get_proposal(res.output.strip())
+    assert pr.kind == ProposalKind.ENTITY
+    assert pr.payload["type"] == "decision"
+
+
+def test_new_project_routes_to_entity(store: KBStore) -> None:
+    runner = CliRunner()
+    res = runner.invoke(cli, ["new", "project", "--name", "vouch-example"])
+    assert res.exit_code == 0, res.output
+    pr = store.get_proposal(res.output.strip())
+    assert pr.kind == ProposalKind.ENTITY
+    assert pr.payload["type"] == "project"
+
+
+def test_new_unknown_kind_lists_known(store: KBStore) -> None:
+    runner = CliRunner()
+    res = runner.invoke(cli, ["new", "not-a-kind", "--title", "X"])
+    assert res.exit_code != 0, res.output
+    assert "unknown kind" in res.output
+    assert "decision" in res.output
+    assert "person" in res.output
+
+
+def test_new_required_citations_reminder_in_body(store: KBStore) -> None:
+    _declare_page_kinds(store, {"cited": {"required_citations": True}})
+    runner = CliRunner()
+    res = runner.invoke(cli, ["new", "cited", "--title", "needs cites", "--dry-run"])
+    assert res.exit_code == 0, res.output
+    assert "citations required" in res.output
+    assert "attach at least one claim or source" in res.output
+
+
+def test_new_required_citations_non_dry_run_errors(store: KBStore) -> None:
+    _declare_page_kinds(store, {"cited": {"required_citations": True}})
+    runner = CliRunner()
+    res = runner.invoke(cli, ["new", "cited", "--title", "needs cites"])
+    assert res.exit_code != 0, res.output
+    assert "requires citations" in res.output
+
+
+def test_new_invalid_field_yaml(store: KBStore) -> None:
+    runner = CliRunner()
+    res = runner.invoke(
+        cli,
+        ["new", "decision", "--title", "X", "--field", "x=["],
+    )
+    assert res.exit_code != 0, res.output
+    assert "invalid YAML" in res.output
+
+
+def test_new_pending_not_approved(store: KBStore) -> None:
+    runner = CliRunner()
+    res = runner.invoke(cli, ["new", "concept", "--title", "draft page"])
+    assert res.exit_code == 0, res.output
+    assert len(store.list_pages()) == 0
+    pending = store.list_proposals(ProposalStatus.PENDING)
+    assert len(pending) == 1
+
+
+# --- non-utf-8 stdio --------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("args", "needle"),
+    [
+        # '•' separators in the status summary
+        (["status"], "durable"),
+        # eager help renders the em-dash group docstring BEFORE the group
+        # callback runs, so a callback-scoped reconfigure can't save it —
+        # this is why _force_utf8_stdio() runs at module import.
+        (["--help"], "review-gated"),
+    ],
+)
+def test_cli_survives_non_utf8_stdio(tmp_path: Path, args: list[str], needle: str) -> None:
+    """1.1.0 regression: under a non-utf-8 locale (LANG=en_US.ISO-8859-1)
+    click encoded stdout with the locale codec, so any non-ascii glyph in
+    CLI output raised UnicodeEncodeError. The CLI forces utf-8 stdio at
+    import (replacing where the stream can't), so these must exit 0.
+    """
+    KBStore.init(tmp_path)
+    env = {
+        k: v for k, v in os.environ.items() if k not in ("PYTHONUTF8", "PYTHONIOENCODING")
+    }
+    # PYTHONIOENCODING pins the stream codec no matter which locales the
+    # host has generated — same failure mode as LANG=en_US.ISO-8859-1.
+    env["PYTHONIOENCODING"] = "latin-1"
+    proc = subprocess.run(
+        [sys.executable, "-m", "vouch", *args],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=120,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "UnicodeEncodeError" not in proc.stderr, proc.stderr
+    assert needle in proc.stdout, proc.stdout

@@ -14,9 +14,9 @@ from datetime import UTC, datetime
 
 from . import audit, index_db, volunteer_context
 from . import salience as salience_mod
-from .models import Page, PageType, ProposalStatus, Session
+from .models import Page, PageType, ProposalKind, ProposalStatus, Session
 from .proposals import approve
-from .storage import KBStore
+from .storage import ArtifactNotFoundError, KBStore
 
 logger = logging.getLogger(__name__)
 
@@ -99,18 +99,24 @@ def crystallize(
             })
 
     summary_page_id: str | None = None
-    if write_summary_page and approved_artifact_ids:
+    approved_for_session = _approved_artifact_ids_for_session(store, sess.id)
+    if write_summary_page and approved_for_session:
         page = Page(
             id=f"session-{sess.id}",
             title=f"Session {sess.id}",
             type=PageType.SESSION,
-            body=_build_summary_body(sess, approved_artifact_ids),
+            body=_build_summary_body(sess, approved_for_session),
             claims=[
-                aid for aid in approved_artifact_ids
+                aid for aid in approved_for_session
                 if (store.kb_dir / "claims" / f"{aid}.yaml").exists()
             ],
         )
-        store.put_page(page)
+        try:
+            store.get_page(page.id)
+        except ArtifactNotFoundError:
+            store.put_page(page)
+        else:
+            store.update_page(page)
         with index_db.open_db(store.kb_dir) as conn:
             index_db.index_page(
                 conn, id=page.id, title=page.title, body=page.body,
@@ -155,3 +161,14 @@ def _build_summary_body(sess: Session, ids: list[str]) -> str:
     for aid in ids:
         lines.append(f"- `{aid}`")
     return "\n".join(lines)
+
+
+def _approved_artifact_ids_for_session(store: KBStore, session_id: str) -> list[str]:
+    ids = {
+        str(pr.payload.get("id"))
+        for pr in store.list_proposals(ProposalStatus.APPROVED)
+        if pr.session_id == session_id and pr.kind in {
+            ProposalKind.CLAIM, ProposalKind.PAGE, ProposalKind.ENTITY, ProposalKind.RELATION,
+        } and pr.payload.get("id")
+    }
+    return sorted(ids)

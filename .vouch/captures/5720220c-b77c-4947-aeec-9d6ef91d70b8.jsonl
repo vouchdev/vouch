@@ -1,0 +1,19 @@
+{"cmd": "gh pr view 418 --json number,title,headRefName,baseRefName,state,statusCheckRollup", "summary": "Ran: gh pr view 418 --json number,title,headRefName,baseRefName,s", "tool": "Bash", "ts": 1783423093.927102}
+{"cmd": "gh pr view 418 --json mergeStateStatus", "summary": "Ran: gh pr view 418 --json mergeStateStatus", "tool": "Bash", "ts": 1783423099.6623337}
+{"cmd": "git fetch origin test && git show origin/test --stat | head -20", "summary": "Command failed: git fetch origin test && git show origin/test --stat | head ", "tool": "Bash", "ts": 1783423108.4746783}
+{"cmd": "git merge-base origin/main origin/test && git diff origin/main...origin/test --name-only", "summary": "Ran: git merge-base origin/main origin/test && git diff origin/ma", "tool": "Bash", "ts": 1783423112.3211405}
+{"cmd": "git switch test 2>&1 || true", "summary": "Command failed: git switch test 2>&1 || true", "tool": "Bash", "ts": 1783423115.6308467}
+{"cmd": "\n# Back up local artifacts\nmkdir -p /tmp/vouch-local-backup\nmv .claude/commands .claude/settings.json web /tmp/vouch-local-backup/ 2>/dev/null || true\n\n# Now switch to test branch\ngit switch test\n", "summary": "Ran: ", "tool": "Bash", "ts": 1783423121.803357}
+{"cmd": "git merge --abort", "summary": "Ran: git merge --abort", "tool": "Bash", "ts": 1783423136.2827957}
+{"cmd": "echo \"=== Last 5 commits on test ===\" && git log --oneline -5 && echo -e \"\\n=== Last 5 commits on main ===\" && git log --oneline -5 origin/main", "summary": "Ran: echo \"=== Last 5 commits on test ===\" && git log --oneline -", "tool": "Bash", "ts": 1783423158.2759066}
+{"cmd": "git log --oneline origin/main..test | head -20", "summary": "Ran: git log --oneline origin/main..test | head -20", "tool": "Bash", "ts": 1783423164.307516}
+{"cmd": "git status", "summary": "Ran: git status", "tool": "Bash", "ts": 1783423223.8349576}
+{"cmd": "git merge --abort", "summary": "Ran: git merge --abort", "tool": "Bash", "ts": 1783423233.6671906}
+{"cmd": "\ngit diff CHANGELOG.md | head -100\n", "summary": "Ran: ", "tool": "Bash", "ts": 1783423621.2922633}
+{"cmd": "grep -n \"^<<<<<<< \\|^======= \\|^>>>>>>>\" CHANGELOG.md", "summary": "Ran: grep -n \"^<<<<<<< \\|^======= \\|^>>>>>>>\" CHANGELOG.md", "tool": "Bash", "ts": 1783423624.135201}
+{"cmd": "git diff --name-only --diff-filter=U", "summary": "Ran: git diff --name-only --diff-filter=U", "tool": "Bash", "ts": 1783423626.975001}
+{"cmd": "git status", "summary": "Ran: git status", "tool": "Bash", "ts": 1783423629.8912878}
+{"cmd": "\ngit fetch origin && \\\ngit checkout -b final-test origin/main && \\\ngit merge --no-ff --no-commit origin/resolve-conflicts 2>&1 | head -5 && \\\necho \"---\" && \\\ngit status | grep -E \"nothing to commit|wo", "summary": "Ran: ", "tool": "Bash", "ts": 1783423765.7631629}
+{"cmd": "\ngit merge --abort\ngit log --oneline origin/main..origin/resolve-conflicts\n", "summary": "Command failed: ", "tool": "Bash", "ts": 1783423776.9763196}
+{"cmd": "\ngit fetch origin main && \\\ngit checkout -b final-check origin/main && \\\ngit merge --no-commit --no-ff origin/test && \\\necho \"\u2705 MERGE SUCCEEDS CLEANLY\" && \\\ngit merge --abort\n", "summary": "Ran: ", "tool": "Bash", "ts": 1783424451.3126318}
+{"cmd": "git merge --abort", "summary": "Ran: git merge --abort", "tool": "Bash", "ts": 1783424561.0509841}
