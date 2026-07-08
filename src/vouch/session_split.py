@@ -12,10 +12,13 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import yaml
 
+from . import capture
+from .proposals import propose_page
 from .storage import KBStore
 
 logger = logging.getLogger(__name__)
@@ -76,3 +79,76 @@ def load_split_config(store: KBStore) -> SplitConfig:
             raw.get("max_input_chars", DEFAULT_MAX_INPUT_CHARS),
             DEFAULT_MAX_INPUT_CHARS, int),
     )
+
+
+def summarize(
+    store: KBStore,
+    session_id: str,
+    *,
+    intent: str | None = None,
+    cwd: Path | None = None,
+    project: str | None = None,
+    generated_at: str | None = None,
+    mode: str = "auto",
+    config: capture.CaptureConfig | None = None,
+) -> dict[str, Any]:
+    """Roll a session buffer into PENDING page proposals. Never approves.
+
+    `mode`: "auto" (size gate decides), "split" (force LLM), or "mechanical"
+    (force the single rollup). The buffer is deleted only after a page is
+    filed (or an explicit below-min skip), so a crash mid-run leaves it intact
+    for the next `finalize-all` sweep to retry.
+    """
+    cfg = config or capture.load_config(store)
+    path = capture.buffer_path(store, session_id)
+    observations = capture._read_observations(path)
+    if not cfg.enabled:
+        return {"captured": len(observations), "summary_proposal_id": None,
+                "summary_proposal_ids": [], "mode": "skipped", "skipped": "disabled"}
+    if cwd is not None:
+        changed_files, git_stat = capture._git_changes(cwd)
+    else:
+        changed_files, git_stat = [], ""
+    total = len(observations) + len(changed_files)
+    if total < cfg.min_observations:
+        if path.exists():
+            path.unlink()
+        return {"captured": total, "summary_proposal_id": None,
+                "summary_proposal_ids": [], "mode": "skipped", "skipped": "below-min"}
+
+    # Task 4 inserts the LLM split branch here.
+
+    pid = _propose_mechanical(
+        store, session_id, observations, changed_files, git_stat,
+        project=project, generated_at=generated_at, intent=intent,
+    )
+    if path.exists():
+        path.unlink()
+    return {"captured": total, "summary_proposal_id": pid,
+            "summary_proposal_ids": [pid], "mode": "mechanical"}
+
+
+def _propose_mechanical(
+    store: KBStore,
+    session_id: str,
+    observations: list[dict[str, Any]],
+    changed_files: list[str],
+    git_stat: str,
+    *,
+    project: str | None,
+    generated_at: str | None,
+    intent: str | None,
+) -> str:
+    """File the single mechanical rollup page, exactly as capture did before."""
+    title, body = capture.build_summary_body(
+        session_id, observations, changed_files, git_stat,
+        project=project, generated_at=generated_at, first_prompt=intent,
+    )
+    proposal = propose_page(
+        store, title=title, body=body,
+        page_type=capture.CAPTURE_PAGE_TYPE,
+        proposed_by=capture.CAPTURE_ACTOR,
+        session_id=session_id,
+        rationale="auto-captured session summary",
+    )
+    return proposal.id
