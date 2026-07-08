@@ -8,6 +8,7 @@ Layout under <root>/.vouch/:
   .gitignore                   — keeps proposed/ + state.db out of git
   claims/<id>.yaml             — durable approved claims (committed)
   pages/<id>.md                — markdown pages with YAML frontmatter
+  goals/<id>.yaml              — durable approved goals (committed)
   sources/<sha>/meta.yaml      — source metadata
   sources/<sha>/content        — raw source bytes
   entities/<id>.yaml           — graph nodes
@@ -39,6 +40,7 @@ from .models import (
     Claim,
     Entity,
     Evidence,
+    Goal,
     Page,
     Proposal,
     ProposalStatus,
@@ -61,7 +63,7 @@ SCHEMA_VERSION_FILENAME = "schema_version"
 
 SUBDIRS = (
     "claims", "pages", "sources", "entities", "relations",
-    "evidence", "sessions", "proposed", "decided",
+    "evidence", "sessions", "goals", "proposed", "decided",
 )
 
 
@@ -285,6 +287,9 @@ class KBStore:
 
     def _session_path(self, sid: str) -> Path:
         return self._yaml("sessions", sid)
+
+    def _goal_path(self, gid: str) -> Path:
+        return self._yaml("goals", gid)
 
     def _proposal_path(self, pid: str) -> Path:
         return self._yaml("proposed", pid)
@@ -735,6 +740,38 @@ class KBStore:
             return []
         return [s for p in sorted(d.glob("*.yaml"))
                 if (s := _load_or_skip(p, Session, "session")) is not None]
+
+    # --- goals -------------------------------------------------------------
+
+    def put_goal(self, goal: Goal) -> Goal:
+        try:
+            with self._goal_path(goal.id).open("x", encoding="utf-8") as f:
+                f.write(_yaml_dump(goal.model_dump(mode="json")))
+        except FileExistsError as e:
+            raise ValueError(
+                f"goal {goal.id} already exists -- choose a different slug"
+            ) from e
+        return goal
+
+    def get_goal(self, goal_id: str) -> Goal:
+        p = self._goal_path(goal_id)
+        if not p.exists():
+            raise ArtifactNotFoundError(f"goal {goal_id}")
+        return Goal.model_validate(_yaml_load(p.read_text(encoding="utf-8")))
+
+    def update_goal(self, goal: Goal) -> Goal:
+        if not self._goal_path(goal.id).exists():
+            raise ArtifactNotFoundError(f"goal {goal.id}")
+        self._goal_path(goal.id).write_text(
+            _yaml_dump(goal.model_dump(mode="json")), encoding="utf-8")
+        return goal
+
+    def list_goals(self) -> list[Goal]:
+        d = self.kb_dir / "goals"
+        if not d.is_dir():
+            return []
+        return [g for p in sorted(d.glob("*.yaml"))
+                if (g := _load_or_skip(p, Goal, "goal")) is not None]
 
     # --- embedding hook ------------------------------------------------------
 

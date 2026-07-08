@@ -52,7 +52,7 @@ def store(tmp_path: Path) -> KBStore:
 def test_init_creates_layout(tmp_path: Path) -> None:
     s = KBStore.init(tmp_path)
     for sub in ("claims", "pages", "sources", "entities", "relations",
-                "evidence", "sessions", "proposed", "decided"):
+                "evidence", "sessions", "goals", "proposed", "decided"):
         assert (s.kb_dir / sub).is_dir()
     assert s.config_path.exists()
     gi = (s.kb_dir / ".gitignore").read_text()

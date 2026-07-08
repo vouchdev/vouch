@@ -36,6 +36,7 @@ from .proposals import (
     expire_pending,
     propose_claim,
     propose_entity,
+    propose_goal,
     propose_page,
     propose_relation,
     reject,
@@ -319,6 +320,28 @@ def kb_list_relations(node_id: str | None = None) -> list[dict[str, Any]]:
 
 
 @mcp.tool()
+def kb_list_goals(
+    status: str = "open",
+    *,
+    project: str | None = None,
+    agent: str | None = None,
+) -> list[dict[str, Any]]:
+    """List goals (default open), oldest-first, optionally viewer-scoped."""
+    from .scoping import is_visible, viewer_from
+
+    store = _store()
+    viewer = viewer_from(config_path=store.config_path, project=project, agent=agent)
+    goals = sorted(store.list_goals(), key=lambda g: g.created_at)
+    if status:
+        goals = [g for g in goals if g.status.value == status]
+    return [
+        g.model_dump(mode="json")
+        for g in goals
+        if is_visible(g.scope, viewer)
+    ]
+
+
+@mcp.tool()
 def kb_list_sources() -> list[dict[str, Any]]:
     return [
         {"id": s.id, "title": s.title, "type": s.type.value,
@@ -476,6 +499,38 @@ def kb_propose_relation(
     return _proposal_response(pr, dry_run)
 
 
+@mcp.tool()
+def kb_propose_goal(
+    title: str,
+    *,
+    detail: str | None = None,
+    claim_ids: list[str] | None = None,
+    entity_ids: list[str] | None = None,
+    tags: list[str] | None = None,
+    rationale: str | None = None,
+    slug_hint: str | None = None,
+    session_id: str | None = None,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    try:
+        pr = propose_goal(
+            _store(),
+            title=title,
+            detail=detail,
+            claim_ids=claim_ids,
+            entity_ids=entity_ids,
+            tags=tags,
+            rationale=rationale,
+            slug_hint=slug_hint,
+            session_id=session_id,
+            dry_run=dry_run,
+            proposed_by=_agent(),
+        )
+    except (ProposalError, ArtifactNotFoundError, ValueError) as e:
+        raise ValueError(str(e)) from e
+    return _proposal_response(pr, dry_run)
+
+
 def _proposal_response(result, dry_run: bool) -> dict[str, Any]:
     pr = result.proposal if hasattr(result, "proposal") else result
     out: dict[str, Any] = {
@@ -584,6 +639,18 @@ def kb_archive(claim_id: str) -> dict[str, Any]:
 def kb_confirm(claim_id: str) -> dict[str, Any]:
     c = life.confirm(_store(), claim_id=claim_id, actor=_agent())
     return {"id": c.id, "last_confirmed_at": c.last_confirmed_at}
+
+
+@mcp.tool()
+def kb_goal_set_status(
+    goal_id: str,
+    status: str,
+    reason: str | None = None,
+) -> dict[str, Any]:
+    goal = life.goal_set_status(
+        _store(), goal_id=goal_id, status=status, actor=_agent(), reason=reason,
+    )
+    return {"id": goal.id, "status": goal.status.value}
 
 
 @mcp.tool()

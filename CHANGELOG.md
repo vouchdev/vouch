@@ -6,6 +6,12 @@ All notable changes to vouch are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+- first-class goals: added a review-gated `goal` artifact with `open|done|abandoned|blocked`
+  statuses, `kb.propose_goal`, `kb.list_goals`, and `kb.goal_set_status` across mcp/jsonl/capabilities/cli.
+  goals persist under `.vouch/goals/`, status transitions are audited and mirrored into `decided/`,
+  and session-start recall now surfaces open goals alongside approved claims/pages (#427).
+
 ## [1.1.0] — 2026-07-03
 
 ### Added

@@ -42,7 +42,7 @@ from .capabilities import capabilities as build_caps
 from .context import build_context_pack
 from .lifecycle import LifecycleError
 from .logging_config import configure_logging
-from .models import Proposal, ProposalKind, ProposalStatus
+from .models import GoalStatus, Proposal, ProposalKind, ProposalStatus
 from .onboarding import seed_starter_kb
 from .page_kinds import PageKindError, load_page_kind_registry
 from .proposals import (
@@ -52,6 +52,7 @@ from .proposals import (
     expire_pending,
     propose_claim,
     propose_entity,
+    propose_goal,
     propose_page,
     propose_relation,
     reject_auto_extracted,
@@ -1148,6 +1149,72 @@ def propose_relation_cmd(src: str, relation: str, target: str, confidence: float
     click.echo(pr.id)
 
 
+@cli.command(name="propose-goal")
+@click.option("--title", required=True)
+@click.option("--detail", default=None)
+@click.option("--claim", "claims", multiple=True)
+@click.option("--entity", "entities", multiple=True)
+@click.option("--tag", "tags", multiple=True)
+def propose_goal_cmd(
+    title: str,
+    detail: str | None,
+    claims: tuple[str, ...],
+    entities: tuple[str, ...],
+    tags: tuple[str, ...],
+) -> None:
+    store = _load_store()
+    with _cli_errors():
+        pr = propose_goal(
+            store,
+            title=title,
+            detail=detail,
+            claim_ids=list(claims),
+            entity_ids=list(entities),
+            tags=list(tags),
+            proposed_by=_whoami(),
+        )
+    click.echo(pr.id)
+
+
+# --- goals ---------------------------------------------------------------
+
+
+@cli.command(name="list-goals")
+@click.option(
+    "--status",
+    default="open",
+    type=click.Choice([s.value for s in GoalStatus]),
+    show_default=True,
+)
+@click.option("--json", "as_json", is_flag=True)
+def list_goals_cmd(status: str, as_json: bool) -> None:
+    store = _load_store()
+    goals = sorted(store.list_goals(), key=lambda g: g.created_at)
+    if status:
+        goals = [g for g in goals if g.status.value == status]
+    if as_json:
+        _emit_json([g.model_dump(mode="json") for g in goals])
+        return
+    if not goals:
+        click.echo("(no goals)")
+        return
+    for g in goals:
+        click.echo(f"{g.id} [{g.status.value}] {g.title}")
+
+
+@cli.command(name="goal-status")
+@click.argument("goal_id")
+@click.argument("status", type=click.Choice([s.value for s in GoalStatus]))
+@click.option("--reason", default=None)
+def goal_status_cmd(goal_id: str, status: str, reason: str | None) -> None:
+    store = _load_store()
+    with _cli_errors():
+        goal = life.goal_set_status(
+            store, goal_id=goal_id, status=status, actor=_whoami(), reason=reason,
+        )
+    click.echo(f"{goal.id} -> {goal.status.value}")
+
+
 # --- sources --------------------------------------------------------------
 
 
@@ -1439,6 +1506,12 @@ def recall_cmd() -> None:
     digest = recall_mod.build_digest(store, max_chars=cfg.max_chars)
     if digest.strip():
         click.echo(digest)
+
+
+@cli.command(name="digest")
+def digest_cmd() -> None:
+    """Alias for session-start digest output."""
+    recall_cmd()
 
 
 @cli.command()

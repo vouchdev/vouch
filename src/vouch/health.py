@@ -17,7 +17,7 @@ from pydantic import ValidationError
 
 from . import index_db
 from .audit import count_events, verify_chain
-from .models import Claim, ClaimStatus, Entity, Page, ProposalKind, ProposalStatus
+from .models import Claim, ClaimStatus, Entity, Goal, Page, ProposalKind, ProposalStatus
 from .storage import KBStore, _yaml_load, sha256_hex
 from .verify import verify_all
 
@@ -48,6 +48,7 @@ def status(store: KBStore) -> dict[str, Any]:
         "kb_dir": str(store.kb_dir),
         "claims": len(store.list_claims()),
         "pages": len(store.list_pages()),
+        "goals": len(store.list_goals()),
         "sources": len(store.list_sources()),
         "entities": len(store.list_entities()),
         "relations": len(store.list_relations()),
@@ -70,6 +71,7 @@ def _safe_counts(store: KBStore, claim_count: int) -> dict:
         "kb_dir": str(store.kb_dir),
         "claims": claim_count,
         "pages": len(store.list_pages()),
+        "goals": len(store.list_goals()),
         "sources": len(store.list_sources()),
         "entities": len(store.list_entities()),
         "relations": len(store.list_relations()),
@@ -269,11 +271,12 @@ def fsck(store: KBStore) -> HealthReport:
     claim_list, findings = _load_claims_for_lint(store)
     claims: dict[str, Claim] = {c.id: c for c in claim_list}
     pages: dict[str, Page] = {p.id: p for p in store.list_pages()}
+    goals: dict[str, Goal] = {g.id: g for g in store.list_goals()}
     entities: dict[str, Entity] = {e.id: e for e in store.list_entities()}
 
     _check_lifecycle_chains(claims, findings)
     _check_claim_graph_refs(claims, entities, findings)
-    _check_decided_proposals(store, claims, pages, entities, findings)
+    _check_decided_proposals(store, claims, pages, goals, entities, findings)
 
     db_present = (store.kb_dir / index_db.DB_FILENAME).exists()
     if not db_present:
@@ -373,6 +376,7 @@ def _check_decided_proposals(
     store: KBStore,
     claims: dict[str, Claim],
     pages: dict[str, Page],
+    goals: dict[str, Goal],
     entities: dict[str, Entity],
     findings: list[Finding],
 ) -> None:
@@ -386,6 +390,7 @@ def _check_decided_proposals(
     presence: dict[ProposalKind, set[str]] = {
         ProposalKind.CLAIM: set(claims),
         ProposalKind.PAGE: set(pages),
+        ProposalKind.GOAL: set(goals),
         ProposalKind.ENTITY: set(entities),
         ProposalKind.RELATION: relations,
     }

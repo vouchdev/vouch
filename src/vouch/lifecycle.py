@@ -11,10 +11,22 @@ behind a config flag rather than refactoring this module.
 
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime
 
 from . import audit
-from .models import Claim, ClaimStatus, Evidence, Relation, RelationType
+from .models import (
+    Claim,
+    ClaimStatus,
+    Evidence,
+    Goal,
+    GoalStatus,
+    Proposal,
+    ProposalKind,
+    ProposalStatus,
+    Relation,
+    RelationType,
+)
 from .storage import ArtifactNotFoundError, KBStore
 
 
@@ -154,3 +166,68 @@ def cite(store: KBStore, claim_id: str) -> list[Evidence | dict]:
         except ArtifactNotFoundError:
             out.append({"kind": "missing", "ref": ref})
     return out
+
+
+def goal_set_status(
+    store: KBStore,
+    *,
+    goal_id: str,
+    status: GoalStatus | str,
+    actor: str,
+    reason: str | None = None,
+) -> Goal:
+    goal: Goal = store.get_goal(goal_id)
+    status_val = status.value if isinstance(status, GoalStatus) else status
+    try:
+        target = GoalStatus(status_val)
+    except ValueError as e:
+        raise LifecycleError(f"unknown goal status: {status_val}") from e
+    if goal.status == target:
+        return goal
+    goal.status = target
+    goal.updated_at = datetime.now(UTC)
+    store.update_goal(goal)
+    action = f"goal.{target.value}"
+    _record_goal_decision_summary(
+        store,
+        goal_id=goal.id,
+        actor=actor,
+        action=action,
+        reason=reason,
+    )
+    audit.log_event(
+        store.kb_dir,
+        event=action,
+        actor=actor,
+        object_ids=[goal.id],
+        data={"reason": reason},
+    )
+    return goal
+
+
+def _record_goal_decision_summary(
+    store: KBStore,
+    *,
+    goal_id: str,
+    actor: str,
+    action: str,
+    reason: str | None,
+) -> None:
+    # Lifecycle transitions are not proposals; write a decided/ summary record
+    # so `decided/` stays the durable decision timeline for operators.
+    ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+    decided = Proposal(
+        id=f"{ts}-goal-{goal_id}-{action.rsplit('.', 1)[-1]}-{uuid.uuid4().hex[:6]}",
+        kind=ProposalKind.GOAL,
+        proposed_by=actor,
+        status=ProposalStatus.APPROVED,
+        payload={
+            "id": goal_id,
+            "action": action,
+            "reason": reason,
+        },
+        decided_at=datetime.now(UTC),
+        decided_by=actor,
+        decision_reason=reason,
+    )
+    store.move_proposal_to_decided(decided)

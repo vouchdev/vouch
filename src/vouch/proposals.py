@@ -19,6 +19,8 @@ from . import audit, index_db
 from .models import (
     Claim,
     Entity,
+    Goal,
+    GoalStatus,
     Page,
     Proposal,
     ProposalKind,
@@ -316,6 +318,48 @@ def propose_relation(
     )
 
 
+def propose_goal(
+    store: KBStore,
+    *,
+    title: str,
+    detail: str | None = None,
+    claim_ids: list[str] | None = None,
+    entity_ids: list[str] | None = None,
+    proposed_by: str,
+    tags: list[str] | None = None,
+    rationale: str | None = None,
+    slug_hint: str | None = None,
+    session_id: str | None = None,
+    dry_run: bool = False,
+) -> Proposal:
+    if not title.strip():
+        raise ProposalError("goal title is empty")
+    for cid in claim_ids or []:
+        try:
+            store.get_claim(cid)
+        except ArtifactNotFoundError as e:
+            raise ProposalError(f"unknown claim id: {cid}") from e
+    for eid in entity_ids or []:
+        try:
+            store.get_entity(eid)
+        except ArtifactNotFoundError as e:
+            raise ProposalError(f"unknown entity id: {eid}") from e
+    payload = {
+        "id": slug_hint or _slugify(title),
+        "title": title.strip(),
+        "detail": detail,
+        "status": GoalStatus.OPEN.value,
+        "claims": claim_ids or [],
+        "entities": entity_ids or [],
+        "tags": tags or [],
+    }
+    return _file_proposal(
+        store, kind=ProposalKind.GOAL, payload=payload,
+        proposed_by=proposed_by, session_id=session_id,
+        rationale=rationale, dry_run=dry_run,
+    )
+
+
 # --- decisions ------------------------------------------------------------
 
 
@@ -401,6 +445,17 @@ def _payload_block_reason(store: KBStore, proposal: Proposal) -> str | None:
             Entity(**payload)
         except (ValidationError, TypeError) as e:
             return f"invalid entity payload: {e}"
+    elif proposal.kind == ProposalKind.GOAL:
+        try:
+            goal = Goal(**payload)
+        except (ValidationError, TypeError) as e:
+            return f"invalid goal payload: {e}"
+        for cid in goal.claims:
+            if not store._claim_path(cid).exists():
+                return f"goal {goal.id} references unknown claim {cid}"
+        for eid in goal.entities:
+            if not store._entity_path(eid).exists():
+                return f"goal {goal.id} references unknown entity {eid}"
     return None
 
 
@@ -429,7 +484,7 @@ def approve(
     *,
     approved_by: str,
     reason: str | None = None,
-) -> Claim | Page | Entity | Relation:
+) -> Claim | Page | Entity | Relation | Goal:
     """Approve a pending proposal and write it as a durable artifact.
 
     Raises ProposalError if the proposal is not pending or if
@@ -448,7 +503,7 @@ def approve(
     # via update_page rather than put_page.
     if proposal.kind != ProposalKind.PAGE:
         _ensure_no_existing_artifact(store, proposal.kind, payload["id"])
-    result: Claim | Page | Entity | Relation
+    result: Claim | Page | Entity | Relation | Goal
     if proposal.kind == ProposalKind.CLAIM:
         claim = Claim(approved_by=approved_by, **payload)
         store.put_claim(claim)
@@ -502,6 +557,10 @@ def approve(
                 type=entity.type.value, aliases=entity.aliases,
             )
         result = entity
+    elif proposal.kind == ProposalKind.GOAL:
+        goal = Goal(**payload)
+        store.put_goal(goal)
+        result = goal
     else:  # RELATION
         rel = Relation(**payload)
         store.put_relation(rel)
@@ -668,6 +727,7 @@ _ARTIFACT_GETTERS = {
     ProposalKind.PAGE: "get_page",
     ProposalKind.ENTITY: "get_entity",
     ProposalKind.RELATION: "get_relation",
+    ProposalKind.GOAL: "get_goal",
 }
 
 

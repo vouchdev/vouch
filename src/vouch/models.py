@@ -145,6 +145,13 @@ class PageStatus(StrEnum):
     ARCHIVED = "archived"
 
 
+class GoalStatus(StrEnum):
+    OPEN = "open"
+    DONE = "done"
+    ABANDONED = "abandoned"
+    BLOCKED = "blocked"
+
+
 # --- core artifacts -------------------------------------------------------
 
 
@@ -316,6 +323,33 @@ class Page(BaseModel):
         return v.strip()
 
 
+class Goal(BaseModel):
+    """Review-gated in-flight objective with explicit lifecycle state."""
+
+    id: str
+    title: str
+    detail: str | None = None
+    status: GoalStatus = GoalStatus.OPEN
+    claims: list[str] = Field(default_factory=list)
+    entities: list[str] = Field(default_factory=list)
+    scope: ArtifactScope = Field(default_factory=ArtifactScope)
+    tags: list[str] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+    @field_validator("title")
+    @classmethod
+    def _title_non_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("goal title must be non-empty")
+        return v.strip()
+
+    @field_validator("scope", mode="before")
+    @classmethod
+    def _coerce_scope(cls, v: object) -> object:
+        return _coerce_artifact_scope(v)
+
+
 # --- audit + sessions -----------------------------------------------------
 
 
@@ -358,6 +392,7 @@ class ProposalKind(StrEnum):
     PAGE = "page"
     ENTITY = "entity"
     RELATION = "relation"
+    GOAL = "goal"
 
 
 class ProposalStatus(StrEnum):

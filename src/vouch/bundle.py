@@ -28,7 +28,7 @@ from typing import Any
 import yaml
 
 from . import audit
-from .models import Claim, Entity, Evidence, Proposal, Relation, Session, Source
+from .models import Claim, Entity, Evidence, Goal, Proposal, Relation, Session, Source
 from .storage import _deserialize_page, sha256_hex
 
 MANIFEST_NAME = "manifest.json"
@@ -37,6 +37,7 @@ SPEC_VERSION = "vouch-bundle-0.1"
 EXPORT_SUBDIRS = (
     "claims",
     "pages",
+    "goals",
     "sources",
     "entities",
     "relations",
@@ -55,6 +56,7 @@ FORBIDDEN_SAFETY_FLAGS = {
 VALIDATORS: dict[str, Any] = {
     "claims": lambda data: Claim.model_validate(yaml.safe_load(data)),
     "pages": lambda data: _deserialize_page(data.decode()),
+    "goals": lambda data: Goal.model_validate(yaml.safe_load(data)),
     "sources": lambda data: Source.model_validate(yaml.safe_load(data)),
     "entities": lambda data: Entity.model_validate(yaml.safe_load(data)),
     "relations": lambda data: Relation.model_validate(yaml.safe_load(data)),
@@ -294,6 +296,7 @@ def _artifact_id_from_path(path: str) -> tuple[str, str] | None:
     singular = {
         "claims": "claim",
         "pages": "page",
+        "goals": "goal",
         "entities": "entity",
         "relations": "relation",
         "evidence": "evidence",
@@ -311,11 +314,12 @@ def _existing_ids(kb_dir: Path) -> dict[str, set[str]]:
     disk OR is being delivered by this same bundle.
     """
     out: dict[str, set[str]] = {
-        "claim": set(), "page": set(), "entity": set(),
+        "claim": set(), "page": set(), "goal": set(), "entity": set(),
         "source": set(), "evidence": set(),
     }
     for sub, kind, suffix in (
         ("claims", "claim", ".yaml"),
+        ("goals", "goal", ".yaml"),
         ("entities", "entity", ".yaml"),
         ("relations", "relation", ".yaml"),
         ("evidence", "evidence", ".yaml"),

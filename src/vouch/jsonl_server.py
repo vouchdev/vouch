@@ -45,6 +45,7 @@ from .proposals import (
     expire_pending,
     propose_claim,
     propose_entity,
+    propose_goal,
     propose_page,
     propose_relation,
     reject,
@@ -262,6 +263,22 @@ def _h_list_relations(p: dict) -> list[dict]:
     return [r.model_dump(mode="json") for r in rels]
 
 
+def _h_list_goals(p: dict) -> list[dict]:
+    from .scoping import is_visible, viewer_from
+
+    s = _store()
+    viewer = viewer_from(
+        config_path=s.config_path,
+        project=p.get("project"),
+        agent=p.get("agent"),
+    )
+    status = p.get("status", "open")
+    goals = sorted(s.list_goals(), key=lambda g: g.created_at)
+    if status:
+        goals = [g for g in goals if g.status.value == status]
+    return [g.model_dump(mode="json") for g in goals if is_visible(g.scope, viewer)]
+
+
 def _h_list_sources(_: dict) -> list[dict]:
     return [s.model_dump(mode="json") for s in _store().list_sources()]
 
@@ -373,6 +390,23 @@ def _h_propose_relation(p: dict) -> dict:
     return {"proposal_id": pr.id, "status": pr.status.value, "kind": pr.kind.value}
 
 
+def _h_propose_goal(p: dict) -> dict:
+    pr = propose_goal(
+        _store(),
+        title=p["title"],
+        detail=p.get("detail"),
+        claim_ids=p.get("claim_ids"),
+        entity_ids=p.get("entity_ids"),
+        tags=p.get("tags"),
+        rationale=p.get("rationale"),
+        slug_hint=p.get("slug_hint"),
+        session_id=p.get("session_id"),
+        dry_run=bool(p.get("dry_run", False)),
+        proposed_by=_agent(),
+    )
+    return {"proposal_id": pr.id, "status": pr.status.value, "kind": pr.kind.value}
+
+
 def _h_approve(p: dict) -> dict:
     a = approve(_store(), p["proposal_id"], approved_by=_agent(),
                 reason=p.get("reason"))
@@ -438,6 +472,17 @@ def _h_cite(p: dict) -> list:
     for c in life.cite(_store(), p["claim_id"]):
         out.append(c.model_dump(mode="json") if hasattr(c, "model_dump") else c)
     return out
+
+
+def _h_goal_set_status(p: dict) -> dict:
+    goal = life.goal_set_status(
+        _store(),
+        goal_id=p["goal_id"],
+        status=p["status"],
+        actor=_agent(),
+        reason=p.get("reason"),
+    )
+    return {"id": goal.id, "status": goal.status.value}
 
 
 def _h_source_verify(_: dict) -> list[dict]:
@@ -689,6 +734,7 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.list_claims": _h_list_claims,
     "kb.list_entities": _h_list_entities,
     "kb.list_relations": _h_list_relations,
+    "kb.list_goals": _h_list_goals,
     "kb.list_sources": _h_list_sources,
     "kb.list_pending": _h_list_pending,
     "kb.register_source": _h_register_source,
@@ -697,6 +743,7 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.propose_page": _h_propose_page,
     "kb.propose_entity": _h_propose_entity,
     "kb.propose_relation": _h_propose_relation,
+    "kb.propose_goal": _h_propose_goal,
     "kb.approve": _h_approve,
     "kb.reject": _h_reject,
     "kb.reject_extracted": _h_reject_extracted,
@@ -705,6 +752,7 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.contradict": _h_contradict,
     "kb.archive": _h_archive,
     "kb.confirm": _h_confirm,
+    "kb.goal_set_status": _h_goal_set_status,
     "kb.cite": _h_cite,
     "kb.source_verify": _h_source_verify,
     "kb.session_start": _h_session_start,

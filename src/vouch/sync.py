@@ -74,6 +74,7 @@ def _artifact_kind(path: str) -> tuple[str, str | None]:
     singular = {
         "claims": "claim",
         "pages": "page",
+        "goals": "goal",
         "entities": "entity",
         "relations": "relation",
         "evidence": "evidence",
@@ -254,7 +255,7 @@ def _sync_check_with_src(kb_dir: Path, src: _SyncSource) -> SyncCheckResult:
 
     semantic_conflicts = [
         c for c in conflicts
-        if c.kind in {"claim", "page", "entity", "relation", "evidence", "session"}
+        if c.kind in {"claim", "page", "goal", "entity", "relation", "evidence", "session"}
     ]
     decided_conflicts = [c for c in conflicts if c.kind == "decided-proposal"]
     return SyncCheckResult(

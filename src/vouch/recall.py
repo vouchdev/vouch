@@ -58,16 +58,24 @@ def build_digest(store: KBStore, *, max_chars: int = DEFAULT_MAX_CHARS) -> str:
         c for c in store.list_claims()
         if c.status not in _RETRACTED_CLAIM_STATUSES
     ]
+    goals = sorted(
+        [g for g in store.list_goals() if g.status.value == "open"],
+        key=lambda g: g.created_at,
+    )
     pages = store.list_pages()
-    if not claims and not pages:
+    if not claims and not pages and not goals:
         return ""
 
     lines: list[str] = [
         _OPEN_TAG,
         f"# approved KB knowledge for this repo — {len(claims)} claim(s), "
-        f"{len(pages)} page(s). reviewed, cited, durable. use kb_read_page / "
+        f"{len(pages)} page(s), {len(goals)} open goal(s). "
+        "reviewed, cited, durable. use kb_read_page / "
         "kb_search for detail; kb_propose_* (human-approved) to add more.",
     ]
+    if goals:
+        lines += ["", "## open goals"]
+        lines += [f"- [{g.id}] {g.title}" for g in goals]
     if claims:
         lines += ["", "## claims"]
         lines += [f"- [{c.id}] {c.text}" for c in claims]

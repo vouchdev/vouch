@@ -8,7 +8,7 @@ import pytest
 
 from vouch import recall
 from vouch.models import ClaimStatus
-from vouch.proposals import approve, propose_claim, propose_page
+from vouch.proposals import approve, propose_claim, propose_goal, propose_page
 from vouch.storage import KBStore, _starter_config
 
 
@@ -28,6 +28,11 @@ def _approve_page(store: KBStore, title: str):
     return approve(store, pr.id, approved_by="u")
 
 
+def _approve_goal(store: KBStore, title: str):
+    pr = propose_goal(store, title=title, proposed_by="a")
+    return approve(store, pr.id, approved_by="u")
+
+
 def test_digest_includes_approved_claim_and_page(store: KBStore) -> None:
     _approve_claim(store, "JWT chosen over sessions")
     _approve_page(store, "auth design")
@@ -35,6 +40,13 @@ def test_digest_includes_approved_claim_and_page(store: KBStore) -> None:
     assert "<vouch-approved-knowledge>" in d
     assert "JWT chosen over sessions" in d
     assert "auth design" in d
+
+
+def test_digest_includes_open_goals(store: KBStore) -> None:
+    _approve_goal(store, "finish typed config migration")
+    d = recall.build_digest(store)
+    assert "open goals" in d
+    assert "finish typed config migration" in d
 
 
 def test_digest_excludes_retracted_claims(store: KBStore) -> None:
