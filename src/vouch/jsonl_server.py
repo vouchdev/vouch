@@ -39,6 +39,7 @@ from . import trust as trust_mod
 from . import verify as verify_mod
 from .capabilities import capabilities as build_caps
 from .context import build_context_pack
+from .lifecycle import LifecycleError
 from .logging_config import configure_logging
 from .models import ProposalStatus
 from .page_filters import filter_pages
@@ -891,7 +892,12 @@ def handle_request(envelope: dict) -> dict:
             "id": req_id, "ok": False,
             "error": {"code": "missing_param", "message": str(e)},
         }
-    except (ValueError, ProposalError, ArtifactNotFoundError) as e:
+    except (ValueError, ProposalError, LifecycleError, ArtifactNotFoundError) as e:
+        # Caller-visible domain errors. LifecycleError belongs here like
+        # ProposalError does (both are RuntimeError subclasses the generic
+        # branch would otherwise misreport as internal_error): a lifecycle
+        # guard such as "a claim cannot supersede itself" is a bad request,
+        # not a server fault. The CLI already maps it via _cli_errors.
         return {
             "id": req_id, "ok": False,
             "error": {"code": "invalid_request", "message": str(e)},

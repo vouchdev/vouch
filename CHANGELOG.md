@@ -21,6 +21,13 @@ All notable changes to vouch are documented here. Format follows
 - console Dashboard view: 12-month activity calendar, last-30-days bars,
   hour-of-week heatmap, top actors and event mix, driven by `kb.activity`.
 
+### Fixed
+- the JSONL / HTTP `/rpc` envelope misreported lifecycle guard failures
+  (e.g. `kb.supersede` of a claim onto itself) as `internal_error` and
+  logged a full server-side traceback for what is a bad request —
+  `LifecycleError` now maps to `invalid_request` like `ProposalError`,
+  matching how the CLI already surfaces it.
+
 ## [1.2.2] — 2026-07-07
 
 ### Packaging
