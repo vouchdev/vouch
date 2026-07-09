@@ -32,6 +32,17 @@ Everything below exists to reproduce that loop on your own project.
 
 ## Install
 
+**For the full UI experience** (recommended first time):
+
+```bash
+docker run --rm -p 127.0.0.1:5173:5173 -v vouch-demo-data:/data ghcr.io/plind-junior/vouch-demo
+# then open http://localhost:5173
+```
+
+Pre-seeded KB + full webapp console, zero setup. Pass `-e ANTHROPIC_API_KEY=sk-ant-...` to enable LLM features.
+
+**For CLI + Claude Code integration** (most common ongoing workflow):
+
 ```bash
 # one-liner (Linux + macOS) — picks a Python, ensures pipx, installs vouch-kb
 curl -fsSL https://raw.githubusercontent.com/vouchdev/vouch/main/install.sh | sh
@@ -40,7 +51,9 @@ curl -fsSL https://raw.githubusercontent.com/vouchdev/vouch/main/install.sh | sh
 pipx install vouch-kb
 ```
 
-The one-liner is POSIX `sh` and never needs `sudo` — inspect [`install.sh`](install.sh) first if you'd like. Prefer containers? The released image runs the same CLI and MCP server ([`ghcr.io/vouchdev/vouch`](https://github.com/vouchdev/vouch/pkgs/container/vouch)):
+The one-liner is POSIX `sh` and never needs `sudo` — inspect [`install.sh`](install.sh) first if you'd like.
+
+**For MCP server or CLI-only use**:
 
 ```bash
 docker run -i --rm -v "$PWD:/data" ghcr.io/vouchdev/vouch:latest          # stdio MCP server
@@ -49,15 +62,17 @@ docker run --rm -v "$PWD:/data" ghcr.io/vouchdev/vouch:latest status      # any 
 
 ## Reproduce the loop on your project
 
+After exploring the demo above, set up vouch in your own project:
+
 **1. Set up the KB and wire Claude Code** (one-time, per repo):
 
 ```bash
 cd /path/to/your/project
-vouch init
-vouch install-mcp claude-code
+vouch init                          # creates .vouch/ with starter config
+vouch install-mcp claude-code       # wires capture hooks into Claude Code
 ```
 
-`init` creates `.vouch/` with a starter config; `install-mcp` writes `.mcp.json` (the `kb.*` MCP tools), the `/vouch-*` slash commands, and three hooks — `PostToolUse` capture, `SessionEnd` rollup, `SessionStart` recall. Restart Claude Code so they load.
+`install-mcp` writes `.mcp.json` (the `kb.*` MCP tools), the `/vouch-*` slash commands, and three hooks — `PostToolUse` capture, `SessionEnd` rollup, `SessionStart` recall. Restart Claude Code so they load.
 
 **2. Point `compile` at an LLM** — the only step that needs a model. In `.vouch/config.yaml`:
 
@@ -78,13 +93,33 @@ compile:
 vouch review                    # walk pending proposals one at a time
 ```
 
-The browser console in the video is the **[vouch webapp](https://github.com/vouchdev/webApp)** — chat, review, pending queue, claims, and stats over a running KB. Connect it in two commands:
+**Want a browser UI for reviewing and proposing?** The video shows the **vouch webapp** — chat, review queue, claims, and stats. You have three options:
+
+- **No setup**: Use the Docker demo (recommended)
+- **Local development**: Clone the repo, run `make console`, open http://localhost:5173
+- **CLI-only**: Use `vouch review`, `vouch show <id>`, `vouch approve <id>` commands instead
+
+**Point the webapp at your existing KB:**
 
 ```bash
-vouch serve --transport http    # serves the kb.* surface on 127.0.0.1:8731
-# then, in a clone of the vouch webapp:
-npm install && npm run dev      # opens http://localhost:5173 — point the
-                                # connect dialog at http://127.0.0.1:8731
+# Terminal 1: start the vouch server pointing at your .vouch/
+cd /path/to/your/project
+vouch serve --transport http --port 8731
+
+# Terminal 2: run the Docker UI pointing at that server
+docker run --rm -p 127.0.0.1:5173:5173 \
+  -e VOUCH_TARGET=http://host.docker.internal:8731 \
+  ghcr.io/plind-junior/vouch-demo
+# then open http://localhost:5173
+```
+
+Or to skip Docker entirely and use the CLI tools:
+
+```bash
+vouch review                    # walk pending proposals
+vouch show <id>                 # inspect a claim or page
+vouch approve <id>              # approve a proposal
+vouch reject <id> --reason "…"  # reject with feedback
 ```
 
 Lighter alternatives ship with vouch itself: `vouch review-ui` (a built-in browser queue; `pipx install 'vouch-kb[web]'` for the extra), or piecemeal `vouch pending`, `vouch show <id>`, `vouch approve <id>`, `vouch reject <id> --reason "…"`.
