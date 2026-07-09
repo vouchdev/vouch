@@ -32,7 +32,21 @@ export function isLoopback(addr: string | undefined): boolean {
  * in X-Vouch-Target. Third-party pages cannot drive this: a custom request
  * header forces a CORS preflight, which this middleware never answers.
  */
-export function proxyMiddleware(): (req: IncomingMessage, res: ServerResponse, next: NextFn) => void {
+/**
+ * Options for a deployed (non-dev) proxy — e.g. the Docker image.
+ * `target` pins one upstream and ignores X-Vouch-Target so the browser never
+ * chooses the endpoint; `token` is injected as a bearer server-side so the
+ * secret never reaches the browser. Both empty = the dev behavior (per-request
+ * X-Vouch-Target, no injected token).
+ */
+export interface ProxyOptions {
+  target?: string
+  token?: string
+}
+
+export function proxyMiddleware(
+  opts: ProxyOptions = {},
+): (req: IncomingMessage, res: ServerResponse, next: NextFn) => void {
   return (req, res, next) => {
     if (!req.url || !(req.url === '/proxy' || req.url.startsWith('/proxy/'))) return next()
 
@@ -40,7 +54,9 @@ export function proxyMiddleware(): (req: IncomingMessage, res: ServerResponse, n
       return fail(res, 403, 'forbidden', 'proxy is only available to loopback clients')
     }
 
-    const raw = req.headers['x-vouch-target']
+    // Pinned upstream (deploy) wins over the per-request header (dev). Pinning
+    // also removes the SSRF surface: a client can no longer aim the proxy.
+    const raw = opts.target && opts.target.length > 0 ? opts.target : req.headers['x-vouch-target']
     if (typeof raw !== 'string' || raw.length === 0) {
       return fail(res, 400, 'bad_target', 'missing X-Vouch-Target header')
     }
@@ -59,6 +75,7 @@ export function proxyMiddleware(): (req: IncomingMessage, res: ServerResponse, n
     const headers: Record<string, string> = {}
     if (req.headers['content-type']) headers['content-type'] = String(req.headers['content-type'])
     if (req.headers.authorization) headers.authorization = String(req.headers.authorization)
+    else if (opts.token && opts.token.length > 0) headers.authorization = `Bearer ${opts.token}`
 
     const upstream = mod.request(
       {
@@ -110,7 +127,12 @@ export function vouchProxy(): Plugin {
       server.middlewares.use(proxyMiddleware())
     },
     configurePreviewServer(server) {
-      server.middlewares.use(proxyMiddleware())
+      // `vite preview` is the container's production server. Pin the upstream
+      // + token from env when set (the Docker/compose deploy), else keep the
+      // dev X-Vouch-Target behavior for a local `npm run preview`.
+      server.middlewares.use(
+        proxyMiddleware({ target: process.env.VOUCH_TARGET, token: process.env.VOUCH_HTTP_TOKEN }),
+      )
     },
   }
 }
