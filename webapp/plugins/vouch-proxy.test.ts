@@ -155,3 +155,45 @@ test('normal loopback requests still pass through the proxy (no VOUCH_UI_ALLOW_R
   })
   expect(res.status).toBe(200)
 })
+
+test('pinned target forwards regardless of X-Vouch-Target and injects the token', async () => {
+  const mw = proxyMiddleware({ target: upstreamUrl, token: 'pinned-token' })
+  const pinned = http.createServer((req, res) =>
+    mw(req, res, () => {
+      res.statusCode = 404
+      res.end('nope')
+    }),
+  )
+  await new Promise<void>((r) => pinned.listen(0, '127.0.0.1', r))
+  const pinnedUrl = `http://127.0.0.1:${(pinned.address() as AddressInfo).port}`
+  try {
+    // a bogus X-Vouch-Target must be ignored: pinned mode always uses opts.target
+    const res = await fetch(`${pinnedUrl}/proxy/rpc`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-vouch-target': 'http://example.invalid:9' },
+      body: JSON.stringify({ method: 'kb.status' }),
+    })
+    expect(res.status).toBe(200)
+    const echoed = await res.json()
+    expect(echoed.path).toBe('/rpc')
+    expect(echoed.auth).toBe('Bearer pinned-token') // token injected server-side
+    expect(JSON.parse(echoed.body).method).toBe('kb.status')
+  } finally {
+    pinned.close()
+  }
+})
+
+test('pinned token does not clobber a client-supplied Authorization', async () => {
+  const mw = proxyMiddleware({ target: upstreamUrl, token: 'pinned-token' })
+  const pinned = http.createServer((req, res) => mw(req, res, () => res.end()))
+  await new Promise<void>((r) => pinned.listen(0, '127.0.0.1', r))
+  const pinnedUrl = `http://127.0.0.1:${(pinned.address() as AddressInfo).port}`
+  try {
+    const res = await fetch(`${pinnedUrl}/proxy/health`, {
+      headers: { authorization: 'Bearer client-supplied' },
+    })
+    expect((await res.json()).auth).toBe('Bearer client-supplied')
+  } finally {
+    pinned.close()
+  }
+})
