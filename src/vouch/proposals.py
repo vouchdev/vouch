@@ -775,6 +775,9 @@ def referenced_by(store: KBStore, target_kind: str, target_id: str) -> list[str]
         for page in store.list_pages():
             if target_id in page.claims:
                 refs.append(f"page {page.id!r}")
+        # relation endpoints are bare ids without a kind tag; a same-slug
+        # artifact of a different kind could match here. acceptable given the
+        # slug-collision caveat in the spec's "out of scope".
         for rel in store.list_relations():
             if target_id in (rel.source, rel.target):
                 refs.append(f"relation {rel.id!r}")
@@ -839,6 +842,18 @@ def _approve_delete(
     try:
         artifact = getter(target_id)
     except ArtifactNotFoundError:
+        # Idempotent already-gone path (crash-retry between the file unlink and
+        # move_proposal_to_decided). The file is gone but the derived index rows
+        # may not be — a crash between deleter() and deindex() below would leave
+        # stale fts/embedding/prov rows and keep the deleted artifact searchable.
+        # deindex is a no-op when the rows are already absent, so run it here too
+        # to converge the index. The per-kind {kind}.delete audit event is
+        # intentionally NOT re-emitted on this path: the snapshot is preserved in
+        # the decided/ proposal, the shared approve() tail still records
+        # proposal.delete.approve, and re-emitting would double-log if the crash
+        # landed after the original audit call.
+        with index_db.open_db(store.kb_dir) as conn:
+            index_db.deindex(conn, kind=target_kind, id=target_id)
         return _reconstruct_deleted(target_kind, snapshot)
     refs = referenced_by(store, target_kind, target_id)
     if refs:
@@ -852,7 +867,7 @@ def _approve_delete(
         index_db.deindex(conn, kind=target_kind, id=target_id)
     audit.log_event(
         store.kb_dir, event=f"{target_kind}.delete", actor=approved_by,
-        object_ids=[target_id], data={"snapshot": snapshot},
+        object_ids=[target_id], data={"snapshot": snapshot}, reversible=False,
     )
     return artifact
 

@@ -80,10 +80,21 @@ def test_deindex_removes_fts_and_prov(store: KBStore) -> None:
         )
         index_db.index_prov_edge(conn, src_id="c1", dst_id="src-x", kind="cites")
         index_db.index_prov_edge(conn, src_id="other", dst_id="c1", kind="cites")
-    # sanity: the fts row is present
+        conn.execute(
+            "INSERT INTO embedding_index "
+            "(kind, id, vec, content_hash, model, model_version, dim, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            ("claim", "c1", b"\x00\x00\x80?", "hash-c1", "test-model", "v1", 1,
+             "2026-07-09T00:00:00Z"),
+        )
+    # sanity: the fts and embedding rows are present
     with index_db.open_db(store.kb_dir) as conn:
         pre = conn.execute("SELECT count(*) FROM claims_fts WHERE id='c1'").fetchone()[0]
         assert pre == 1
+        pre_emb = conn.execute(
+            "SELECT count(*) FROM embedding_index WHERE kind='claim' AND id='c1'"
+        ).fetchone()[0]
+        assert pre_emb == 1
 
     with index_db.open_db(store.kb_dir) as conn:
         index_db.deindex(conn, kind="claim", id="c1")
@@ -94,6 +105,10 @@ def test_deindex_removes_fts_and_prov(store: KBStore) -> None:
             "SELECT count(*) FROM prov_edges WHERE src_id='c1' OR dst_id='c1'"
         ).fetchone()[0]
         assert prov == 0
+        emb = conn.execute(
+            "SELECT count(*) FROM embedding_index WHERE kind='claim' AND id='c1'"
+        ).fetchone()[0]
+        assert emb == 0
 
 
 def test_deindex_relation_only_touches_embedding_and_prov(store: KBStore) -> None:
@@ -222,12 +237,16 @@ def test_approve_delete_page(store: KBStore) -> None:
     store.put_page(Page(id="p1", title="P", body="x"))
     _propose_and_approve_delete(store, "page", "p1")
     assert not store._page_path("p1").exists()
+    events = [e.event for e in audit.read_events(store.kb_dir)]
+    assert "page.delete" in events
 
 
 def test_approve_delete_entity(store: KBStore) -> None:
     store.put_entity(Entity(id="e1", name="E", type=EntityType.CONCEPT))
     _propose_and_approve_delete(store, "entity", "e1")
     assert not store._entity_path("e1").exists()
+    events = [e.event for e in audit.read_events(store.kb_dir)]
+    assert "entity.delete" in events
 
 
 def test_approve_delete_relation(store: KBStore) -> None:
@@ -239,6 +258,8 @@ def test_approve_delete_relation(store: KBStore) -> None:
     ))
     _propose_and_approve_delete(store, "relation", "c1--supports--c2")
     assert not store._relation_path("c1--supports--c2").exists()
+    events = [e.event for e in audit.read_events(store.kb_dir)]
+    assert "relation.delete" in events
 
 
 def test_approve_rechecks_reference_added_after_propose(store: KBStore) -> None:
@@ -261,6 +282,28 @@ def test_approve_delete_idempotent_when_already_gone(store: KBStore) -> None:
     assert result.id == "c1"
     # proposal is finalized (moved out of pending)
     assert not any(p.id == pr.id for p in store.list_proposals(ProposalStatus.PENDING))
+
+
+def test_approve_delete_idempotent_path_deindexes(store: KBStore) -> None:
+    """Guards a crash landing between deleter() and deindex(): the retry must
+    still converge the derived index, not just short-circuit on the missing
+    file. Without the fix, this hits the early return in the
+    ArtifactNotFoundError branch and the stale claims_fts row survives."""
+    _claim(store, "c1", "gone soon")
+    with index_db.open_db(store.kb_dir) as conn:
+        index_db.index_claim(
+            conn, id="c1", text="gone soon",
+            type="observation", status="working", tags=[],
+        )
+    pr = propose_delete(store, target_kind="claim", target_id="c1", proposed_by="agent")
+    # simulate a crash after the file unlink but before the original deindex
+    store.delete_claim("c1")
+    with index_db.open_db(store.kb_dir) as conn:
+        pre = conn.execute("SELECT count(*) FROM claims_fts WHERE id='c1'").fetchone()[0]
+        assert pre == 1  # sanity: the fts row outlives the file
+    approve(store, pr.id, approved_by="reviewer")
+    with index_db.open_db(store.kb_dir) as conn:
+        assert conn.execute("SELECT count(*) FROM claims_fts WHERE id='c1'").fetchone()[0] == 0
 
 
 def test_delete_forbids_self_approval(store: KBStore) -> None:
