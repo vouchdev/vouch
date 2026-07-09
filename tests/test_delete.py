@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+import yaml
 
 from vouch import audit, capabilities, index_db
 from vouch.jsonl_server import handle_request
@@ -311,6 +312,58 @@ def test_delete_forbids_self_approval(store: KBStore) -> None:
     pr = propose_delete(store, target_kind="claim", target_id="c1", proposed_by="same")
     with pytest.raises(ProposalError, match="forbidden_self_approval"):
         approve(store, pr.id, approved_by="same")
+
+
+def _trusted_agent_with_protected_voice(store: KBStore) -> None:
+    cfg = yaml.safe_load(store.config_path.read_text())
+    cfg["review"] = {"approver_role": "trusted-agent"}
+    cfg["page_kinds"] = {"voice": {"protected": True}}
+    store.config_path.write_text(yaml.safe_dump(cfg))
+
+
+def test_delete_protected_page_blocks_self_approval_despite_trusted_agent(
+    store: KBStore,
+) -> None:
+    """Deleting a protected page must need a distinct reviewer, exactly like
+    editing one — otherwise the trusted-agent opt-out lets a proposer remove
+    a policy-bearing page that it could not have changed on its own."""
+    _trusted_agent_with_protected_voice(store)
+    store.put_page(Page(id="p1", title="email voice", body="b", type="voice"))
+    pr = propose_delete(store, target_kind="page", target_id="p1", proposed_by="agent")
+    reason = check_approvable(store, pr.id, approved_by="agent")
+    assert reason is not None and "protected" in reason
+    with pytest.raises(ProposalError, match="protected"):
+        approve(store, pr.id, approved_by="agent")
+    # the page survives and the proposal stays pending
+    assert store._page_path("p1").exists()
+    assert any(p.id == pr.id for p in store.list_proposals(ProposalStatus.PENDING))
+    # a distinct reviewer can still approve the delete
+    approve(store, pr.id, approved_by="reviewer")
+    assert not store._page_path("p1").exists()
+
+
+def test_delete_protected_page_guard_holds_when_target_already_gone(
+    store: KBStore,
+) -> None:
+    """The idempotent already-gone path finalizes via the snapshot, so the
+    protected-kind gate must read the kind from the snapshot too."""
+    _trusted_agent_with_protected_voice(store)
+    store.put_page(Page(id="p1", title="email voice", body="b", type="voice"))
+    pr = propose_delete(store, target_kind="page", target_id="p1", proposed_by="agent")
+    store.delete_page("p1")  # crash-retry: file already removed
+    with pytest.raises(ProposalError, match="protected"):
+        approve(store, pr.id, approved_by="agent")
+    # a distinct reviewer still finalizes the idempotent approve
+    result = approve(store, pr.id, approved_by="reviewer")
+    assert result.id == "p1"
+
+
+def test_delete_unprotected_page_keeps_trusted_agent_opt_out(store: KBStore) -> None:
+    _trusted_agent_with_protected_voice(store)
+    store.put_page(Page(id="p2", title="scratch notes", body="b"))
+    pr = propose_delete(store, target_kind="page", target_id="p2", proposed_by="agent")
+    approve(store, pr.id, approved_by="agent")
+    assert not store._page_path("p2").exists()
 
 
 def test_check_approvable_flags_referenced_delete(store: KBStore) -> None:

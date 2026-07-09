@@ -21,6 +21,13 @@ All notable changes to vouch are documented here. Format follows
 - console Dashboard view: 12-month activity calendar, last-30-days bars,
   hour-of-week heatmap, top actors and event mix, driven by `kb.activity`.
 
+### Fixed
+- delete proposals targeting a protected page kind could be self-approved
+  under `review.approver_role: trusted-agent` — the protected-kind gate only
+  covered page edits, so a proposer could remove a policy-bearing page it
+  could not have changed on its own. the gate now covers the delete path
+  (live page kind first, propose-time snapshot on the already-gone path).
+
 ## [1.2.2] — 2026-07-07
 
 ### Packaging
