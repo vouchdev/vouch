@@ -126,6 +126,231 @@ def _retrieve(
     return [(k, i, s, sc, "substring") for k, i, s, sc in filtered]
 
 
+GateOutcome = Literal["kept", "budget-dropped", "uncited", "status-filtered"]
+
+
+def explain_ranking(
+    store: KBStore,
+    *,
+    query: str,
+    limit: int = 10,
+    max_chars: int | None = None,
+    require_citations: bool = False,
+    rerank: bool = False,
+    project: str | None = None,
+    agent: str | None = None,
+    session_id: str | None = None,
+) -> dict[str, Any]:
+    """Explain why each retrieval candidate ranked where it did (read-only).
+
+    Re-runs `_retrieve`'s primitives — semantic search, lexical FTS5 search,
+    RRF fusion, viewer scoping — in an instrumented mode rather than
+    duplicating the scoring math, then reports per candidate: its lexical
+    rank, semantic rank, the RRF contribution, the rerank delta (when #5 is
+    enabled), the recency/frequency factors (when #317 is enabled), the
+    salience factor, and the gate outcome that keeps or drops it
+    (`kept` / `budget-dropped` / `uncited` / `status-filtered`).
+
+    Viewer scoping matches `kb.context`: hits invisible to the viewer are
+    dropped by `filter_hits` before instrumentation, so this can never expose
+    an artifact the caller couldn't already retrieve. Stages reported reflect
+    what's wired in — fusion always; rerank only when `rerank=True` and the
+    reranker extras (#5) are installed; recency/frequency (#317) is not yet
+    implemented and its factors are reported as null. Near-duplicate
+    deduplication (a presentation pass in `build_context_pack`) is not
+    modelled: every scoped candidate is surfaced with its own gate.
+    """
+    viewer = viewer_from(config_path=store.config_path, project=project, agent=agent)
+    backend = _configured_backend(store)
+    fetch_limit = scoped_fetch_limit(limit, viewer)
+
+    def _ranks(hits: list[tuple[str, str, str, float]]) -> dict[tuple[str, str], int]:
+        """Map each hit's (kind, id) to its 1-based position in the list."""
+        return {(k, i): r for r, (k, i, _s, _sc) in enumerate(hits, start=1)}
+
+    sem_rank: dict[tuple[str, str], int] = {}
+    lex_rank: dict[tuple[str, str], int] = {}
+    fusion = False
+    used_backend = backend
+    filtered: list[tuple[str, str, str, float]] = []
+
+    if backend in ("auto", "hybrid"):
+        sem = index_db.search_semantic(store.kb_dir, query, limit=fetch_limit)
+        try:
+            lex = index_db.search(store.kb_dir, query, limit=fetch_limit)
+        except sqlite3.Error:
+            lex = []
+        fused = rrf_fuse(sem, lex, limit=fetch_limit)
+        if fused:
+            sem_rank, lex_rank = _ranks(sem), _ranks(lex)
+            fusion = True
+            used_backend = "hybrid"
+            filtered = filter_hits(store, fused, viewer, limit=limit)
+        else:
+            # both retrievers empty -> substring scan (mirrors _retrieve)
+            used_backend = "substring"
+            filtered = filter_hits(
+                store, store.search_substring(query, limit=fetch_limit), viewer, limit=limit
+            )
+    elif backend == "embedding":
+        sem = index_db.search_semantic(store.kb_dir, query, limit=fetch_limit)
+        sem_rank = _ranks(sem)
+        used_backend = "embedding"
+        filtered = filter_hits(store, sem, viewer, limit=limit) if sem else []
+    elif backend == "fts5":
+        try:
+            lex = index_db.search(store.kb_dir, query, limit=fetch_limit)
+        except sqlite3.Error:
+            lex = []
+        lex_rank = _ranks(lex)
+        used_backend = "fts5"
+        filtered = filter_hits(store, lex, viewer, limit=limit) if lex else []
+    else:
+        used_backend = "substring"
+        filtered = filter_hits(
+            store, store.search_substring(query, limit=fetch_limit), viewer, limit=limit
+        )
+
+    candidates: list[dict[str, Any]] = []
+    for fused_rank, (kind, cid, summary, score) in enumerate(filtered, start=1):
+        key = (kind, cid)
+        candidates.append({
+            "kind": kind,
+            "id": cid,
+            "summary": _enrich_summary(store, kind, cid, summary),
+            "fused_rank": fused_rank,
+            "lexical_rank": lex_rank.get(key),
+            "semantic_rank": sem_rank.get(key),
+            "rrf_score": score if fusion else None,
+            "final_score": score,
+            "rerank_delta": None,
+            "recency_factor": None,
+            "frequency_factor": None,
+            "salience_factor": None,
+            "gate": cast(GateOutcome, "kept"),
+        })
+
+    notes: list[str] = []
+    rerank_applied = _apply_rerank(query, candidates, notes) if rerank and candidates else False
+    if session_id:
+        _apply_salience(store, session_id, candidates)
+    _classify_gates(store, candidates, max_chars=max_chars, require_citations=require_citations)
+
+    result: dict[str, Any] = {
+        "query": query,
+        "backend": used_backend,
+        "limit": limit,
+        "viewer": {"project": viewer.project, "agent": viewer.agent},
+        "stages": {
+            "fusion": fusion,
+            "rerank": rerank_applied,
+            "recency_frequency": False,
+        },
+        "candidates": candidates,
+    }
+    if notes:
+        result["notes"] = notes
+    return result
+
+
+def _apply_rerank(query: str, candidates: list[dict[str, Any]], notes: list[str]) -> bool:
+    """Annotate `candidates` with `rerank_delta`; return whether #5 ran.
+
+    Delta is `fused_rank - reranked_rank`: positive means the reranker moved
+    the candidate up. No-op returning False if the reranker extras aren't
+    installed.
+    """
+    try:
+        from .embeddings.rerank import default_reranker
+        from .embeddings.rerank import rerank as do_rerank
+    except ImportError:
+        notes.append("rerank requested but reranker extras (#5) not installed; stage skipped")
+        return False
+    hits = [(c["kind"], c["id"], c["summary"], c["final_score"]) for c in candidates]
+    reranked = do_rerank(query=query, hits=hits, reranker=default_reranker(), top_k=len(hits))
+    new_rank = {(k, i): r for r, (k, i, _s, _sc) in enumerate(reranked, start=1)}
+    for c in candidates:
+        nr = new_rank.get((c["kind"], c["id"]))
+        if nr is not None:
+            c["rerank_delta"] = c["fused_rank"] - nr
+    return True
+
+
+def _apply_salience(
+    store: KBStore, session_id: str, candidates: list[dict[str, Any]]
+) -> None:
+    """Overlay the entity-salience reflex weight onto matching candidates.
+
+    Salience is a sidebar signal (see `salience` module), not a term in the
+    fused score; this surfaces the overlap so a tuner can see which surfaced
+    artifacts the reflex would also have prefetched. Best-effort.
+    """
+    from . import salience as salience_mod
+    try:
+        cfg = yaml.safe_load(store.config_path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        cfg = None
+    _enabled, _window, top_k = salience_mod.reflex_cfg(cfg if isinstance(cfg, dict) else {})
+    records = salience_mod.compute_salience(store, session_id, top_k=top_k)
+    ent_factor: dict[str, float] = {}
+    claim_factor: dict[str, float] = {}
+    for pos, rec in enumerate(records):
+        weight = round(1.0 / (1 + pos), 4)
+        ent_factor[rec["entity_id"]] = weight
+        if rec.get("top_claim_id"):
+            claim_factor[rec["top_claim_id"]] = weight
+    for c in candidates:
+        if c["kind"] == "entity" and c["id"] in ent_factor:
+            c["salience_factor"] = ent_factor[c["id"]]
+        elif c["kind"] == "claim" and c["id"] in claim_factor:
+            c["salience_factor"] = claim_factor[c["id"]]
+
+
+def _classify_gates(
+    store: KBStore,
+    candidates: list[dict[str, Any]],
+    *,
+    max_chars: int | None,
+    require_citations: bool,
+) -> None:
+    """Set each candidate's `gate`, mirroring `build_context_pack`'s pipeline.
+
+    Priority: `status-filtered` (retracted/missing claim, dropped during item
+    building) > `budget-dropped` (evicted by the `max_chars` tail pop) >
+    `uncited` (a claim with no citations, flagged when `require_citations`) >
+    `kept`.
+    """
+    survivors: list[dict[str, Any]] = []
+    citations: dict[str, list[str]] = {}
+    for c in candidates:
+        if c["kind"] == "claim":
+            try:
+                claim = store.get_claim(c["id"])
+            except ArtifactNotFoundError:
+                c["gate"] = "status-filtered"
+                continue
+            if claim.status in _RETRACTED_CLAIM_STATUSES:
+                c["gate"] = "status-filtered"
+                continue
+            citations[c["id"]] = list(claim.evidence)
+        survivors.append(c)
+
+    if max_chars is not None:
+        def _clipped_len(s: str) -> int:
+            """Summary length after build_context_pack's 200-char clip."""
+            return len(s[:200] + "…") if len(s) > 200 else len(s)
+
+        if sum(_clipped_len(c["summary"]) for c in survivors) > max_chars:
+            while survivors and sum(_clipped_len(c["summary"]) for c in survivors) > max_chars:
+                survivors.pop()["gate"] = "budget-dropped"
+
+    for c in survivors:
+        if require_citations and c["kind"] == "claim" and not citations.get(c["id"]):
+            c["gate"] = "uncited"
+        else:
+            c["gate"] = "kept"
+
+
 def _enrich_summary(store: KBStore, kind: str, artifact_id: str, summary: str) -> str:
     """Return a non-empty summary, falling back to the stored artifact text."""
     if summary:

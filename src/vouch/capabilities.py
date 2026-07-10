@@ -35,6 +35,7 @@ METHODS = [
     "kb.search",
     "kb.neighbors",
     "kb.context",
+    "kb.explain_ranking",
     "kb.synthesize",
     "kb.read_page",
     "kb.read_claim",
