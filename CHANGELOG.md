@@ -6,6 +6,17 @@ All notable changes to vouch are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+- `kb.explain_ranking` / `vouch explain-ranking` — read-only introspection over
+  the retrieval pipeline. per candidate it reports the lexical (fts5) rank, the
+  semantic (embedding) rank, the rrf contribution, the rerank delta (when the
+  reranker extras are installed), the salience factor, and the gate outcome
+  (`kept` / `budget-dropped` / `uncited` / `status-filtered`). re-runs the same
+  `_retrieve` primitives `kb.context` uses in an instrumented mode rather than
+  duplicating the scoring math, and is viewer-scoped identically so it can't
+  expose an artifact the caller couldn't already retrieve. recency/frequency
+  factors are reported null until #317 lands.
+
 ## [1.2.2] — 2026-07-07
 
 ### Packaging

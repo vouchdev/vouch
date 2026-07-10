@@ -29,7 +29,7 @@ from . import sessions as sess_mod
 from . import trust as trust_mod
 from . import verify as verify_mod
 from .capabilities import capabilities as build_caps
-from .context import build_context_pack
+from .context import build_context_pack, explain_ranking
 from .logging_config import configure_logging
 from .models import ProposalStatus
 from .page_filters import filter_pages
@@ -258,6 +258,33 @@ def kb_context(
         expand_graph=expand_graph, graph_depth=graph_depth, graph_limit=graph_limit,
     )
     return salience_mod.attach_salience(result, store, session_id, cfg)
+
+
+@mcp.tool()
+def kb_explain_ranking(
+    query: str,
+    limit: int = 10,
+    max_chars: int | None = None,
+    require_citations: bool = False,
+    rerank: bool = False,
+    project: str | None = None,
+    agent: str | None = None,
+    session_id: str | None = None,
+) -> dict[str, Any]:
+    """Explain why each retrieval candidate ranked where it did.
+
+    Read-only introspection over the same pipeline ``kb_context`` runs: per
+    candidate it returns the lexical/semantic rank, the RRF contribution, the
+    rerank delta (when the reranker extras are installed and ``rerank=True``),
+    the salience factor, and the gate outcome (``kept`` / ``budget-dropped`` /
+    ``uncited`` / ``status-filtered``). Viewer-scoped exactly like
+    ``kb_context`` — it can't reveal an artifact the caller couldn't retrieve.
+    """
+    return explain_ranking(
+        _store(), query=query, limit=limit, max_chars=max_chars,
+        require_citations=require_citations, rerank=rerank,
+        project=project, agent=agent, session_id=session_id,
+    )
 
 
 @mcp.tool()

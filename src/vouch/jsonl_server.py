@@ -38,7 +38,7 @@ from . import sessions as sess_mod
 from . import trust as trust_mod
 from . import verify as verify_mod
 from .capabilities import capabilities as build_caps
-from .context import build_context_pack
+from .context import build_context_pack, explain_ranking
 from .logging_config import configure_logging
 from .models import ProposalStatus
 from .page_filters import filter_pages
@@ -223,6 +223,20 @@ def _h_context(p: dict) -> dict:
         graph_rel_types=p.get("graph_rel_types"),
     )
     return salience_mod.attach_salience(result, store, session_id, cfg)
+
+
+def _h_explain_ranking(p: dict) -> dict:
+    return explain_ranking(
+        _store(),
+        query=p["query"],
+        limit=int(p.get("limit", 10)),
+        max_chars=int(p["max_chars"]) if p.get("max_chars") is not None else None,
+        require_citations=bool(p.get("require_citations", False)),
+        rerank=bool(p.get("rerank", False)),
+        project=p.get("project"),
+        agent=p.get("agent"),
+        session_id=p.get("session_id"),
+    )
 
 
 def _h_synthesize(p: dict) -> dict:
@@ -734,6 +748,7 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.search": _h_search,
     "kb.neighbors": _h_neighbors,
     "kb.context": _h_context,
+    "kb.explain_ranking": _h_explain_ranking,
     "kb.synthesize": _h_synthesize,
     "kb.read_page": _h_read_page,
     "kb.read_claim": _h_read_claim,

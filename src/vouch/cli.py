@@ -46,7 +46,7 @@ from . import trust as trust_mod
 from . import vault_sync as vault_sync_mod
 from . import verify as verify_mod
 from .capabilities import capabilities as build_caps
-from .context import build_context_pack
+from .context import build_context_pack, explain_ranking
 from .lifecycle import LifecycleError
 from .logging_config import configure_logging
 from .models import Proposal, ProposalKind, ProposalStatus
@@ -2351,6 +2351,70 @@ def search(
             click.echo(f"[{used}] {k}/{i}\tscore={score:.4f}\t{snip}  ({used})")
         else:
             click.echo(f"{k}/{i}\t{snip}  ({used})")
+
+
+@cli.command(name="explain-ranking")
+@click.argument("query")
+@click.option("--limit", "-n", default=10, show_default=True, type=int)
+@click.option("--max-chars", default=None, type=int,
+              help="Simulate the kb.context budget gate at this cap.")
+@click.option("--require-citations/--no-require-citations", default=False,
+              help="Flag uncited claims as gated.")
+@click.option("--rerank/--no-rerank", default=False,
+              help="Report the rerank delta (needs the reranker extras).")
+@click.option("--session-id", default=None,
+              help="Overlay the entity-salience reflex for this session.")
+@click.option("--project", default=None, help="Viewer project for scope filtering.")
+@click.option("--agent", default=None, help="Viewer agent for scope filtering.")
+@click.option("--format", "fmt", type=click.Choice(["text", "json"]), default="text",
+              show_default=True)
+def explain_ranking_cmd(
+    query: str,
+    limit: int,
+    max_chars: int | None,
+    require_citations: bool,
+    rerank: bool,
+    session_id: str | None,
+    project: str | None,
+    agent: str | None,
+    fmt: str,
+) -> None:
+    """Explain why each retrieval candidate ranked where it did.
+
+    Read-only introspection over the kb.context pipeline: per candidate it
+    reports the lexical/semantic rank, the RRF contribution, the rerank delta,
+    the salience factor, and the gate outcome. Viewer-scoped like kb.context.
+    """
+    store = _load_store()
+    result = explain_ranking(
+        store, query=query, limit=limit, max_chars=max_chars,
+        require_citations=require_citations, rerank=rerank,
+        project=project, agent=agent, session_id=session_id,
+    )
+    if fmt == "json":
+        _emit_json(result)
+        return
+
+    stages = result["stages"]
+    enabled = [name for name, on in stages.items() if on] or ["none"]
+    click.echo(f"query: {result['query']}  backend={result['backend']}  "
+               f"stages={','.join(enabled)}")
+    for note in result.get("notes", []):
+        click.echo(f"  note: {note}")
+    if not result["candidates"]:
+        click.echo("  (no candidates)")
+        return
+
+    def _fmt(v: object) -> str:
+        return "-" if v is None else (f"{v:.4f}" if isinstance(v, float) else str(v))
+
+    for c in result["candidates"]:
+        click.echo(
+            f"[{c['gate']}] {c['kind']}/{c['id']}  "
+            f"lex={_fmt(c['lexical_rank'])} sem={_fmt(c['semantic_rank'])} "
+            f"rrf={_fmt(c['rrf_score'])} rerankΔ={_fmt(c['rerank_delta'])} "
+            f"salience={_fmt(c['salience_factor'])} score={_fmt(c['final_score'])}"
+        )
 
 
 @cli.command()
