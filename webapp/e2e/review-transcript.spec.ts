@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 
-// Drives the real frontend (routing, SessionsView, TranscriptView, block
+// Drives the real frontend (routing, ReviewView, TranscriptView, block
 // renderers) against stubbed /proxy responses, so it is independent of the
 // backend build. The connection is seeded into localStorage; health and
 // capabilities are stubbed so the project comes up "ok" with the transcript
@@ -10,11 +10,11 @@ const CAPS = {
   name: 'vouch',
   version: '1.2.2',
   level: 3,
-  methods: ['kb.list_sessions', 'kb.session_transcript'],
+  methods: ['kb.list_sessions', 'kb.summarize_session', 'kb.session_transcript'],
   review_gated: true,
 }
 
-test('sessions tab renders a picked transcript', async ({ page }) => {
+test('review tab renders a picked session transcript', async ({ page }) => {
   await page.addInitScript((endpoint) => {
     localStorage.setItem(
       'vouch-ui.connections.v2',
@@ -89,7 +89,7 @@ test('sessions tab renders a picked transcript', async ({ page }) => {
     return route.fulfill({ json: { ok: true, id: '1', result: {} } })
   })
 
-  await page.goto('/sessions')
+  await page.goto('/review')
   await page.getByText('e2e session').click()
   await expect(page.getByText('e2e transcript body')).toBeVisible()
 })

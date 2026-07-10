@@ -9,10 +9,16 @@ import type { ProjectState } from '../connection/ConnectionContext'
 import { useFanout } from '../lib/fanout'
 import { rpc, VouchRpcError } from '../lib/rpc'
 import type { SessionEntry } from '../lib/types'
+import { TranscriptView } from './TranscriptView'
 
 const STAGE_LABEL: Record<SessionEntry['stage'], string> = {
   buffer: 'open buffer',
   pending: 'needs summary',
+}
+
+/** Badge text for a row: summarized wins over the raw capture stage. */
+function stageLabel(s: SessionEntry): string {
+  return s.summarized ? 'summarized' : STAGE_LABEL[s.stage]
 }
 
 /** Hints for the skip reasons kb.summarize_session can return instead of a summary. */
@@ -47,12 +53,18 @@ export function ReviewView() {
   })
   useErrorToast(sessions.errors.length > 0, sessions.errors[0]?.error)
 
-  const rows: Row[] = sessions.rows
-    .flatMap((r) => (r.data?.sessions ?? []).map((s) => ({ project: r.project, s })))
-    .filter((r) => !r.s.summarized)
+  const rows: Row[] = sessions.rows.flatMap((r) =>
+    (r.data?.sessions ?? []).map((s) => ({ project: r.project, s })),
+  )
   const selected = rows.find((r) => rowKey(r) === selectedKey) ?? null
   const canSummarize =
-    !!selected && hasMethod('kb.summarize_session', selected.project.conn.endpoint)
+    !!selected &&
+    !selected.s.summarized &&
+    hasMethod('kb.summarize_session', selected.project.conn.endpoint)
+  const canTranscript =
+    !!selected &&
+    !!selected.s.session_id &&
+    hasMethod('kb.session_transcript', selected.project.conn.endpoint)
 
   const summarize = useMutation({
     mutationFn: (row: Row) =>
@@ -104,8 +116,8 @@ export function ReviewView() {
   if (rows.length === 0) {
     return (
       <EmptyState
-        title="No sessions waiting for a summary"
-        hint="Captured sessions land here when a tab closes unexpectedly or a capture is filed without an LLM narrative. Summarize one and it moves to Pending for review."
+        title="No captured sessions"
+        hint="Captured agent sessions appear here to read and summarize. A session that still needs a summary can be sent through review from its transcript."
       />
     )
   }
@@ -129,7 +141,7 @@ export function ReviewView() {
                     </span>
                   )}
                   <span className="rounded bg-paper-3 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-widest text-accent">
-                    {STAGE_LABEL[r.s.stage]}
+                    {stageLabel(r.s)}
                   </span>
                   {r.s.observations !== null && (
                     <span className="text-[11px] text-sepia">{r.s.observations} observations</span>
@@ -146,84 +158,93 @@ export function ReviewView() {
         </ul>
       </div>
 
-      <div className="min-w-0 flex-1 overflow-y-auto p-6">
+      <div className="flex min-w-0 flex-1 flex-col">
         {!selected ? (
-          <EmptyState title="Select a session" hint="Pick a captured session to see its details — then Summarize to send it through review." />
+          <div className="p-6">
+            <EmptyState
+              title="Select a session"
+              hint="Pick a captured session to read its transcript — then Summarize to send it through review."
+            />
+          </div>
         ) : (
-          <div className="mx-auto max-w-2xl">
-            <div className="mb-4 flex items-center gap-2">
-              {aggregated && (
-                <span className="rounded bg-accent/15 px-2 py-0.5 font-mono text-[10px] text-accent-2">
-                  {selected.project.label}
+          <>
+            <div className="shrink-0 border-b border-rule px-6 py-4">
+              <div className="mb-2 flex flex-wrap items-center gap-2">
+                {aggregated && (
+                  <span className="rounded bg-accent/15 px-2 py-0.5 font-mono text-[10px] text-accent-2">
+                    {selected.project.label}
+                  </span>
+                )}
+                <span className="rounded bg-paper-3 px-2 py-0.5 font-mono text-[10px] uppercase tracking-widest text-accent">
+                  {stageLabel(selected.s)}
                 </span>
+                <span className="break-all font-mono text-xs text-sepia">
+                  {selected.s.session_id ?? '(no session id)'}
+                </span>
+                {selected.s.observations !== null && (
+                  <span className="text-[11px] text-sepia">{selected.s.observations} observations</span>
+                )}
+                {selected.s.last_activity && (
+                  <span className="text-[11px] text-sepia">
+                    {selected.s.last_activity.slice(0, 19).replace('T', ' ')}
+                  </span>
+                )}
+              </div>
+
+              <p className="mb-3 text-[15px] leading-6 text-ink">{rowTitle(selected.s)}</p>
+
+              {selected.s.summarized ? (
+                <p className="text-xs text-sepia">
+                  Already summarized — its proposal is in Pending for review.
+                </p>
+              ) : canSummarize ? (
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => summarize.mutate(selected)}
+                    disabled={summarize.isPending || !selected.s.session_id}
+                    title={selected.s.session_id ? undefined : 'no session id recorded'}
+                    className="flex items-center gap-2 rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-paper transition hover:bg-accent-2 disabled:opacity-40"
+                  >
+                    {summarize.isPending ? (
+                      <>
+                        <LoaderCircle size={15} className="animate-spin" /> Summarizing…
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles size={15} /> Summarize
+                      </>
+                    )}
+                  </button>
+                  <span className="text-xs text-sepia">
+                    {summarize.isPending
+                      ? 'running the configured LLM — this can take a minute'
+                      : selected.s.session_id
+                        ? 'runs the configured LLM over the capture; the summary lands in Pending'
+                        : 'no session id recorded — this capture cannot be summarized'}
+                  </span>
+                </div>
+              ) : (
+                <p className="text-xs text-sepia">
+                  This endpoint cannot summarize — kb.summarize_session is not advertised.
+                </p>
               )}
-              <span className="rounded bg-paper-3 px-2 py-0.5 font-mono text-[10px] uppercase tracking-widest text-accent">
-                {STAGE_LABEL[selected.s.stage]}
-              </span>
-              <span className="break-all font-mono text-xs text-sepia">
-                {selected.s.session_id ?? '(no session id)'}
-              </span>
             </div>
 
-            <p className="mb-6 text-[15px] leading-7 text-ink">{rowTitle(selected.s)}</p>
-
-            <dl className="mb-6 rounded-xl border border-rule bg-paper-2 p-5">
-              <div className="flex gap-3 border-b border-rule/60 py-2 text-sm">
-                <dt className="w-28 shrink-0 text-xs uppercase tracking-wide text-sepia">stage</dt>
-                <dd className="text-ink-2">{STAGE_LABEL[selected.s.stage]}</dd>
-              </div>
-              {selected.s.proposal_id && (
-                <div className="flex gap-3 border-b border-rule/60 py-2 text-sm">
-                  <dt className="w-28 shrink-0 text-xs uppercase tracking-wide text-sepia">proposal</dt>
-                  <dd className="break-all font-mono text-xs text-ink-2">{selected.s.proposal_id}</dd>
-                </div>
-              )}
-              {selected.s.observations !== null && (
-                <div className="flex gap-3 border-b border-rule/60 py-2 text-sm">
-                  <dt className="w-28 shrink-0 text-xs uppercase tracking-wide text-sepia">observations</dt>
-                  <dd className="text-ink-2">{selected.s.observations}</dd>
-                </div>
-              )}
-              {selected.s.last_activity && (
-                <div className="flex gap-3 py-2 text-sm">
-                  <dt className="w-28 shrink-0 text-xs uppercase tracking-wide text-sepia">last activity</dt>
-                  <dd className="text-ink-2">{selected.s.last_activity.slice(0, 19).replace('T', ' ')}</dd>
-                </div>
-              )}
-            </dl>
-
-            {!canSummarize ? (
-              <p className="text-sm text-sepia">
-                This endpoint cannot summarize — kb.summarize_session is not advertised.
-              </p>
-            ) : (
-              <>
-                <button
-                  onClick={() => summarize.mutate(selected)}
-                  disabled={summarize.isPending || !selected.s.session_id}
-                  title={selected.s.session_id ? undefined : 'no session id recorded'}
-                  className="flex items-center gap-2 rounded-lg bg-accent px-5 py-2.5 text-sm font-semibold text-paper transition hover:bg-accent-2 disabled:opacity-40"
-                >
-                  {summarize.isPending ? (
-                    <>
-                      <LoaderCircle size={15} className="animate-spin" /> Summarizing…
-                    </>
-                  ) : (
-                    <>
-                      <Sparkles size={15} /> Summarize
-                    </>
-                  )}
-                </button>
-                <p className="mt-2 text-xs text-sepia">
-                  {summarize.isPending
-                    ? 'running the configured LLM — this can take a minute'
-                    : selected.s.session_id
-                      ? 'runs the configured LLM over the capture; the summary lands in Pending'
-                      : 'no session id recorded — this capture cannot be summarized'}
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              {canTranscript ? (
+                <TranscriptView
+                  conn={selected.project.conn}
+                  sessionId={selected.s.session_id as string}
+                />
+              ) : (
+                <p className="p-6 text-sm text-sepia">
+                  {selected.s.session_id
+                    ? 'Transcript view is not available on this endpoint — kb.session_transcript is not advertised.'
+                    : 'No transcript — this capture has no recorded session id.'}
                 </p>
-              </>
-            )}
-          </div>
+              )}
+            </div>
+          </>
         )}
       </div>
     </div>

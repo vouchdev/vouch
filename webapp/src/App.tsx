@@ -8,7 +8,6 @@ import { ChatView } from './views/ChatView'
 import { ClaimsView } from './views/ClaimsView'
 import { PendingView } from './views/PendingView'
 import { ReviewView } from './views/ReviewView'
-import { SessionsView } from './views/SessionsView'
 import { StatsView } from './views/StatsView'
 
 export default function App() {
@@ -25,7 +24,6 @@ export default function App() {
                 <Route path="/pending" element={<PendingView />} />
                 <Route path="/claims" element={<ClaimsView />} />
                 <Route path="/browse/:kind?/:id?" element={<BrowseView />} />
-                <Route path="/sessions" element={<SessionsView />} />
                 <Route path="/stats" element={<StatsView />} />
               </Route>
             </Routes>

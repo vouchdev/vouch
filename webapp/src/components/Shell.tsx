@@ -1,4 +1,4 @@
-import { Activity, BadgeCheck, FileClock, Inbox, Library, MessageSquare, Plug, ScrollText, SunMoon } from 'lucide-react'
+import { Activity, BadgeCheck, FileClock, Inbox, Library, MessageSquare, Plug, SunMoon } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { ConnectDialog } from '../connection/ConnectDialog'
@@ -14,17 +14,15 @@ const NAV = [
   { to: '/pending', label: 'Pending', icon: Inbox },
   { to: '/claims', label: 'Claims', icon: BadgeCheck },
   { to: '/browse', label: 'Browse', icon: Library },
-  { to: '/sessions', label: 'Sessions', icon: ScrollText },
   { to: '/stats', label: 'Stats', icon: Activity },
 ]
 
 const TITLES: Record<string, string> = {
   '/chat': 'Chat',
-  '/review': 'Review — sessions to summarize',
+  '/review': 'Review — session transcripts & summaries',
   '/pending': 'Pending review',
   '/claims': 'Approved claims',
   '/browse': 'Knowledge',
-  '/sessions': 'Session transcripts',
   '/stats': 'Stats & health',
 }
 
