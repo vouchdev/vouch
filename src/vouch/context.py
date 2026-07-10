@@ -74,6 +74,31 @@ def _configured_backend(store: KBStore) -> str:
     return "auto"
 
 
+def _rerank_cfg(store: KBStore) -> tuple[bool, int | None]:
+    """Read ``retrieval.rerank`` defensively. Returns (enabled, top_k).
+
+    Mirrors ``salience.reflex_cfg``'s config-reading shape. ``top_k=None``
+    means "use the caller's context limit" — resolved at the `_retrieve`
+    call site, since the config itself has no notion of a query's limit.
+    """
+    try:
+        loaded = yaml.safe_load(store.config_path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        return False, None
+    retrieval = loaded.get("retrieval") if isinstance(loaded, dict) else None
+    rerank = retrieval.get("rerank") if isinstance(retrieval, dict) else None
+    if not isinstance(rerank, dict):
+        rerank = {}
+
+    enabled = rerank.get("enabled", False)
+    enabled = enabled if isinstance(enabled, bool) else False
+
+    top_k = rerank.get("top_k")
+    top_k = top_k if isinstance(top_k, int) and top_k > 0 else None
+
+    return enabled, top_k
+
+
 def _retrieve(
     store: KBStore,
     query: str,
@@ -88,6 +113,12 @@ def _retrieve(
       - "embedding": semantic search only
       - "fts5": lexical FTS5 only
       - "substring": substring scan only
+
+    When `retrieval.rerank.enabled` is set, the fused hybrid hits are
+    reordered by the cross-encoder reranker (`embeddings/rerank.py`) before
+    scoping filters run — same reranker `vouch search --rerank` already
+    uses. Off by default, so existing rankings are unaffected; degrades to
+    the fused order if the optional reranker extra isn't installed.
     """
     backend = _configured_backend(store)
     fetch_limit = scoped_fetch_limit(limit, viewer)
@@ -100,6 +131,18 @@ def _retrieve(
             lex = []
         fused = rrf_fuse(sem, lex, limit=fetch_limit)
         if fused:
+            rerank_enabled, rerank_top_k = _rerank_cfg(store)
+            if rerank_enabled:
+                try:
+                    from .embeddings.rerank import default_reranker
+                    from .embeddings.rerank import rerank as do_rerank
+
+                    fused = do_rerank(
+                        query=query, hits=fused, reranker=default_reranker(),
+                        top_k=rerank_top_k or limit,
+                    )
+                except ImportError:
+                    pass  # reranker extra not installed; keep fused order
             filtered = filter_hits(store, fused, viewer, limit=limit)
             return [(k, i, s, sc, "hybrid") for k, i, s, sc in filtered]
         # both retrievers empty -> fall through to the substring scan below.

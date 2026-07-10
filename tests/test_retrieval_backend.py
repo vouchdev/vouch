@@ -45,6 +45,27 @@ def _backends(pack: dict) -> set[str]:
     return {item["backend"] for item in pack["items"]}
 
 
+def _set_rerank(store: KBStore, *, enabled: bool, top_k: int | None = None) -> None:
+    cfg = yaml.safe_load(store.config_path.read_text())
+    rerank_cfg = cfg.setdefault("retrieval", {}).setdefault("rerank", {})
+    rerank_cfg["enabled"] = enabled
+    if top_k is not None:
+        rerank_cfg["top_k"] = top_k
+    store.config_path.write_text(yaml.safe_dump(cfg))
+
+
+class _StubReranker:
+    """Deterministic stand-in for the cross-encoder: longer snippet wins.
+
+    Exercises the real `embeddings.rerank.rerank` scoring/sort path without
+    needing the optional sentence-transformers extra, so this runs under
+    the base CI install like the rest of this file (#92-style pattern).
+    """
+
+    def score(self, query: str, candidates: list[str]) -> list[float]:
+        return [float(len(c)) for c in candidates]
+
+
 def test_backend_fts5_skips_embedding(
     store: KBStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -162,6 +183,90 @@ def test_dedupe_keeps_highest_scored_regardless_of_input_order() -> None:
                      score=0.90, backend="hybrid", citations=[], freshness="unknown")
     out = _dedupe_near_duplicates([lo, hi])  # deliberately low-score-first
     assert [i.id for i in out] == ["hi"]
+
+
+def test_rerank_disabled_by_default_ordering_unchanged(
+    store: KBStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No `retrieval.rerank` config at all (#429): the reranker must never
+    even be constructed, and hybrid ordering is exactly the RRF-fused order."""
+    def _boom() -> None:
+        raise AssertionError("reranker must not be constructed when rerank is off")
+
+    monkeypatch.setattr("vouch.embeddings.rerank.default_reranker", _boom)
+    src = store.put_source(b"e2")
+    store.put_claim(Claim(id="c2", text="OAuth refresh flow", evidence=[src.id]))
+    health.rebuild_index(store)
+    monkeypatch.setattr(
+        context.index_db, "search_semantic",
+        lambda *a, **k: [
+            ("claim", "c1", "short", 0.9),
+            ("claim", "c2", "a much longer snippet of text", 0.8),
+        ],
+    )
+    monkeypatch.setattr(context.index_db, "search", lambda *a, **k: [])
+    _set_backend(store, "hybrid")
+
+    pack = context.build_context_pack(store, query="auth")
+    assert [i["id"] for i in pack["items"]] == ["c1", "c2"]
+
+
+def test_rerank_enabled_reorders_by_cross_encoder_score(
+    store: KBStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With `retrieval.rerank.enabled: true`, hybrid hits are reordered by
+    the reranker's scores instead of the RRF fusion order."""
+    src = store.put_source(b"e2")
+    store.put_claim(Claim(id="c2", text="OAuth refresh flow", evidence=[src.id]))
+    health.rebuild_index(store)
+    monkeypatch.setattr(
+        context.index_db, "search_semantic",
+        lambda *a, **k: [
+            ("claim", "c1", "short", 0.9),
+            ("claim", "c2", "a much longer snippet of text", 0.8),
+        ],
+    )
+    monkeypatch.setattr(context.index_db, "search", lambda *a, **k: [])
+    _set_backend(store, "hybrid")
+
+    # sanity: fused order (rerank off) is c1 then c2 by RRF score.
+    baseline = context.build_context_pack(store, query="auth")
+    assert [i["id"] for i in baseline["items"]] == ["c1", "c2"]
+
+    monkeypatch.setattr(
+        "vouch.embeddings.rerank.default_reranker", lambda: _StubReranker()
+    )
+    _set_rerank(store, enabled=True)
+    reranked = context.build_context_pack(store, query="auth")
+    assert [i["id"] for i in reranked["items"]] == ["c2", "c1"]
+    assert _backends(reranked) == {"hybrid"}
+
+
+def test_rerank_missing_extra_degrades_to_fused_order(
+    store: KBStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`sentence-transformers` not installed must not break `kb.context` —
+    it degrades to the unreranked fused order instead of raising."""
+    def _raise() -> None:
+        raise ImportError("sentence-transformers not installed")
+
+    src = store.put_source(b"e2")
+    store.put_claim(Claim(id="c2", text="OAuth refresh flow", evidence=[src.id]))
+    health.rebuild_index(store)
+    monkeypatch.setattr(
+        context.index_db, "search_semantic",
+        lambda *a, **k: [
+            ("claim", "c1", "short", 0.9),
+            ("claim", "c2", "a much longer snippet of text", 0.8),
+        ],
+    )
+    monkeypatch.setattr(context.index_db, "search", lambda *a, **k: [])
+    _set_backend(store, "hybrid")
+    monkeypatch.setattr("vouch.embeddings.rerank.default_reranker", _raise)
+    _set_rerank(store, enabled=True)
+
+    pack = context.build_context_pack(store, query="auth")
+    assert [i["id"] for i in pack["items"]] == ["c1", "c2"]
 
 
 def test_dedupe_preserves_input_order_not_score_order() -> None:
