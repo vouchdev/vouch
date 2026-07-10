@@ -22,7 +22,7 @@ from typing import Any, Literal
 import click
 import yaml
 
-from . import __version__, bundle, health, session_split, volunteer_context
+from . import __version__, bundle, health, hub_client, session_split, volunteer_context
 from . import audit as audit_mod
 from . import capture as capture_mod
 from . import codex_rollout as codex_rollout_mod
@@ -2860,6 +2860,102 @@ def detect_themes_cmd(
             f"{i}. {', '.join(c.entities)}  "
             f"score={c.score}  sessions={c.session_count}  claims={c.claim_count}"
         )
+
+
+# --- hub sync ---------------------------------------------------------------
+
+
+@cli.group()
+def hub() -> None:
+    """Sync this KB's approved knowledge with a VouchHub."""
+
+
+def _hub_link_or_die(store) -> "hub_client.HubLink":
+    link = hub_client.load_link(store.kb_dir)
+    if link is None:
+        raise click.ClickException(
+            "this KB is not linked — run: vouch hub link <user>/<kb> --url https://hub…"
+        )
+    return link
+
+
+def _hub_token_or_die(url: str) -> str:
+    token = hub_client.resolve_token(url)
+    if not token:
+        raise click.ClickException(
+            f"no token for {url} — run `vouch hub link` again with --token, "
+            "or set VOUCH_HUB_TOKEN"
+        )
+    return token
+
+
+@hub.command("link")
+@click.argument("kb")  # user/slug on the hub
+@click.option("--url", required=True, help="Hub base url, e.g. https://hub.example.com")
+@click.option("--token", "token_opt", default=None, help="Sync token (vhp_…); prompted if absent.")
+def hub_link(kb: str, url: str, token_opt: str | None) -> None:
+    """Link this KB to USER/KB on a VouchHub and store the sync token."""
+    if kb.count("/") != 1:
+        raise click.ClickException("KB must be user/slug, e.g. alice/myproj")
+    store = _load_store()
+    token = token_opt or os.environ.get("VOUCH_HUB_TOKEN") or click.prompt(
+        "sync token (vhp_…)", hide_input=True
+    )
+    hub_client.save_token(url, token)
+    link = hub_client.HubLink(url=url, kb=kb)
+    hub_client.save_link(store.kb_dir, link)
+    _emit_json({"linked": True, "url": link.url, "kb": link.kb})
+
+
+@hub.command("push")
+def hub_push() -> None:
+    """Export approved knowledge (no sessions/config) and push it to the hub."""
+    store = _load_store()
+    link = _hub_link_or_die(store)
+    token = _hub_token_or_die(link.url)
+    try:
+        _emit_json(hub_client.push(store, link, token))
+    except hub_client.HubConflict as e:
+        _emit_json({"status": "conflicts", "conflicts": e.conflicts, "error": str(e)})
+        sys.exit(1)
+    except hub_client.HubError as e:
+        raise click.ClickException(str(e)) from e
+
+
+@hub.command("pull")
+@click.option(
+    "--on-conflict",
+    type=click.Choice(["skip", "overwrite"]),
+    default=None,
+    help="How to apply conflicting artifacts; default refuses and lists them.",
+)
+def hub_pull(on_conflict: str | None) -> None:
+    """Pull the hub copy and import it through this KB's gate."""
+    store = _load_store()
+    link = _hub_link_or_die(store)
+    token = _hub_token_or_die(link.url)
+    try:
+        result = hub_client.pull(store, link, token, on_conflict=on_conflict)
+    except hub_client.HubError as e:
+        raise click.ClickException(str(e)) from e
+    _emit_json(result)
+    if result.get("status") == "conflicts":
+        sys.exit(1)
+
+
+@hub.command("status")
+def hub_status() -> None:
+    """Show the hub link and whether local knowledge matches the hub copy."""
+    store = _load_store()
+    link = hub_client.load_link(store.kb_dir)
+    if link is None:
+        _emit_json({"linked": False})
+        return
+    token = hub_client.resolve_token(link.url)
+    try:
+        _emit_json(hub_client.status(store, link, token))
+    except hub_client.HubError as e:
+        raise click.ClickException(str(e)) from e
 
 
 # --- export / import ------------------------------------------------------

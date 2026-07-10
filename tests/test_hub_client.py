@@ -238,6 +238,68 @@ def test_pull_overwrite_applies_conflicts(store: KBStore, fake_hub: str, home: P
     assert store.get_claim("r1").text == "from the hub"
 
 
+# --- cli ------------------------------------------------------------------------
+
+
+def test_cli_link_push_status_pull(
+    store: KBStore, fake_hub: str, home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from click.testing import CliRunner
+
+    from vouch.cli import cli
+
+    monkeypatch.chdir(store.kb_dir.parent)
+    runner = CliRunner()
+
+    r = runner.invoke(cli, ["hub", "link", "alice/proj", "--url", fake_hub, "--token", "vhp_test"])
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.output)["linked"] is True
+
+    r = runner.invoke(cli, ["hub", "push"])
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.output)["status"] in {"pushed", "up_to_date"}
+
+    r = runner.invoke(cli, ["hub", "status"])
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.output)["linked"] is True
+
+    FakeHub.files = _remote_claim()
+    r = runner.invoke(cli, ["hub", "pull"])
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.output)["status"] == "applied"
+
+
+def test_cli_unlinked_errors_clearly(
+    store: KBStore, home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from click.testing import CliRunner
+
+    from vouch.cli import cli
+
+    monkeypatch.chdir(store.kb_dir.parent)
+    r = CliRunner().invoke(cli, ["hub", "push"])
+    assert r.exit_code != 0
+    assert "vouch hub link" in r.output
+
+
+def test_cli_pull_conflict_exits_nonzero(
+    store: KBStore, fake_hub: str, home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from click.testing import CliRunner
+
+    from vouch.cli import cli
+
+    FakeHub.files = _remote_claim()
+    src = store.put_source(b"local evidence")
+    store.put_claim(Claim(id="r1", text="local version", evidence=[src.id]))
+    monkeypatch.chdir(store.kb_dir.parent)
+    runner = CliRunner()
+    runner.invoke(cli, ["hub", "link", "alice/proj", "--url", fake_hub, "--token", "vhp_test"])
+    r = runner.invoke(cli, ["hub", "pull"])
+    assert r.exit_code == 1
+    assert "conflicts" in r.output
+
+
 # --- status ---------------------------------------------------------------------
 
 
