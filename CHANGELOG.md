@@ -21,6 +21,11 @@ All notable changes to vouch are documented here. Format follows
 - console Dashboard view: 12-month activity calendar, last-30-days bars,
   hour-of-week heatmap, top actors and event mix, driven by `kb.activity`.
 
+### Fixed
+- `vouch digest --limit` now caps the followups-due section like the
+  pending, decisions, and stale sections — it previously returned every
+  due followup regardless of the limit, contradicting the `--limit` help.
+
 ## [1.2.2] — 2026-07-07
 
 ### Packaging
