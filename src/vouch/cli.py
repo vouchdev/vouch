@@ -2867,15 +2867,20 @@ def detect_themes_cmd(
 
 @cli.command()
 @click.option("--out", "out_path", required=True, type=click.Path(dir_okay=False))
-def export(out_path: str) -> None:
+@click.option("--exclude", "exclude_csv", default="",
+              help="Comma-separated artifact dirs to omit (e.g. sessions,decided).")
+def export(out_path: str, exclude_csv: str) -> None:
     """Bundle the durable KB into a portable .tar.gz."""
     store = _load_store()
-    manifest = bundle.export(store.kb_dir, dest=Path(out_path), actor=_whoami())
+    exclude = tuple(e.strip() for e in exclude_csv.split(",") if e.strip())
+    manifest = bundle.export(store.kb_dir, dest=Path(out_path), actor=_whoami(),
+                             exclude=exclude)
     _emit_json(
         {
             "bundle_id": manifest["bundle_id"],
             "files": len(manifest["files"]),
             "out": out_path,
+            "excluded": manifest["excluded"],
         }
     )
 

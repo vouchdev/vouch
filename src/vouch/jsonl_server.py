@@ -592,16 +592,19 @@ def _h_doctor(_: dict) -> dict:
 
 
 def _h_export(p: dict) -> dict:
+    exclude = tuple(p.get("exclude") or ())
     manifest = bundle.export(_store().kb_dir, dest=Path(p["out_path"]),
-                             actor=_agent())
+                             actor=_agent(), exclude=exclude)
     return {"bundle_id": manifest["bundle_id"],
-            "files": len(manifest["files"]), "out": p["out_path"]}
+            "files": len(manifest["files"]), "out": p["out_path"],
+            "excluded": manifest["excluded"]}
 
 
 def _h_export_check(p: dict) -> dict:
     r = bundle.export_check(Path(p["bundle_path"]))
     return {"ok": r.ok, "bundle_id": r.bundle_id,
-            "files_checked": r.files_checked, "issues": r.issues}
+            "files_checked": r.files_checked, "issues": r.issues,
+            "counts": r.counts, "excluded": r.excluded}
 
 
 def _h_import_check(p: dict) -> dict:
