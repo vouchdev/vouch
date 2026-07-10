@@ -27,6 +27,7 @@ from . import audit as audit_mod
 from . import capture as capture_mod
 from . import codex_rollout as codex_rollout_mod
 from . import compile as compile_mod
+from . import correction as correction_mod
 from . import digest as digest_mod
 from . import fetch as fetch_mod
 from . import inbox as inbox_mod
@@ -2013,6 +2014,43 @@ def capture_observe_cmd() -> None:
         )
     except Exception:
         # a capture failure must never break the user's tool call.
+        return
+
+
+@capture.command("correction")
+@click.option("--prompt", default=None, help="Correction text (else read from stdin payload).")
+@click.option("--session-id", default=None, help="Session id (else from stdin payload).")
+@click.option("--json", "as_json", is_flag=True, help="Print the capture result as JSON.")
+def capture_correction_cmd(
+    prompt: str | None, session_id: str | None, as_json: bool
+) -> None:
+    """Detect a user correction and file it as a PENDING claim proposal.
+
+    Driven by the UserPromptSubmit hook (payload JSON on stdin, supplying
+    `prompt` + `session_id`). Proposes, never approves; prints nothing and
+    exits 0 on any error so it can never block the user's turn.
+    """
+    try:
+        if prompt is None and not sys.stdin.isatty():
+            raw = sys.stdin.read()
+            payload = json.loads(raw) if raw.strip() else {}
+            if isinstance(payload, dict):
+                prompt = str(payload.get("prompt") or "")
+                if session_id is None:
+                    sid = payload.get("session_id")
+                    session_id = str(sid) if sid else None
+        if not prompt:
+            return
+        store = _capture_store()
+        if store is None:
+            return
+        result = correction_mod.capture_correction(
+            store, prompt=prompt, session_id=session_id,
+        )
+        if as_json:
+            _emit_json(result)
+    except Exception:
+        # correction-capture must never break the user's turn.
         return
 
 

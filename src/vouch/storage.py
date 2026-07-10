@@ -84,6 +84,13 @@ def _starter_config() -> dict[str, Any]:
             # auto-capture claude code sessions into pending summaries.
             "enabled": True,
             "min_observations": 3,
+            # correction-capture: a detected user correction ("no, we deploy
+            # from main not release") becomes a PENDING claim proposal.
+            # review-gated — never auto-approved; per_session_cap bounds it.
+            "correction": {
+                "enabled": True,
+                "per_session_cap": 3,
+            },
         },
         "recall": {
             # inject a digest of all approved knowledge at session start.

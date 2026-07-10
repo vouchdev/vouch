@@ -6,6 +6,19 @@ All notable changes to vouch are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+- correction-capture: a detected user correction ("no, we deploy from `main`
+  not `release`") becomes a PENDING claim proposal for human review. a
+  `UserPromptSubmit` hook (`vouch capture correction`) runs a cheap, no-llm
+  heuristic on the turn — a pushback opener or corrective phrase — and, when it
+  fires, files one draft claim quoting the correction, tagged `auto:correction`
+  and citing the correction message as evidence. it **proposes, never approves**
+  (no code path to `proposals.approve`): the pending queue is the draft state.
+  near-duplicate corrections are suppressed via the #147 similarity path (plus a
+  cheap exact-repeat check), and `capture.correction.per_session_cap` (default 3)
+  bounds an over-eager heuristic. opt out with `capture.correction.enabled:
+  false` in `.vouch/config.yaml`.
+
 ## [1.2.2] — 2026-07-07
 
 ### Packaging
