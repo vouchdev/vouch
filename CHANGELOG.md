@@ -6,6 +6,14 @@ All notable changes to vouch are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+- `vouch entities` — a read-only entity-connectivity report over the whole
+  graph: most-connected hubs and orphan entities that no claim mentions, no
+  relation joins, and no page references (proposed once, then never used).
+  connectivity sums `claim.entities` mentions, relation endpoints (a self-loop
+  counts once), and `page.entities` references. `--format text|json|markdown`;
+  writes nothing.
+
 ## [1.2.2] — 2026-07-07
 
 ### Packaging

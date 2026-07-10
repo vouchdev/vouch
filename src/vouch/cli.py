@@ -28,6 +28,7 @@ from . import capture as capture_mod
 from . import codex_rollout as codex_rollout_mod
 from . import compile as compile_mod
 from . import digest as digest_mod
+from . import entity_graph as entity_graph_mod
 from . import fetch as fetch_mod
 from . import inbox as inbox_mod
 from . import install_adapter as install_mod
@@ -363,6 +364,34 @@ def digest_cmd(since: str, stale_days: int, limit: int, fmt: str) -> None:
         click.echo(digest_mod.render_markdown(d))
     else:
         click.echo(digest_mod.render_text(d))
+
+
+@cli.command(name="entities")
+@click.option(
+    "--limit",
+    default=entity_graph_mod.DEFAULT_LIMIT,
+    show_default=True,
+    type=int,
+    help="Cap the most-connected and orphaned sections.",
+)
+@click.option(
+    "--format",
+    "fmt",
+    default="text",
+    show_default=True,
+    type=click.Choice(["text", "json", "markdown"]),
+)
+def entities_cmd(limit: int, fmt: str) -> None:
+    """Read-only entity-connectivity report: most-connected hubs and orphan
+    entities that anchor nothing. Writes nothing — safe to run from cron."""
+    store = _load_store()
+    report = entity_graph_mod.build(store, limit=limit)
+    if fmt == "json":
+        _emit_json(report.to_dict())
+    elif fmt == "markdown":
+        click.echo(entity_graph_mod.render_markdown(report))
+    else:
+        click.echo(entity_graph_mod.render_text(report))
 
 
 def _findings_json(report) -> list[dict[str, Any]]:
