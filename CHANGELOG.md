@@ -6,6 +6,14 @@ All notable changes to vouch are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+- `vouch console`: serve the vendored React web console straight from the
+  installed package — a same-origin `/proxy` bridge (loopback-guarded) to
+  `vouch serve --transport http` backends, reimplementing the vite dev-proxy
+  in python. the built SPA is bundled into the wheel as `vouch/web/console`
+  (conditionally, via a hatch build hook), so `pip install 'vouch-kb[web]'`
+  then `vouch console` needs no node and no repo clone.
+
 ## [1.2.2] — 2026-07-07
 
 ### Packaging

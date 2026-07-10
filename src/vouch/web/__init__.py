@@ -32,6 +32,26 @@ def _require_web_extra() -> None:
         )
 
 
+def _require_console_deps() -> None:
+    """Fail with a clean message if the console's serve deps aren't installed.
+
+    The React console needs only starlette (the app) + uvicorn (the server) —
+    a subset of the [web] extra; jinja2 is not required.
+    """
+    missing: list[str] = []
+    for name in ("starlette", "uvicorn"):
+        try:
+            __import__(name)
+        except ImportError:
+            missing.append(name)
+    if missing:
+        raise ImportError(
+            "vouch console needs the [web] extra. "
+            "Install with: pip install 'vouch-kb[web]'  "
+            f"(missing: {', '.join(missing)})"
+        )
+
+
 def create_app(  # type: ignore[no-untyped-def]
     kb_root: str | None = None,
     *,
