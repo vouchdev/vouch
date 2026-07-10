@@ -863,3 +863,63 @@ def test_export_then_import_roundtrip_passes_content_address_check(
     assert diff.ok, diff.issues
     bundle.import_apply(dest.kb_dir, bundle_path)
     assert dest.read_source_content(src.id) == b"round-trip bytes"
+
+
+# --- exclude filter (knowledge-only bundles) --------------------------------
+
+
+def _write_session_file(store: KBStore) -> None:
+    sess_dir = store.kb_dir / "sessions"
+    sess_dir.mkdir(exist_ok=True)
+    (sess_dir / "s1.yaml").write_text("id: s1\n")
+
+
+def test_export_exclude_filters_subdirs(store: KBStore, tmp_path: Path) -> None:
+    src = store.put_source(b"e", title="doc")
+    store.put_claim(Claim(id="c1", text="alpha", evidence=[src.id]))
+    _write_session_file(store)
+
+    full = tmp_path / "full.tar.gz"
+    filtered = tmp_path / "knowledge.tar.gz"
+    m_full = bundle.export(store.kb_dir, dest=full)
+    m_filt = bundle.export(store.kb_dir, dest=filtered, exclude=bundle.KNOWLEDGE_EXCLUDE)
+
+    with tarfile.open(full, "r:gz") as tar:
+        assert any(m.name.startswith("sessions/") for m in tar.getmembers())
+    with tarfile.open(filtered, "r:gz") as tar:
+        names = [m.name for m in tar.getmembers()]
+    assert not any(n.startswith("sessions/") for n in names)
+    assert not any(n.startswith("decided/") for n in names)
+    assert any(n.startswith("claims/") for n in names)
+
+    assert m_filt["excluded"] == ["decided", "sessions"]
+    assert m_filt["counts"]["sessions"] == 0
+    assert m_filt["bundle_id"] != m_full["bundle_id"]
+
+
+def test_filtered_bundle_imports_cleanly(store: KBStore, tmp_path: Path) -> None:
+    src = store.put_source(b"e", title="doc")
+    store.put_claim(Claim(id="c1", text="alpha", evidence=[src.id]))
+    _write_session_file(store)
+    bundle_path = tmp_path / "k.tar.gz"
+    bundle.export(store.kb_dir, dest=bundle_path, exclude=bundle.KNOWLEDGE_EXCLUDE)
+    assert bundle.export_check(bundle_path).ok
+
+    dest = KBStore.init(tmp_path / "dest")
+    diff = bundle.import_check(dest.kb_dir, bundle_path)
+    assert diff.ok and diff.conflicts == []
+    bundle.import_apply(dest.kb_dir, bundle_path)
+    assert dest.get_claim("c1").text == "alpha"
+    assert not (dest.kb_dir / "sessions" / "s1.yaml").exists()
+
+
+def test_export_exclude_rejects_unknown_name(store: KBStore, tmp_path: Path) -> None:
+    with pytest.raises(ValueError):
+        bundle.export(store.kb_dir, dest=tmp_path / "x.tar.gz", exclude=("claims/../etc",))
+
+
+def test_export_exclude_config_yaml(store: KBStore, tmp_path: Path) -> None:
+    bundle_path = tmp_path / "nc.tar.gz"
+    bundle.export(store.kb_dir, dest=bundle_path, exclude=("config.yaml",))
+    with tarfile.open(bundle_path, "r:gz") as tar:
+        assert "config.yaml" not in [m.name for m in tar.getmembers()]

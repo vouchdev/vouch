@@ -45,6 +45,10 @@ EXPORT_SUBDIRS = (
     "decided",
 )
 
+# The knowledge-only preset: what syncs to a hub. Sessions (agent/LLM
+# transcripts) and decided-proposal records never leave the machine.
+KNOWLEDGE_EXCLUDE = ("decided", "sessions")
+
 IMPORT_ROOT_FILES = {"config.yaml"}
 FORBIDDEN_SAFETY_FLAGS = {
     "has_proposed": "proposed/",
@@ -67,9 +71,21 @@ VALIDATORS: dict[str, Any] = {
 # --- export ---------------------------------------------------------------
 
 
-def _iter_export_files(kb_dir: Path):
+_EXCLUDABLE = set(EXPORT_SUBDIRS) | {"config.yaml"}
+
+
+def _check_exclude(exclude: tuple[str, ...]) -> tuple[str, ...]:
+    bad = [e for e in exclude if e not in _EXCLUDABLE]
+    if bad:
+        raise ValueError(f"unknown exclude entries: {bad!r} (allowed: {sorted(_EXCLUDABLE)})")
+    return tuple(sorted(set(exclude)))
+
+
+def _iter_export_files(kb_dir: Path, exclude: tuple[str, ...] = ()):
     """Yield (relative path, absolute path) for every committable file."""
     for sub in EXPORT_SUBDIRS:
+        if sub in exclude:
+            continue
         root = kb_dir / sub
         if not root.is_dir():
             continue
@@ -77,13 +93,14 @@ def _iter_export_files(kb_dir: Path):
             if p.is_file():
                 yield p.relative_to(kb_dir), p
     cfg = kb_dir / "config.yaml"
-    if cfg.exists():
+    if cfg.exists() and "config.yaml" not in exclude:
         yield cfg.relative_to(kb_dir), cfg
 
 
-def build_manifest(kb_dir: Path) -> dict[str, Any]:
+def build_manifest(kb_dir: Path, exclude: tuple[str, ...] = ()) -> dict[str, Any]:
+    exclude = _check_exclude(exclude)
     files: list[dict[str, Any]] = []
-    for rel, abs_path in _iter_export_files(kb_dir):
+    for rel, abs_path in _iter_export_files(kb_dir, exclude):
         data = abs_path.read_bytes()
         files.append(
             {
@@ -107,6 +124,7 @@ def build_manifest(kb_dir: Path) -> dict[str, Any]:
         "counts": {
             sub: sum(1 for f in files if f["path"].startswith(f"{sub}/")) for sub in EXPORT_SUBDIRS
         },
+        "excluded": list(exclude),
         "safety": {
             "has_proposed": False,
             "has_state_db": False,
@@ -115,11 +133,18 @@ def build_manifest(kb_dir: Path) -> dict[str, Any]:
     }
 
 
-def export(kb_dir: Path, *, dest: Path, actor: str = "vouch-export") -> dict[str, Any]:
-    manifest = build_manifest(kb_dir)
+def export(
+    kb_dir: Path,
+    *,
+    dest: Path,
+    actor: str = "vouch-export",
+    exclude: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    exclude = _check_exclude(exclude)
+    manifest = build_manifest(kb_dir, exclude)
     dest.parent.mkdir(parents=True, exist_ok=True)
     with tarfile.open(dest, "w:gz") as tar:
-        for rel, abs_path in _iter_export_files(kb_dir):
+        for rel, abs_path in _iter_export_files(kb_dir, exclude):
             tar.add(abs_path, arcname=rel.as_posix())
         manifest_bytes = json.dumps(manifest, indent=2, sort_keys=True).encode()
         info = tarfile.TarInfo(MANIFEST_NAME)
@@ -130,7 +155,7 @@ def export(kb_dir: Path, *, dest: Path, actor: str = "vouch-export") -> dict[str
         event="bundle.export",
         actor=actor,
         object_ids=[manifest["bundle_id"]],
-        data={"dest": str(dest), "files": len(manifest["files"])},
+        data={"dest": str(dest), "files": len(manifest["files"]), "excluded": list(exclude)},
     )
     return manifest
 
