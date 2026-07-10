@@ -63,6 +63,7 @@ METHODS = [
     "kb.contradict",
     "kb.archive",
     "kb.confirm",
+    "kb.clear_claims",
     "kb.cite",
     "kb.source_verify",
     "kb.session_start",

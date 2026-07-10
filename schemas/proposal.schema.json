@@ -5,7 +5,8 @@
         "claim",
         "page",
         "entity",
-        "relation"
+        "relation",
+        "delete"
       ],
       "title": "ProposalKind",
       "type": "string"

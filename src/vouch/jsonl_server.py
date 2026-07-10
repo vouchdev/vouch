@@ -517,6 +517,25 @@ def _h_confirm(p: dict) -> dict:
             if c.last_confirmed_at else None}
 
 
+def _h_clear_claims(p: dict) -> dict:
+    from datetime import datetime
+    before_dt = None
+    if p.get("before"):
+        before_dt = datetime.fromisoformat(p["before"])
+    to_clear = life.clear_claims(
+        _store(),
+        auto_only=p.get("auto_only", True),
+        before=before_dt,
+        actor=_agent(),
+        dry_run=p.get("dry_run", False),
+    )
+    return {
+        "count": len(to_clear),
+        "claim_ids": [c.id for c in to_clear],
+        "dry_run": p.get("dry_run", False),
+    }
+
+
 def _h_cite(p: dict) -> list:
     out = []
     for c in life.cite(_store(), p["claim_id"]):
@@ -796,6 +815,7 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.contradict": _h_contradict,
     "kb.archive": _h_archive,
     "kb.confirm": _h_confirm,
+    "kb.clear_claims": _h_clear_claims,
     "kb.cite": _h_cite,
     "kb.source_verify": _h_source_verify,
     "kb.session_start": _h_session_start,

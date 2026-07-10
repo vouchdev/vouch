@@ -735,6 +735,42 @@ def kb_confirm(claim_id: str) -> dict[str, Any]:
 
 
 @mcp.tool()
+def kb_clear_claims(
+    auto_only: bool = True,
+    before: str | None = None,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Clear auto-approved claims, optionally filtered by date range.
+
+    Args:
+        auto_only: If True, only clear auto-approved claims.
+        before: If set, only clear claims created before this ISO 8601 date.
+        dry_run: If True, preview without making changes.
+
+    Returns:
+        Dictionary with count of cleared claims and their IDs.
+    """
+    from datetime import datetime
+
+    before_dt = None
+    if before:
+        before_dt = datetime.fromisoformat(before)
+
+    to_clear = life.clear_claims(
+        _store(),
+        auto_only=auto_only,
+        before=before_dt,
+        actor=_agent(),
+        dry_run=dry_run,
+    )
+    return {
+        "count": len(to_clear),
+        "claim_ids": [c.id for c in to_clear],
+        "dry_run": dry_run,
+    }
+
+
+@mcp.tool()
 def kb_cite(claim_id: str) -> list[dict[str, Any]]:
     """Return resolved citations (sources or evidence records) backing a claim."""
     out = []
