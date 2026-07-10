@@ -21,7 +21,7 @@ import hashlib
 import io
 import json
 import tarfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -166,6 +166,9 @@ class ExportCheckResult:
     bundle_id: str
     files_checked: int
     issues: list[str]
+    # From the manifest (empty for pre-filter bundles without the keys):
+    counts: dict[str, int] = field(default_factory=dict)
+    excluded: list[str] = field(default_factory=list)
 
 
 def _unsafe_name_reason(name: str) -> str | None:
@@ -221,6 +224,8 @@ def export_check(bundle_path: Path) -> ExportCheckResult:
             return ExportCheckResult(False, "", 0, ["missing manifest.json"])
         manifest = json.loads(tar.extractfile(mf_member).read().decode())  # type: ignore[union-attr]
         bundle_id = manifest.get("bundle_id", "")
+        counts = manifest.get("counts", {})
+        excluded = manifest.get("excluded", [])
         recorded = {f["path"]: f for f in manifest["files"]}
         for path in recorded:
             reason = _unsafe_name_reason(path)
@@ -254,6 +259,8 @@ def export_check(bundle_path: Path) -> ExportCheckResult:
         bundle_id=bundle_id,
         files_checked=files_checked,
         issues=issues,
+        counts=counts,
+        excluded=excluded,
     )
 
 

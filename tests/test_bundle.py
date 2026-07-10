@@ -923,3 +923,21 @@ def test_export_exclude_config_yaml(store: KBStore, tmp_path: Path) -> None:
     bundle.export(store.kb_dir, dest=bundle_path, exclude=("config.yaml",))
     with tarfile.open(bundle_path, "r:gz") as tar:
         assert "config.yaml" not in [m.name for m in tar.getmembers()]
+
+
+def test_export_check_reports_counts_and_excluded(store: KBStore, tmp_path: Path) -> None:
+    src = store.put_source(b"e", title="doc")
+    store.put_claim(Claim(id="c1", text="alpha", evidence=[src.id]))
+    _write_session_file(store)
+
+    full = tmp_path / "full.tar.gz"
+    bundle.export(store.kb_dir, dest=full)
+    chk = bundle.export_check(full)
+    assert chk.counts["sessions"] == 1
+    assert chk.excluded == []
+
+    filt = tmp_path / "filt.tar.gz"
+    bundle.export(store.kb_dir, dest=filt, exclude=bundle.KNOWLEDGE_EXCLUDE)
+    chk2 = bundle.export_check(filt)
+    assert chk2.counts["sessions"] == 0
+    assert chk2.excluded == ["decided", "sessions"]
