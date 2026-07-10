@@ -59,8 +59,10 @@ In scope for v1:
   **Codex** (rollouts under `$CODEX_HOME/sessions/...`), on the **same machine**
   as the vouch server.
 - A new read-only RPC `kb.session_transcript`.
-- A new frontend **Sessions** tab (master–detail) that lists sessions and
-  renders a selected session's transcript at full fidelity.
+- Full-fidelity transcript rendering in the console's **Review** page
+  (master–detail): the session list plus the selected session's transcript and
+  its `Summarize` action, side by side. (Originally shipped as a standalone
+  **Sessions** tab, then merged into Review — see the update note below.)
 
 Out of scope for v1:
 
@@ -216,12 +218,18 @@ the existing `Markdown` component for text blocks and `lucide-react` icons.
 
 ### Route + entry point
 
-- New route `/sessions` and `/sessions/:id` in `App.tsx`; a **Sessions** entry
-  in the nav (`Shell`), gated on `hasMethod('kb.session_transcript')` like the
-  other capability-gated tabs.
-- `SessionsView` — master–detail. Left: list from `kb.list_sessions`
-  (`useFanout`), newest first; rows with a non-null `session_id` are openable,
-  null ones are shown disabled. Right: `TranscriptView` for the selected id.
+Post-merge (see the update note below), the viewer lives in the existing
+**Review** page rather than a separate tab:
+
+- No new route or nav item. `ReviewView` (`/review`) is the single sessions
+  surface. Left: all sessions from `kb.list_sessions` (`useFanout`) — the
+  earlier `!summarized` filter was dropped so every session's transcript stays
+  viewable. Right (detail pane): a compact header with the session's stage /
+  ids / `Summarize` action, and below it `TranscriptView` for the selected
+  session — gated on `hasMethod('kb.session_transcript')` and a non-null
+  `session_id`, degrading to a note otherwise.
+- The `Summarize` action shows only for sessions that still need it
+  (`!summarized`); already-summarized rows render read-only.
 
 ### Components (each maps to an agentsview equivalent)
 
@@ -290,8 +298,9 @@ Frontend (`vitest` + Testing Library; one Playwright smoke):
 
 - Component tests per block (`ToolBlock` per-tool branches incl. `DiffView`,
   `ThinkingBlock` collapse, `Task` subagent lazy-load with a mocked rpc),
-  `TranscriptView` happy path + degraded path, `SessionsView` list + disabled
-  null rows.
+  `TranscriptView` happy path + degraded path + subagent drill-down,
+  `ReviewView` (all sessions listed incl. summarized, transcript in the detail
+  pane, `Summarize` still works alongside it).
 - `webapp/e2e/` smoke: open Sessions, pick a row, see the rendered transcript.
   It stubs `/proxy/*` via Playwright `page.route` (health, capabilities,
   `kb.list_pending`, `kb.list_sessions`, `kb.session_transcript`) so it drives
@@ -313,16 +322,25 @@ Frontend (`vitest` + Testing Library; one Playwright smoke):
 
 1. Backend: `transcript.py` (Claude locator + parser) + RPC + capabilities +
    tests.
-2. Frontend: `SessionsView` + `TranscriptView` + block components + client lib
-   + tests, wired to phase-1 RPC.
+2. Frontend: `TranscriptView` + block components + client lib + tests, wired to
+   phase-1 RPC. (Initially surfaced via a `SessionsView` tab.)
 3. Codex source (reuse `codex_rollout`) + subagent lazy expansion + degraded
    fallback + e2e smoke.
+4. Merge: fold the transcript into `ReviewView`, drop the `!summarized` filter,
+   and remove the standalone Sessions tab (this iteration).
 
 ## Resolved (as shipped)
 
-- Entry point: a dedicated **Sessions** tab in the console nav
-  (`ScrollText` icon), gated per-row on `hasMethod('kb.session_transcript')`.
-- Layout: master–detail — session list on the left, transcript on the right.
+- Entry point: **merged into the Review page** (`/review`). The initial cut
+  shipped a standalone **Sessions** tab, but Review already listed the same
+  `kb.list_sessions` sessions (to summarize them) with no transcript, so the two
+  were redundant. Review now renders the transcript in its detail pane next to
+  the `Summarize` action; the Sessions tab/route/view were removed.
+- List scope: Review shows **all** sessions (its `!summarized` filter was
+  dropped), so transcripts of already-summarized sessions stay viewable; the
+  `Summarize` action is contextual (only for sessions that still need it).
+- Layout: master–detail — session list on the left, transcript + summarize on
+  the right.
 - Codex shipped in v1 (phase 3) alongside Claude Code, via a dedicated
   `response_item` parser (not the lossy `parse_rollout`).
 
