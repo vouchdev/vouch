@@ -51,6 +51,11 @@
           {
             "type": "command",
             "command": "vouch context-hook || true"
+          },
+          {
+            "comment": "detect a user correction and file it as a PENDING claim proposal (review-gated; never approves); never blocks the turn",
+            "type": "command",
+            "command": "vouch capture correction || true"
           }
         ]
       }
