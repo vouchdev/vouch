@@ -41,6 +41,16 @@ docker run --rm -p 127.0.0.1:5173:5173 -v vouch-demo-data:/data ghcr.io/plind-ju
 
 Pre-seeded KB + full webapp console, zero setup. Pass `-e ANTHROPIC_API_KEY=sk-ant-...` to enable LLM features.
 
+**For the full UI without Docker** — Python only, no clone, no node:
+
+```bash
+pipx install 'vouch-kb[web]'                  # the browser console ships inside the wheel
+vouch serve --transport http --port 8731 &    # a backend for the current .vouch/
+vouch console                                 # console at http://localhost:5173 — connect it to :8731
+```
+
+`vouch console` serves the same React console as the Docker demo, straight from the installed package.
+
 **For CLI + Claude Code integration** (most common ongoing workflow):
 
 ```bash
@@ -93,9 +103,10 @@ compile:
 vouch review                    # walk pending proposals one at a time
 ```
 
-**Want a browser UI for reviewing and proposing?** The video shows the **vouch webapp** — chat, review queue, claims, and stats. You have three options:
+**Want a browser UI for reviewing and proposing?** The video shows the **vouch webapp** — chat, review queue, claims, and stats. You have four options:
 
 - **No setup**: Use the Docker demo (recommended)
+- **pip, no clone**: `pipx install 'vouch-kb[web]'` then `vouch console` — serves the same React console from the installed package (Python only, no Docker, no node), open http://localhost:5173
 - **Local development**: Clone the repo, run `make console`, open http://localhost:5173
 - **CLI-only**: Use `vouch review`, `vouch show <id>`, `vouch approve <id>` commands instead
 
@@ -113,7 +124,13 @@ docker run --rm -p 127.0.0.1:5173:5173 \
 # then open http://localhost:5173
 ```
 
-Or to skip Docker entirely and use the CLI tools:
+Or serve that same console with no Docker — `vouch console` in place of Terminal 2 (needs the `[web]` extra), then add the `:8731` backend in the connect dialog:
+
+```bash
+vouch console                   # http://localhost:5173, proxying to the server above
+```
+
+Or to skip the browser entirely and use the CLI tools:
 
 ```bash
 vouch review                    # walk pending proposals
@@ -122,7 +139,7 @@ vouch approve <id>              # approve a proposal
 vouch reject <id> --reason "…"  # reject with feedback
 ```
 
-Lighter alternatives ship with vouch itself: `vouch review-ui` (a built-in browser queue; `pipx install 'vouch-kb[web]'` for the extra), or piecemeal `vouch pending`, `vouch show <id>`, `vouch approve <id>`, `vouch reject <id> --reason "…"`.
+Both browser UIs ship with vouch under the `[web]` extra (`pipx install 'vouch-kb[web]'`): `vouch console` is the full React console shown in the video; `vouch review-ui` is a lighter built-in review queue. Or go piecemeal: `vouch pending`, `vouch show <id>`, `vouch approve <id>`, `vouch reject <id> --reason "…"`.
 
 **5. Compile the wiki.**
 
