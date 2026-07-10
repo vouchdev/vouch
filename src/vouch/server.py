@@ -47,7 +47,7 @@ from .proposals import (
     reject_auto_extracted,
 )
 from .scoping import filter_hits, scoped_fetch_limit, viewer_from
-from .stats import collect_stats
+from .stats import collect_activity, collect_stats
 from .storage import (
     ArtifactNotFoundError,
     KBNotFoundError,
@@ -95,6 +95,32 @@ def kb_stats(*, days: int = 30) -> dict[str, Any]:
     """
     since = None if days == 0 else days
     return collect_stats(_store(), since_days=since)
+
+
+@mcp.tool()
+def kb_activity(
+    *,
+    days: int = 365,
+    tz_offset_minutes: int = 0,
+    tz: str | None = None,
+    project: str | None = None,
+    agent: str | None = None,
+) -> dict[str, Any]:
+    """Audit activity buckets for dashboards: per-day counts, hour-of-week
+    matrix, actor and event histograms. Scope-filtered like kb.audit.
+
+    days: window in local calendar days; 0 means all-time.
+    tz: IANA zone for local-time bucketing; falls back to tz_offset_minutes.
+    """
+    store = _store()
+    viewer = viewer_from(
+        config_path=store.config_path,
+        project=project,
+        agent=agent,
+    )
+    return collect_activity(
+        store, days=days, tz_offset_minutes=tz_offset_minutes, tz=tz, viewer=viewer,
+    )
 
 
 @mcp.tool()

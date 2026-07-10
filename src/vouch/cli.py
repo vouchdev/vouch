@@ -319,6 +319,59 @@ def stats(days: int, as_json: bool) -> None:
         _echo(f"    invalid: {cites['invalid_claim']}, broken: {cites['broken_citation']}")
 
 
+@cli.command()
+@click.option(
+    "--days",
+    default=365,
+    show_default=True,
+    type=click.IntRange(min=0),
+    help="Window (local calendar days). Use 0 for all-time.",
+)
+@click.option(
+    "--tz-offset-minutes",
+    default=0,
+    show_default=True,
+    type=int,
+    help="Viewer's UTC offset in minutes for local-time bucketing.",
+)
+@click.option("--tz", default=None, help="IANA zone for local-time bucketing (wins over offset).")
+@click.option("--project", default=None, help="Viewer project for audit scope filtering.")
+@click.option("--agent", default=None, help="Viewer agent for audit scope filtering.")
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON instead of a table.")
+def activity(
+    days: int,
+    tz_offset_minutes: int,
+    tz: str | None,
+    project: str | None,
+    agent: str | None,
+    as_json: bool,
+) -> None:
+    """Audit activity buckets: per-day counts, hour-of-week matrix, actors."""
+    from .scoping import viewer_from
+
+    store = _load_store()
+    viewer = viewer_from(
+        config_path=store.config_path,
+        project=project,
+        agent=agent,
+    )
+    body = stats_mod.collect_activity(
+        store, days=days, tz_offset_minutes=tz_offset_minutes, tz=tz, viewer=viewer,
+    )
+    if as_json:
+        _emit_json(body)
+        return
+    window = "all time" if body["window_days"] is None else f"last {body['window_days']}d"
+    _echo(
+        f"activity ({window}): {_style(str(body['total_events']), fg='cyan')} events "
+        f"on {body['active_days']} day(s)"
+    )
+    if body["first_event_day"]:
+        _echo(f"  span: {body['first_event_day']} → {body['last_event_day']}")
+    for actor, count in list(body["by_actor"].items())[:8]:
+        _echo(f"  {actor}: {count}")
+
+
 @cli.command(name="digest")
 @click.option(
     "--since",

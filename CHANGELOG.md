@@ -6,6 +6,15 @@ All notable changes to vouch are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+- `kb.activity` read method (+ `vouch activity` CLI mirror): audit-log
+  activity buckets for dashboards — per-day counts with proposal/decision
+  breakdowns, an hour-of-week matrix, and actor/event histograms. windowed
+  in viewer-local calendar days (IANA `tz` or a fixed utc offset), scope-
+  filtered like `kb.audit`.
+- console Dashboard view: 12-month activity calendar, last-30-days bars,
+  hour-of-week heatmap, top actors and event mix, driven by `kb.activity`.
+
 ## [1.2.2] — 2026-07-07
 
 ### Packaging

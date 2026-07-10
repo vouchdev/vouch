@@ -55,7 +55,7 @@ from .proposals import (
     reject,
     reject_auto_extracted,
 )
-from .stats import collect_stats
+from .stats import collect_activity, collect_stats
 from .storage import (
     ArtifactNotFoundError,
     KBNotFoundError,
@@ -100,6 +100,20 @@ def _h_stats(p: dict) -> dict:
     days = int(p.get("days", 30))
     since = None if days == 0 else days
     return collect_stats(_store(), since_days=since)
+
+
+def _h_activity(p: dict) -> dict:
+    from .scoping import viewer_from_params
+
+    s = _store()
+    viewer = viewer_from_params(s, p)
+    return collect_activity(
+        s,
+        days=int(p.get("days", 365)),
+        tz_offset_minutes=int(p.get("tz_offset_minutes", 0)),
+        tz=p.get("tz"),
+        viewer=viewer,
+    )
 
 
 def _h_digest(p: dict) -> dict:
@@ -770,6 +784,7 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.capabilities": _h_capabilities,
     "kb.status": _h_status,
     "kb.stats": _h_stats,
+    "kb.activity": _h_activity,
     "kb.digest": _h_digest,
     "kb.search": _h_search,
     "kb.neighbors": _h_neighbors,

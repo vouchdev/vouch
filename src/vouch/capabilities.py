@@ -31,6 +31,7 @@ METHODS = [
     "kb.capabilities",
     "kb.status",
     "kb.stats",
+    "kb.activity",
     "kb.digest",
     "kb.search",
     "kb.neighbors",
