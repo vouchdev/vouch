@@ -3793,6 +3793,71 @@ def _resolve_auth_token(auth: str | None) -> str | None:
     return auth
 
 
+@cli.command(name="console")
+@click.option(
+    "--bind",
+    "bind",
+    default="127.0.0.1:5173",
+    show_default=True,
+    help="host:port to bind. A non-loopback host (e.g. 0.0.0.0) also "
+    "requires --allow-remote so the proxy bridge isn't exposed openly.",
+)
+@click.option(
+    "--allow-remote",
+    is_flag=True,
+    help="Drop the loopback guard on the /proxy bridge. Only for a deployment "
+    "behind its own auth — a same-origin page could otherwise drive a "
+    "local reviewer's backends.",
+)
+@click.option(
+    "--open-browser/--no-open-browser",
+    default=True,
+    show_default=True,
+    help="Open the browser to the console on startup.",
+)
+def console(bind: str, allow_remote: bool, open_browser: bool) -> None:
+    """Serve the vouch web console (the React review UI) locally.
+
+    Ships the built SPA and a same-origin /proxy bridge to your
+    `vouch serve --transport http` backends — one `pip install 'vouch-kb[web]'`,
+    no node. Add a backend from the connect dialog in the UI.
+    """
+    from .web import _require_console_deps
+
+    try:
+        _require_console_deps()
+    except ImportError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    from .web.console import ConsoleError, resolve_console_dir, serve_console
+
+    host, sep, port_raw = bind.partition(":")
+    if not sep:
+        raise click.ClickException(f"invalid --bind {bind!r}; expected host:port")
+    try:
+        port = int(port_raw)
+    except ValueError as exc:
+        raise click.ClickException(f"invalid port in --bind {bind!r}") from exc
+    host = host or "127.0.0.1"
+    if host not in ("127.0.0.1", "::1", "localhost") and not allow_remote:
+        raise click.ClickException(
+            f"--bind {bind} is non-loopback; pass --allow-remote to expose the "
+            "proxy bridge (only behind your own auth)."
+        )
+
+    url = f"http://{host}:{port}/"
+    if open_browser and resolve_console_dir() is not None:
+        import threading
+        import webbrowser
+
+        threading.Timer(0.6, lambda: webbrowser.open(url)).start()
+    click.echo(f"vouch console → {url}")
+    try:
+        serve_console(host=host, port=port, allow_remote=allow_remote)
+    except ConsoleError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
 @cli.command(name="review-ui")
 @click.option(
     "--bind",

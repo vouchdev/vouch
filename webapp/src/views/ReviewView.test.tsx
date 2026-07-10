@@ -68,21 +68,21 @@ beforeEach(() => {
 test('shows the empty state when there are no sessions', async () => {
   vi.mocked(rpc).mockResolvedValue({ sessions: [] })
   renderWithProviders(<ReviewView />)
-  expect(await screen.findByText(/no captured sessions/i)).toBeInTheDocument()
+  expect(await screen.findByText(/no sessions awaiting a summary/i)).toBeInTheDocument()
 })
 
-test('lists all sessions including already-summarized ones', async () => {
+test('lists only sessions still awaiting a summary', async () => {
   vi.mocked(rpc).mockResolvedValue(SESSIONS)
   renderWithProviders(<ReviewView />)
   // title fallback chain: title, then session_id
   expect(await screen.findByText('session: fix the parser')).toBeInTheDocument()
   expect(screen.getAllByText('sess-open').length).toBeGreaterThan(0)
-  // summarized sessions are now shown too (viewable, read-only)
-  expect(screen.getByText('session: already summarized')).toBeInTheDocument()
-  // stage / summarized badges
+  // summarized sessions drop off the queue — their proposal lives in Pending
+  expect(screen.queryByText('session: already summarized')).not.toBeInTheDocument()
+  expect(screen.queryByText('summarized')).not.toBeInTheDocument()
+  // stage badges for the two remaining rows
   expect(screen.getByText('open buffer')).toBeInTheDocument()
   expect(screen.getByText('needs summary')).toBeInTheDocument()
-  expect(screen.getByText('summarized')).toBeInTheDocument()
   // observation counts and sliced timestamps
   expect(screen.getByText(/12 observations/)).toBeInTheDocument()
   expect(screen.getByText(/2026-07-04 11:30:00/)).toBeInTheDocument()
