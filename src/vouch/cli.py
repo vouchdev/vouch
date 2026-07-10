@@ -1907,8 +1907,10 @@ def claims_clear(auto_only: bool, before: str | None, confirm: bool, dry_run: bo
     if before:
         try:
             before_dt = datetime.fromisoformat(before)
-        except ValueError:
-            raise click.ClickException(f"invalid date format: {before} (use ISO 8601, e.g. 2026-07-01)")
+        except ValueError as err:
+            raise click.ClickException(
+                f"invalid date format: {before} (use ISO 8601, e.g. 2026-07-01)"
+            ) from err
 
     with _cli_errors():
         to_clear = life.clear_claims(
@@ -1933,10 +1935,9 @@ def claims_clear(auto_only: bool, before: str | None, confirm: bool, dry_run: bo
         click.echo("(dry-run mode: no changes made)")
         return
 
-    if not confirm:
-        if not click.confirm(f"\nClear {len(to_clear)} claims?"):
-            click.echo("cancelled")
-            return
+    if not confirm and not click.confirm(f"\nClear {len(to_clear)} claims?"):
+        click.echo("cancelled")
+        return
 
     # Now actually clear them
     with _cli_errors():

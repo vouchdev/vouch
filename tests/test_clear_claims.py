@@ -77,7 +77,7 @@ def test_clear_claims_before_date_filters_correctly(store: KBStore) -> None:
     pr2 = propose_claim(
         store, text="new claim", evidence=[src.id], proposed_by="agent"
     )
-    claim2 = approve(store, pr2.id, approved_by="agent")
+    approve(store, pr2.id, approved_by="agent")
 
     # Clear claims created before 1 day ago
     cutoff = now - timedelta(days=1)
