@@ -232,6 +232,21 @@ def test_jsonl_handler_round_trip(store: KBStore, monkeypatch: pytest.MonkeyPatc
         "id": "r1", "method": "kb.explain_ranking",
         "params": {"query": "jsonl", "limit": 5},
     })
+    assert resp["id"] == "r1"
     assert resp["ok"]
     assert resp["result"]["backend"] == "hybrid"
     assert any(c["id"] == "c1" for c in resp["result"]["candidates"])
+
+
+def test_jsonl_handler_missing_query_returns_error_envelope() -> None:
+    """A request missing the required `query` param returns the failure
+    envelope `{id, ok: false, error}` — the handler's `p["query"]` raises
+    KeyError, which handle_request maps to code `missing_param`."""
+    from vouch.jsonl_server import handle_request
+
+    resp = handle_request({
+        "id": "r2", "method": "kb.explain_ranking", "params": {},
+    })
+    assert resp["id"] == "r2"
+    assert resp["ok"] is False
+    assert resp["error"]["code"] == "missing_param"
