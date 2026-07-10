@@ -574,6 +574,35 @@ def test_codex_t4_rerun_does_not_duplicate_hook(tmp_path: Path) -> None:
     assert cmds.count("vouch capture ingest-codex --hook") == 1
 
 
+def test_codex_t4_writes_user_prompt_submit_hook(tmp_path: Path) -> None:
+    """Fresh T4 install also wires UserPromptSubmit -> vouch context-hook
+    (vouchdev/vouch#425), reusing the same command claude-code installs --
+    codex's UserPromptSubmit payload/response shape matches claude-code's."""
+    result = install("codex", target=tmp_path, tier="T4")
+    hooks_path = tmp_path / ".codex" / "hooks.json"
+    data = json.loads(hooks_path.read_text(encoding="utf-8"))
+    cmds = [
+        h["command"]
+        for g in data["hooks"]["UserPromptSubmit"]
+        for h in g["hooks"]
+    ]
+    assert "vouch context-hook" in cmds
+    assert ".codex/hooks.json" in result.written
+
+
+def test_codex_t4_user_prompt_submit_rerun_does_not_duplicate(tmp_path: Path) -> None:
+    install("codex", target=tmp_path, tier="T4")
+    second = install("codex", target=tmp_path, tier="T4")
+    assert ".codex/hooks.json" in second.skipped
+    data = json.loads((tmp_path / ".codex" / "hooks.json").read_text(encoding="utf-8"))
+    cmds = [
+        h["command"]
+        for g in data["hooks"]["UserPromptSubmit"]
+        for h in g["hooks"]
+    ]
+    assert cmds.count("vouch context-hook") == 1
+
+
 # --- codex: config.toml deep-merge (vouchdev/vouch#384) ---------------------
 
 

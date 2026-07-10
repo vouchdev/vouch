@@ -18,6 +18,16 @@
 #      from adapters/claude-code/ directly).
 # T4 = `.openclaw/policy.json` -- the trust boundary as project-local
 #      policy (review-gated writes, audit-logged lifecycle, confined fs).
+#
+# Note re issue #425: OpenClaw needs no changes here. Its per-prompt context
+# injection isn't a hooks.json-style shell hook at all -- it's the
+# context-engine slot (openclaw.plugin.json's kind: "context-engine",
+# adapters/openclaw/vouch-context-engine.mjs bridging to
+# src/vouch/openclaw/context_engine.py's assemble()), and that engine
+# already calls salience.record_query / attach_salience on every assemble()
+# (see src/vouch/openclaw/context_engine.py). #425's fix was specifically
+# for the claude-code/codex hooks.py path, which had the reflex dead;
+# OpenClaw's own path never had that bug.
 host: openclaw
 pretty: OpenClaw
 fence:

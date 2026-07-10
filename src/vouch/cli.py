@@ -2536,9 +2536,10 @@ def context(
 def context_hook() -> None:
     """Emit relevant KB context for a host UserPromptSubmit hook (reads stdin).
 
-    Wired by the claude-code adapter; not meant to be run by hand. Reads the
-    host's JSON hook payload on stdin, prints an additionalContext envelope,
-    and always exits 0 so it can never block a turn.
+    Wired by the claude-code and codex adapters (#425); not meant to be run
+    by hand. Both hosts emit the same {"prompt", "session_id", ...} shape on
+    stdin and expect the same additionalContext envelope back, so one
+    command serves both. Always exits 0 so it can never block a turn.
     """
     import sys
 

@@ -5,6 +5,15 @@
 # `~/.cursor/mcp.json` is intentionally out of scope (see #179 acceptance —
 # we don't touch user-global config from a project-scoped install).
 # T2 = AGENTS.md fenced snippet (Cursor reads AGENTS.md the way Claude Code reads CLAUDE.md).
+#
+# Scope decision (issue #425): vouch's per-prompt KB-context hook was NOT
+# mirrored to Cursor. Cursor's closest analogue, beforeSubmitPrompt, is
+# validation/block-only -- it can inspect and reject a prompt but cannot
+# inject additionalContext the way claude-code's and codex's
+# UserPromptSubmit can. Cursor's own sessionStart hook does support
+# additional_context, but that fires once per session, not per prompt, so
+# it isn't a substitute for the reflex-driven per-turn injection #425 asks
+# for. Revisit if Cursor ships prompt-time context injection.
 host: cursor
 pretty: Cursor
 fence:
