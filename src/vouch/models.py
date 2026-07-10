@@ -267,6 +267,8 @@ class Claim(BaseModel):
     updated_at: datetime = Field(default_factory=utcnow)
     last_confirmed_at: datetime | None = None
     approved_by: str | None = None  # vouch: review-gate audit
+    proposed_by: str | None = None  # vouch: tracks who proposed this claim
+    auto_approved: bool = False  # vouch: true if approved by proposer (trusted-agent mode)
 
     @field_validator("scope", mode="before")
     @classmethod

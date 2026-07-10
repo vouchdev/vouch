@@ -127,6 +127,73 @@ def confirm(store: KBStore, *, claim_id: str, actor: str) -> Claim:
     return claim
 
 
+def clear_claims(
+    store: KBStore,
+    *,
+    auto_only: bool = True,
+    before: datetime | None = None,
+    actor: str,
+    dry_run: bool = False,
+) -> list[Claim]:
+    """Clear auto-approved claims, optionally filtered by date range.
+
+    Filters claims by auto-approval status and/or created_at timestamp,
+    then archives (not deletes) the matching claims. All operations are
+    audited.
+
+    Args:
+        store: Knowledge base store
+        auto_only: If True, only clear auto-approved claims (auto_approved=True).
+                   If False, clear all claims matching date filter.
+        before: If set, only clear claims created before this datetime.
+        actor: Who is performing the operation.
+        dry_run: If True, don't write changes, just return what would be cleared.
+
+    Returns:
+        List of claims that were (or would be) archived.
+    """
+    all_claims = store.list_claims()
+    to_clear: list[Claim] = []
+
+    for claim in all_claims:
+        # Skip if already archived or status doesn't allow clearing
+        if claim.status == ClaimStatus.ARCHIVED:
+            continue
+
+        # Filter by auto-approval status
+        if auto_only and not claim.auto_approved:
+            continue
+
+        # Filter by date range
+        if before and claim.created_at >= before:
+            continue
+
+        to_clear.append(claim)
+
+    # Apply the clear operation (archive the claims)
+    if not dry_run:
+        for claim in to_clear:
+            claim.status = ClaimStatus.ARCHIVED
+            claim.updated_at = datetime.now(UTC)
+            store.update_claim(claim)
+
+        # Log the bulk operation
+        if to_clear:
+            audit.log_event(
+                store.kb_dir,
+                event="claim.bulk_clear",
+                actor=actor,
+                object_ids=[c.id for c in to_clear],
+                data={
+                    "count": len(to_clear),
+                    "auto_only": auto_only,
+                    "before": before.isoformat() if before else None,
+                },
+            )
+
+    return to_clear
+
+
 def cite(store: KBStore, claim_id: str) -> list[Evidence | dict]:
     """Return resolved citations for a claim.
 

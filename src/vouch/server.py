@@ -47,7 +47,7 @@ from .proposals import (
     reject_auto_extracted,
 )
 from .scoping import filter_hits, scoped_fetch_limit, viewer_from
-from .stats import collect_stats
+from .stats import collect_activity, collect_stats
 from .storage import (
     ArtifactNotFoundError,
     KBNotFoundError,
@@ -95,6 +95,32 @@ def kb_stats(*, days: int = 30) -> dict[str, Any]:
     """
     since = None if days == 0 else days
     return collect_stats(_store(), since_days=since)
+
+
+@mcp.tool()
+def kb_activity(
+    *,
+    days: int = 365,
+    tz_offset_minutes: int = 0,
+    tz: str | None = None,
+    project: str | None = None,
+    agent: str | None = None,
+) -> dict[str, Any]:
+    """Audit activity buckets for dashboards: per-day counts, hour-of-week
+    matrix, actor and event histograms. Scope-filtered like kb.audit.
+
+    days: window in local calendar days; 0 means all-time.
+    tz: IANA zone for local-time bucketing; falls back to tz_offset_minutes.
+    """
+    store = _store()
+    viewer = viewer_from(
+        config_path=store.config_path,
+        project=project,
+        agent=agent,
+    )
+    return collect_activity(
+        store, days=days, tz_offset_minutes=tz_offset_minutes, tz=tz, viewer=viewer,
+    )
 
 
 @mcp.tool()
@@ -747,6 +773,42 @@ def kb_archive(claim_id: str) -> dict[str, Any]:
 def kb_confirm(claim_id: str) -> dict[str, Any]:
     c = life.confirm(_store(), claim_id=claim_id, actor=_agent())
     return {"id": c.id, "last_confirmed_at": c.last_confirmed_at}
+
+
+@mcp.tool()
+def kb_clear_claims(
+    auto_only: bool = True,
+    before: str | None = None,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Clear auto-approved claims, optionally filtered by date range.
+
+    Args:
+        auto_only: If True, only clear auto-approved claims.
+        before: If set, only clear claims created before this ISO 8601 date.
+        dry_run: If True, preview without making changes.
+
+    Returns:
+        Dictionary with count of cleared claims and their IDs.
+    """
+    from datetime import datetime
+
+    before_dt = None
+    if before:
+        before_dt = datetime.fromisoformat(before)
+
+    to_clear = life.clear_claims(
+        _store(),
+        auto_only=auto_only,
+        before=before_dt,
+        actor=_agent(),
+        dry_run=dry_run,
+    )
+    return {
+        "count": len(to_clear),
+        "claim_ids": [c.id for c in to_clear],
+        "dry_run": dry_run,
+    }
 
 
 @mcp.tool()

@@ -22,7 +22,7 @@ from typing import Any, Literal
 import click
 import yaml
 
-from . import __version__, bundle, health, session_split, volunteer_context
+from . import __version__, bundle, health, volunteer_context
 from . import audit as audit_mod
 from . import capture as capture_mod
 from . import codex_rollout as codex_rollout_mod
@@ -64,7 +64,6 @@ from .proposals import (
     check_approvable,
     expire_pending,
     propose_claim,
-    propose_delete,
     propose_entity,
     propose_page,
     propose_relation,
@@ -317,6 +316,59 @@ def stats(days: int, as_json: bool) -> None:
     )
     if cites["invalid_claim"] or cites["broken_citation"]:
         _echo(f"    invalid: {cites['invalid_claim']}, broken: {cites['broken_citation']}")
+
+
+@cli.command()
+@click.option(
+    "--days",
+    default=365,
+    show_default=True,
+    type=click.IntRange(min=0),
+    help="Window (local calendar days). Use 0 for all-time.",
+)
+@click.option(
+    "--tz-offset-minutes",
+    default=0,
+    show_default=True,
+    type=int,
+    help="Viewer's UTC offset in minutes for local-time bucketing.",
+)
+@click.option("--tz", default=None, help="IANA zone for local-time bucketing (wins over offset).")
+@click.option("--project", default=None, help="Viewer project for audit scope filtering.")
+@click.option("--agent", default=None, help="Viewer agent for audit scope filtering.")
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON instead of a table.")
+def activity(
+    days: int,
+    tz_offset_minutes: int,
+    tz: str | None,
+    project: str | None,
+    agent: str | None,
+    as_json: bool,
+) -> None:
+    """Audit activity buckets: per-day counts, hour-of-week matrix, actors."""
+    from .scoping import viewer_from
+
+    store = _load_store()
+    viewer = viewer_from(
+        config_path=store.config_path,
+        project=project,
+        agent=agent,
+    )
+    body = stats_mod.collect_activity(
+        store, days=days, tz_offset_minutes=tz_offset_minutes, tz=tz, viewer=viewer,
+    )
+    if as_json:
+        _emit_json(body)
+        return
+    window = "all time" if body["window_days"] is None else f"last {body['window_days']}d"
+    _echo(
+        f"activity ({window}): {_style(str(body['total_events']), fg='cyan')} events "
+        f"on {body['active_days']} day(s)"
+    )
+    if body["first_event_day"]:
+        _echo(f"  span: {body['first_event_day']} → {body['last_event_day']}")
+    for actor, count in list(body["by_actor"].items())[:8]:
+        _echo(f"  {actor}: {count}")
 
 
 @cli.command(name="digest")
@@ -1890,28 +1942,67 @@ def archive(claim_id: str) -> None:
     click.echo(f"archived {claim_id}")
 
 
-@cli.command(name="propose-delete")
-@click.argument(
-    "target_kind",
-    type=click.Choice(["claim", "page", "entity", "relation"]),
-)
-@click.argument("target_id")
-@click.option("--rationale", default=None, help="why this should be deleted")
-def propose_delete_cmd(
-    target_kind: str, target_id: str, rationale: str | None
-) -> None:
-    """File a review-gated hard-delete request for an artifact.
+@cli.command(name="claims-clear")
+@click.option("--auto-only", is_flag=True, default=True, show_default=True,
+              help="Clear only auto-approved claims (default: yes)")
+@click.option("--before", type=str, default=None,
+              help="Clear only claims created before this date (ISO 8601, e.g. 2026-07-01)")
+@click.option("--confirm", is_flag=True, default=False,
+              help="Skip confirmation prompt")
+@click.option("--dry-run", is_flag=True, default=False,
+              help="Preview what would be cleared without making changes")
+def claims_clear(auto_only: bool, before: str | None, confirm: bool, dry_run: bool) -> None:
+    """Clear auto-saved claims. Archived claims are preserved in history."""
+    from datetime import datetime
 
-    A different reviewer approves it with `vouch approve <id>`. Refused if the
-    target is still referenced (supersede the claim instead, usually).
-    """
     store = _load_store()
+    before_dt = None
+    if before:
+        try:
+            before_dt = datetime.fromisoformat(before)
+        except ValueError as err:
+            raise click.ClickException(
+                f"invalid date format: {before} (use ISO 8601, e.g. 2026-07-01)"
+            ) from err
+
     with _cli_errors():
-        pr = propose_delete(
-            store, target_kind=target_kind, target_id=target_id,
-            proposed_by=_whoami(), rationale=rationale,
+        to_clear = life.clear_claims(
+            store,
+            auto_only=auto_only,
+            before=before_dt,
+            actor=_whoami(),
+            dry_run=True,  # Always dry-run first to show what will be cleared
         )
-    click.echo(f"filed delete proposal {pr.id} for {target_kind} {target_id}")
+
+    if not to_clear:
+        click.echo("no claims match the criteria")
+        return
+
+    click.echo(f"found {len(to_clear)} claims to clear:")
+    for claim in to_clear[:10]:  # Show first 10
+        click.echo(f"  {claim.id}: {claim.text[:60]}")
+    if len(to_clear) > 10:
+        click.echo(f"  ... and {len(to_clear) - 10} more")
+
+    if dry_run:
+        click.echo("(dry-run mode: no changes made)")
+        return
+
+    if not confirm and not click.confirm(f"\nClear {len(to_clear)} claims?"):
+        click.echo("cancelled")
+        return
+
+    # Now actually clear them
+    with _cli_errors():
+        life.clear_claims(
+            store,
+            auto_only=auto_only,
+            before=before_dt,
+            actor=_whoami(),
+            dry_run=False,
+        )
+
+    click.echo(f"cleared {len(to_clear)} claims")
 
 
 @cli.command()
@@ -1993,13 +2084,6 @@ def session_end_cmd(session_id: str, note: str | None) -> None:
     _emit_json({"session": sess.id, "proposals": sess.proposal_ids})
 
 
-@session.command("list")
-def session_list_cmd() -> None:
-    """List captured sessions in the review pipeline (buffers + pending summaries)."""
-    store = _load_store()
-    _emit_json({"sessions": session_split.build_session_rows(store)})
-
-
 @cli.group()
 def capture() -> None:
     """Automatic session capture (driven by claude code hooks)."""
@@ -2050,10 +2134,8 @@ def capture_observe_cmd() -> None:
 
 @capture.command("finalize")
 @click.option("--session-id", default=None, help="Session id (else read from stdin payload).")
-@click.option("--split/--no-split", "force", default=None,
-              help="Force LLM topical split or a single mechanical page (default: size-gated).")
-def capture_finalize_cmd(session_id: str | None, force: bool | None) -> None:
-    """Roll a session buffer into PENDING summary proposal(s) (SessionEnd hook payload on stdin)."""
+def capture_finalize_cmd(session_id: str | None) -> None:
+    """Roll a session buffer into a PENDING summary (SessionEnd hook payload on stdin)."""
     payload: dict[str, Any] = {}
     if not sys.stdin.isatty():
         raw = sys.stdin.read()
@@ -2073,28 +2155,10 @@ def capture_finalize_cmd(session_id: str | None, force: bool | None) -> None:
     cwd = Path(str(payload.get("cwd") or ".")).resolve()
     transcript_raw = payload.get("transcript_path")
     transcript = Path(str(transcript_raw)) if transcript_raw else None
-    mode = "auto" if force is None else ("split" if force else "mechanical")
     result = capture_mod.finalize(
         store, sid, cwd=cwd, project=cwd.name,
         generated_at=datetime.now(UTC).isoformat(),
-        transcript_path=transcript, mode=mode,
-    )
-    _emit_json(result)
-
-
-@capture.command("summarize")
-@click.argument("session_id")
-@click.option("--split/--no-split", "force", default=None,
-              help="Force split or mechanical (default: size-gated auto).")
-def capture_summarize_cmd(session_id: str, force: bool | None) -> None:
-    """Summarize a captured session into PENDING page proposals (size-gated)."""
-    store = _capture_store()
-    if store is None:
-        _emit_json({"error": "no KB found"})
-        return
-    mode = "auto" if force is None else ("split" if force else "mechanical")
-    result = session_split.summarize(
-        store, session_id, mode=mode, generated_at=datetime.now(UTC).isoformat(),
+        transcript_path=transcript,
     )
     _emit_json(result)
 

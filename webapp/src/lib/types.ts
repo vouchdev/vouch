@@ -147,6 +147,24 @@ export interface KbStats {
   }
 }
 
+/** kb.activity — audit-log buckets for the Dashboard view. */
+export interface KbActivity {
+  generated_at: string
+  window_days: number | null
+  tz_offset_minutes: number
+  viewer?: { project: string | null; agent: string | null }
+  total_events: number
+  active_days: number
+  first_event_day: string | null
+  last_event_day: string | null
+  /** Keyed by local date "YYYY-MM-DD" (per tz_offset_minutes). */
+  by_day: Record<string, { total: number; proposals: number; decisions: number }>
+  /** [weekday][hour] counts, weekday 0 = Monday, hour 0-23 local. */
+  by_hour: number[][]
+  by_actor: Record<string, number>
+  by_event: Record<string, number>
+}
+
 export interface Capabilities {
   name: string
   level: number
