@@ -226,6 +226,7 @@ def _h_context(p: dict) -> dict:
 
 
 def _h_explain_ranking(p: dict) -> dict:
+    """JSONL handler for kb.explain_ranking (read-only ranking introspection)."""
     return explain_ranking(
         _store(),
         query=p["query"],

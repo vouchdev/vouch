@@ -18,11 +18,13 @@ from vouch.storage import KBStore
 
 @pytest.fixture
 def store(tmp_path: Path) -> KBStore:
+    """A fresh KB rooted at a temp dir."""
     return KBStore.init(tmp_path)
 
 
 def _put(store: KBStore, cid: str, text: str, *, evidence: list[str] | None = None,
          scope: ArtifactScope | None = None) -> None:
+    """Land a claim straight into storage (bypassing the review gate) for setup."""
     store.put_claim(Claim(
         id=cid, text=text,
         evidence=evidence if evidence is not None else [],
@@ -62,6 +64,7 @@ def test_fused_only_query_reports_fusion_signals(store: KBStore) -> None:
 
 
 def test_candidates_ordered_by_fused_rank(store: KBStore) -> None:
+    """Candidates come back in ascending fused_rank order, starting at 1."""
     src = store.put_source(b"e")
     for i in range(4):
         _put(store, f"c{i}", f"redis caching layer note {i}", evidence=[src.id])
@@ -95,6 +98,7 @@ def test_status_filtered_gate_for_retracted_claim(store: KBStore) -> None:
 
 
 def test_budget_dropped_gate(store: KBStore) -> None:
+    """A tight max_chars evicts tail candidates, gated budget-dropped."""
     src = store.put_source(b"e")
     for i in range(10):
         _put(store, f"c{i}",
@@ -140,9 +144,11 @@ def test_uncited_gate_classification() -> None:
 
     class _FakeStore:
         def get_claim(self, cid: str) -> _FakeClaim:
+            """Return a citation-less stand-in claim for any id."""
             return _FakeClaim()
 
     def _candidate() -> list[dict]:
+        """A single kept claim candidate to run the classifier over."""
         return [{"kind": "claim", "id": "u1", "summary": "x", "gate": "kept"}]
 
     cands = _candidate()
@@ -198,6 +204,7 @@ def test_explain_ranking_is_read_only(store: KBStore) -> None:
 
 
 def test_empty_query_returns_no_candidates(store: KBStore) -> None:
+    """A query that matches nothing returns an empty candidate list, not an error."""
     result = context.explain_ranking(store, query="nothingmatchesthis", limit=5)
     assert result["candidates"] == []
     assert "backend" in result
@@ -207,6 +214,7 @@ def test_empty_query_returns_no_candidates(store: KBStore) -> None:
 
 
 def test_registered_in_capabilities_and_handlers() -> None:
+    """The method appears in capabilities.METHODS and the JSONL handler map."""
     from vouch import capabilities
     from vouch.jsonl_server import HANDLERS
 
@@ -215,12 +223,14 @@ def test_registered_in_capabilities_and_handlers() -> None:
 
 
 def test_registered_as_mcp_tool() -> None:
+    """The MCP surface exposes kb_explain_ranking."""
     from vouch.server import mcp
 
     assert "kb_explain_ranking" in mcp._tool_manager._tools
 
 
 def test_jsonl_handler_round_trip(store: KBStore, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A well-formed request returns the success envelope {id, ok, result}."""
     from vouch.jsonl_server import handle_request
 
     src = store.put_source(b"e")

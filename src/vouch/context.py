@@ -165,6 +165,7 @@ def explain_ranking(
     fetch_limit = scoped_fetch_limit(limit, viewer)
 
     def _ranks(hits: list[tuple[str, str, str, float]]) -> dict[tuple[str, str], int]:
+        """Map each hit's (kind, id) to its 1-based position in the list."""
         return {(k, i): r for r, (k, i, _s, _sc) in enumerate(hits, start=1)}
 
     sem_rank: dict[tuple[str, str], int] = {}
@@ -336,6 +337,7 @@ def _classify_gates(
 
     if max_chars is not None:
         def _clipped_len(s: str) -> int:
+            """Summary length after build_context_pack's 200-char clip."""
             return len(s[:200] + "…") if len(s) > 200 else len(s)
 
         if sum(_clipped_len(c["summary"]) for c in survivors) > max_chars:

@@ -2406,6 +2406,7 @@ def explain_ranking_cmd(
         return
 
     def _fmt(v: object) -> str:
+        """Render a component score for the text table (None renders as '-')."""
         return "-" if v is None else (f"{v:.4f}" if isinstance(v, float) else str(v))
 
     for c in result["candidates"]:
