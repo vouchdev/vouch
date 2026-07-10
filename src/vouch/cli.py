@@ -38,6 +38,7 @@ from . import notify as notify_mod
 from . import pr_cache as prc_mod
 from . import provenance as prov_mod
 from . import recall as recall_mod
+from . import reviewers as reviewers_mod
 from . import sessions as sess_mod
 from . import stats as stats_mod
 from . import sync as sync_mod
@@ -363,6 +364,37 @@ def digest_cmd(since: str, stale_days: int, limit: int, fmt: str) -> None:
         click.echo(digest_mod.render_markdown(d))
     else:
         click.echo(digest_mod.render_text(d))
+
+
+@cli.command(name="reviewers")
+@click.option(
+    "--since",
+    default=reviewers_mod.DEFAULT_SINCE_SPEC,
+    show_default=True,
+    help="Window: a duration (30d, 12h), an ISO date, or 'all'.",
+)
+@click.option(
+    "--format",
+    "fmt",
+    default="text",
+    show_default=True,
+    type=click.Choice(["text", "json", "markdown"]),
+)
+def reviewers_cmd(since: str, fmt: str) -> None:
+    """Read-only throughput per human at the gate: decisions, approval rate,
+    and turnaround by decided_by. Writes nothing — safe to run from cron."""
+    store = _load_store()
+    try:
+        since_dt = metrics_mod.parse_since(since)
+    except metrics_mod.MetricsError as e:
+        raise click.UsageError(str(e)) from e
+    report = reviewers_mod.build(store, since=since_dt)
+    if fmt == "json":
+        _emit_json(report.to_dict())
+    elif fmt == "markdown":
+        click.echo(reviewers_mod.render_markdown(report))
+    else:
+        click.echo(reviewers_mod.render_text(report))
 
 
 def _findings_json(report) -> list[dict[str, Any]]:

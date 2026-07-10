@@ -6,6 +6,15 @@ All notable changes to vouch are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+- `vouch reviewers` — a read-only throughput report keyed on the human at the
+  gate (`decided_by`), which `vouch stats` (bucketed by the proposing agent)
+  and `vouch digest` don't surface: per reviewer, approvals vs rejections,
+  approval rate, and turnaround from `proposed_at` to `decided_at` (median and
+  max). auto-expiries are a system action, not a review, so they are excluded
+  from reviewer counts and reported once as `expired_total`. `--since` window,
+  `--format text|json|markdown`; writes nothing.
+
 ## [1.2.2] — 2026-07-07
 
 ### Packaging
