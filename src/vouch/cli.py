@@ -39,6 +39,7 @@ from . import pr_cache as prc_mod
 from . import provenance as prov_mod
 from . import recall as recall_mod
 from . import sessions as sess_mod
+from . import source_usage as source_usage_mod
 from . import stats as stats_mod
 from . import sync as sync_mod
 from . import synthesize as synth
@@ -1781,6 +1782,34 @@ def source_verify(fail_on_issue: bool) -> None:
         )
     if fail_on_issue and bad:
         sys.exit(1)
+
+
+@source.command("usage")
+@click.option(
+    "--limit",
+    default=source_usage_mod.DEFAULT_LIMIT,
+    show_default=True,
+    type=int,
+    help="Cap the most-cited and orphaned sections.",
+)
+@click.option(
+    "--format",
+    "fmt",
+    default="text",
+    show_default=True,
+    type=click.Choice(["text", "json", "markdown"]),
+)
+def source_usage(limit: int, fmt: str) -> None:
+    """Read-only source-usage report: most-cited sources and orphans that back
+    no claim. Writes nothing — safe to run from cron."""
+    store = _load_store()
+    report = source_usage_mod.build(store, limit=limit)
+    if fmt == "json":
+        _emit_json(report.to_dict())
+    elif fmt == "markdown":
+        click.echo(source_usage_mod.render_markdown(report))
+    else:
+        click.echo(source_usage_mod.render_text(report))
 
 
 @cli.command(name="inbox")

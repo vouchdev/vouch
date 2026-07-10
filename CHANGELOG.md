@@ -6,6 +6,14 @@ All notable changes to vouch are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+- `vouch source usage` — a read-only report that reads the source→claim
+  direction the existing surfaces don't: most-cited sources (resolving both
+  direct citations and citations made through an evidence span) and orphan
+  sources that no claim cites and no page references, safe to prune. writes
+  nothing and logs no audit event; `--format json|markdown` for cron and
+  dashboards.
+
 ## [1.2.2] — 2026-07-07
 
 ### Packaging
