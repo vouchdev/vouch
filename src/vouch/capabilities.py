@@ -17,11 +17,11 @@ from .openclaw.context_engine import describe_engine
 
 _log = logging.getLogger(__name__)
 
-# Path to the loader-facing package.json at the repo root, three levels up
-# (src/vouch/ -> src/ -> repo root). The 2026.6 openclaw repackage moved the
-# `openclaw.compat.pluginApi` floor out of openclaw.plugin.json (whose
-# `openclaw.*` fields the current loader ignores) and into package.json, so
-# that is now the single source of truth for host compat (#237).
+# Path to package.json, relative to this module. capabilities.py lives at
+# src/vouch/capabilities.py; package.json lives at the repo root, three levels
+# up (src/vouch/ -> src/ -> repo root). The openclaw.compat block lives here,
+# not in openclaw.plugin.json — the manifest bans openclaw.* dead dialect
+# fields (see test_manifest_carries_no_dead_dialect_fields).
 _PACKAGE_JSON_PATH = Path(__file__).resolve().parent.parent.parent / "package.json"
 
 # The full method surface this implementation exposes. Keep this list in
@@ -31,9 +31,11 @@ METHODS = [
     "kb.capabilities",
     "kb.status",
     "kb.stats",
+    "kb.activity",
     "kb.digest",
     "kb.search",
     "kb.neighbors",
+    "kb.experts",
     "kb.context",
     "kb.synthesize",
     "kb.read_page",
@@ -54,6 +56,7 @@ METHODS = [
     "kb.propose_page",
     "kb.propose_entity",
     "kb.propose_relation",
+    "kb.propose_delete",
     "kb.approve",
     "kb.reject",
     "kb.reject_extracted",
@@ -62,12 +65,16 @@ METHODS = [
     "kb.contradict",
     "kb.archive",
     "kb.confirm",
+    "kb.clear_claims",
     "kb.cite",
     "kb.source_verify",
     "kb.session_start",
     "kb.session_end",
+    "kb.list_sessions",
+    "kb.session_transcript",
     "kb.volunteer_context",
     "kb.crystallize",
+    "kb.summarize_session",
     "kb.index_rebuild",
     "kb.lint",
     "kb.doctor",
@@ -88,6 +95,8 @@ METHODS = [
     "kb.detect_themes",
     "kb.propose_theme",
     "kb.compile",
+    "kb.list_skills",
+    "kb.get_skill",
 ]
 
 
@@ -95,10 +104,10 @@ def _load_host_compat() -> dict[str, dict[str, str]]:
     """Read the `openclaw.compat` block from package.json (#237).
 
     Surfaced in `kb.capabilities` as `host_compat` so non-OpenClaw clients
-    can detect compat without parsing the manifest themselves. Returns an
+    can detect compat without parsing package.json themselves. Returns an
     empty dict (rather than raising) if package.json is missing or
     malformed — capabilities() must never fail to report basic info just
-    because the manifest moved or this is installed as a standalone wheel
+    because the file moved or this is installed as a standalone wheel
     without package.json packaged alongside it.
     """
     try:
@@ -112,7 +121,7 @@ def _load_host_compat() -> dict[str, dict[str, str]]:
     return {"openclaw": {k: str(v) for k, v in compat.items()}}
 
 
-def capabilities() -> Capabilities:
+def capabilities(*, publish_skills: bool = True) -> Capabilities:
     retrieval = ["fts5", "substring"]
     try:
         from .embeddings import get_embedder
@@ -134,5 +143,6 @@ def capabilities() -> Capabilities:
             "config_path": "retrieval.scope",
         },
         context_engines=[describe_engine()],
+        mcp={"publish_skills": publish_skills},
         host_compat=_load_host_compat(),
     )

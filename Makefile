@@ -1,4 +1,4 @@
-.PHONY: help install dev test test-cov bench lint format type check build clean examples-screenshots smoke-capture smoke-recall
+.PHONY: help install dev test test-cov bench lint format type check build clean examples-screenshots smoke-capture smoke-recall console webapp-build
 
 PY ?= python
 PIP ?= $(PY) -m pip
@@ -19,6 +19,7 @@ help:
 	@echo "  make examples-screenshots  re-render docs/img/examples/*.svg"
 	@echo "  make smoke-capture end-to-end check of session auto-capture"
 	@echo "  make smoke-recall  end-to-end check of session-start recall"
+	@echo "  make console       run the vouch backend + vouch-ui web console together"
 
 install:
 	$(PIP) install -e '.[dev]'
@@ -58,9 +59,23 @@ smoke-capture:
 smoke-recall:
 	VOUCH="$(PY) -m vouch" bash scripts/smoke-recall.sh
 
-build:
+# Run the vouch HTTP backend and the vouch-ui web console together (Ctrl-C stops
+# both). Installs the web console's node deps on first run.
+console:
+	bash scripts/console.sh
+
+# Build the React console into webapp/dist so the wheel can bundle it as
+# vouch/web/console (hatch_build.py force-includes it when present). Installs
+# the web console's node deps on first run.
+webapp-build:
+	cd webapp && { [ -d node_modules ] || npm ci; } && npm run build
+
+# sdist is source-only; the wheel is built from the working tree (not the
+# sdist) so the freshly-built, gitignored webapp/dist rides inside it.
+build: webapp-build
 	$(PY) -m pip install --upgrade build
-	$(PY) -m build
+	$(PY) -m build --sdist
+	$(PY) -m build --wheel
 
 clean:
 	rm -rf build dist *.egg-info src/*.egg-info \

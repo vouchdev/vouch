@@ -314,6 +314,53 @@ def propose_relation(
     )
 
 
+def propose_delete(
+    store: KBStore,
+    *,
+    target_kind: str,
+    target_id: str,
+    proposed_by: str,
+    rationale: str | None = None,
+    session_id: str | None = None,
+    dry_run: bool = False,
+) -> Proposal:
+    """File a review-gated request to hard-delete a durable artifact.
+
+    Blocked (at propose time, re-checked at approve) if the target is still
+    referenced by another artifact — the maintainer must supersede or remove
+    the referrers first. The full artifact is snapshotted into the payload so
+    the decided proposal and audit event record exactly what was removed.
+    """
+    if target_kind not in _DELETE_KINDS:
+        raise ProposalError(
+            f"unknown target_kind {target_kind!r}; expected one of "
+            f"{sorted(_DELETE_KINDS)}"
+        )
+    getter = getattr(store, _DELETE_GETTERS[target_kind])
+    try:
+        artifact = getter(target_id)
+    except ArtifactNotFoundError as e:
+        raise ProposalError(f"unknown {target_kind} id: {target_id}") from e
+    refs = referenced_by(store, target_kind, target_id)
+    if refs:
+        hint = " (supersede it instead?)" if target_kind == "claim" else ""
+        raise ProposalError(
+            f"cannot delete {target_kind} {target_id}: referenced by "
+            + ", ".join(refs)
+            + hint
+        )
+    payload = {
+        "target_kind": target_kind,
+        "id": target_id,
+        "snapshot": artifact.model_dump(mode="json"),
+    }
+    return _file_proposal(
+        store, kind=ProposalKind.DELETE, payload=payload,
+        proposed_by=proposed_by, session_id=session_id,
+        rationale=rationale, dry_run=dry_run,
+    )
+
+
 # --- decisions ------------------------------------------------------------
 
 
@@ -399,6 +446,22 @@ def _payload_block_reason(store: KBStore, proposal: Proposal) -> str | None:
             Entity(**payload)
         except (ValidationError, TypeError) as e:
             return f"invalid entity payload: {e}"
+    elif proposal.kind == ProposalKind.DELETE:
+        target_kind = str(payload.get("target_kind", ""))
+        target_id = str(payload.get("id", ""))
+        if target_kind not in _DELETE_KINDS:
+            return f"invalid delete target_kind: {target_kind!r}"
+        getter = getattr(store, _DELETE_GETTERS[target_kind])
+        try:
+            getter(target_id)
+        except ArtifactNotFoundError:
+            return None  # already gone → idempotent approve is fine
+        refs = referenced_by(store, target_kind, target_id)
+        if refs:
+            return (
+                f"cannot delete {target_kind} {target_id}: referenced by "
+                + ", ".join(refs)
+            )
     return None
 
 
@@ -444,11 +507,17 @@ def approve(
     # Exception: PAGE proposals may legitimately target an existing page when
     # filed by vault_to_kb (vault edit flow) — the approve path handles that
     # via update_page rather than put_page.
-    if proposal.kind != ProposalKind.PAGE:
+    if proposal.kind not in (ProposalKind.PAGE, ProposalKind.DELETE):
         _ensure_no_existing_artifact(store, proposal.kind, payload["id"])
     result: Claim | Page | Entity | Relation
     if proposal.kind == ProposalKind.CLAIM:
-        claim = Claim(approved_by=approved_by, **payload)
+        is_auto_approved = approved_by == proposal.proposed_by
+        claim = Claim(
+            approved_by=approved_by,
+            proposed_by=proposal.proposed_by,
+            auto_approved=is_auto_approved,
+            **payload
+        )
         store.put_claim(claim)
         with index_db.open_db(store.kb_dir) as conn:
             index_db.index_claim(
@@ -500,6 +569,8 @@ def approve(
                 type=entity.type.value, aliases=entity.aliases,
             )
         result = entity
+    elif proposal.kind == ProposalKind.DELETE:
+        result = _approve_delete(store, proposal, approved_by=approved_by)
     else:  # RELATION
         rel = Relation(**payload)
         store.put_relation(rel)
@@ -655,6 +726,131 @@ _ARTIFACT_GETTERS = {
     ProposalKind.ENTITY: "get_entity",
     ProposalKind.RELATION: "get_relation",
 }
+
+
+_DELETE_KINDS = {"claim", "page", "entity", "relation"}
+
+_DELETE_GETTERS = {
+    "claim": "get_claim",
+    "page": "get_page",
+    "entity": "get_entity",
+    "relation": "get_relation",
+}
+
+
+def referenced_by(store: KBStore, target_kind: str, target_id: str) -> list[str]:
+    """Inbound referrers to `target_id` — the "block if referenced" gate.
+
+    Returns human-readable descriptions of artifacts that point AT the
+    target. Only inbound refs count; outbound refs (what the target itself
+    points at) are never returned, because deleting the holder simply drops
+    its own pointers. An empty list means the artifact is safe to delete.
+    """
+    if target_kind not in _DELETE_KINDS:
+        raise ProposalError(
+            f"unknown target_kind {target_kind!r}; expected one of "
+            f"{sorted(_DELETE_KINDS)}"
+        )
+    refs: list[str] = []
+    if target_kind == "claim":
+        for page in store.list_pages():
+            if target_id in page.claims:
+                refs.append(f"page {page.id!r}")
+        # relation endpoints are bare ids without a kind tag; a same-slug
+        # artifact of a different kind could match here. acceptable given the
+        # slug-collision caveat in the spec's "out of scope".
+        for rel in store.list_relations():
+            if target_id in (rel.source, rel.target):
+                refs.append(f"relation {rel.id!r}")
+        for claim in store.list_claims():
+            if claim.id == target_id:
+                continue
+            if (
+                target_id in claim.supersedes
+                or claim.superseded_by == target_id
+                or target_id in claim.contradicts
+            ):
+                refs.append(f"claim {claim.id!r}")
+    elif target_kind == "page":
+        for rel in store.list_relations():
+            if target_id in (rel.source, rel.target):
+                refs.append(f"relation {rel.id!r}")
+    elif target_kind == "entity":
+        for claim in store.list_claims():
+            if target_id in claim.entities:
+                refs.append(f"claim {claim.id!r}")
+        for page in store.list_pages():
+            if target_id in page.entities:
+                refs.append(f"page {page.id!r}")
+        for rel in store.list_relations():
+            if target_id in (rel.source, rel.target):
+                refs.append(f"relation {rel.id!r}")
+    # target_kind == "relation": edges have no inbound refs → refs stays empty
+    return refs
+
+
+def _reconstruct_deleted(
+    target_kind: str, snapshot: dict[str, Any]
+) -> Claim | Page | Entity | Relation:
+    """Rebuild a typed model from a delete proposal's snapshot.
+
+    Used only on the idempotent path (artifact already gone) so the approve
+    surfaces still receive a `{kind, id}` result.
+    """
+    if target_kind == "claim":
+        return Claim(**snapshot)
+    if target_kind == "page":
+        return Page(**snapshot)
+    if target_kind == "entity":
+        return Entity(**snapshot)
+    return Relation(**snapshot)
+
+
+def _approve_delete(
+    store: KBStore, proposal: Proposal, *, approved_by: str
+) -> Claim | Page | Entity | Relation:
+    """Execute an approved DELETE proposal: remove the artifact + index rows.
+
+    Re-checks references at approve time (they may have appeared since the
+    proposal was filed). Idempotent: if the artifact is already gone, finalize
+    the proposal without erroring.
+    """
+    payload = proposal.payload
+    target_kind = str(payload["target_kind"])
+    target_id = str(payload["id"])
+    snapshot = dict(payload.get("snapshot") or {})
+    getter = getattr(store, _DELETE_GETTERS[target_kind])
+    try:
+        artifact = getter(target_id)
+    except ArtifactNotFoundError:
+        # Idempotent already-gone path (crash-retry between the file unlink and
+        # move_proposal_to_decided). The file is gone but the derived index rows
+        # may not be — a crash between deleter() and deindex() below would leave
+        # stale fts/embedding/prov rows and keep the deleted artifact searchable.
+        # deindex is a no-op when the rows are already absent, so run it here too
+        # to converge the index. The per-kind {kind}.delete audit event is
+        # intentionally NOT re-emitted on this path: the snapshot is preserved in
+        # the decided/ proposal, the shared approve() tail still records
+        # proposal.delete.approve, and re-emitting would double-log if the crash
+        # landed after the original audit call.
+        with index_db.open_db(store.kb_dir) as conn:
+            index_db.deindex(conn, kind=target_kind, id=target_id)
+        return _reconstruct_deleted(target_kind, snapshot)
+    refs = referenced_by(store, target_kind, target_id)
+    if refs:
+        raise ProposalError(
+            f"cannot delete {target_kind} {target_id}: still referenced by "
+            + ", ".join(refs)
+        )
+    deleter = getattr(store, f"delete_{target_kind}")
+    deleter(target_id)
+    with index_db.open_db(store.kb_dir) as conn:
+        index_db.deindex(conn, kind=target_kind, id=target_id)
+    audit.log_event(
+        store.kb_dir, event=f"{target_kind}.delete", actor=approved_by,
+        object_ids=[target_id], data={"snapshot": snapshot}, reversible=False,
+    )
+    return artifact
 
 
 def _ensure_no_existing_artifact(

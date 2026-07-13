@@ -1,0 +1,39 @@
+# Try vouch in one command:
+#
+#   cd demo
+#   docker compose up --build          # then open http://localhost:5173
+#
+# A starter, review-gated knowledge base is seeded on first run. Your data
+# persists in the `vouch-demo-data` volume; `docker compose down -v` resets it.
+# Only the console port is published, and only on 127.0.0.1 — nothing leaves
+# your machine.
+name: vouch-demo
+
+services:
+  vouch-demo:
+    build:
+      context: ..
+      dockerfile: demo/Dockerfile
+    image: vouch-demo:latest
+    ports:
+      - "127.0.0.1:5173:5173"
+    environment:
+      # in-container bearer token; injected server-side, never sent to the browser
+      VOUCH_HTTP_TOKEN: ${VOUCH_HTTP_TOKEN:-vouch-demo}
+      # optional: your own Anthropic key turns on page compile & session
+      # summaries (Claude). Left empty, the demo still runs — those two actions
+      # just report "not configured". Never commit a real key.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-4-5}
+    volumes:
+      - vouch-demo-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-m", "3", "http://127.0.0.1:5173/proxy/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+volumes:
+  vouch-demo-data:

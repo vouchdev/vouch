@@ -17,7 +17,7 @@ def test_starter_config_parses_with_no_unknown_keys() -> None:
     cfg = Config.load(_starter_config())
     assert cfg.review.require_human_approval is True
     assert cfg.review.expire_pending_after_days == 90
-    assert cfg.retrieval.backend == "auto"
+    assert cfg.retrieval.backend == "hybrid"
     assert cfg.retrieval.default_limit == 10
     assert cfg.unknown_keys() == []
 

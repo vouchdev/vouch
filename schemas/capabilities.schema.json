@@ -29,6 +29,12 @@
       "title": "Level",
       "type": "integer"
     },
+    "mcp": {
+      "additionalProperties": true,
+      "description": "mcp surface flags mirrored from config.yaml `mcp:` block. `publish_skills` gates kb.list_skills / kb.get_skill.",
+      "title": "Mcp",
+      "type": "object"
+    },
     "methods": {
       "items": {
         "type": "string"

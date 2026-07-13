@@ -7,13 +7,18 @@ agent, decision rates over a time window, and citation coverage.
 from __future__ import annotations
 
 import statistics
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from . import audit, health
 from .models import Proposal, ProposalStatus
 from .proposals import EXPIRE_REASON
 from .storage import KBStore, _yaml_load
+
+if TYPE_CHECKING:
+    from .scoping import ViewerContext
 
 
 def _utc(dt: datetime) -> datetime:
@@ -183,6 +188,103 @@ def review_summary(store: KBStore, *, since_days: int | None) -> dict[str, Any]:
             agent: dict(sorted(counts.items()))
             for agent, counts in sorted(by_agent.items())
         },
+    }
+
+
+# Real-world UTC offsets span -12:00..+14:00; clamp so a bad client can't
+# shift events into arbitrary buckets.
+_MAX_TZ_OFFSET_MINUTES = 14 * 60
+
+
+def _is_proposal_create(event: str) -> bool:
+    return event.startswith("proposal.") and event.endswith(".create")
+
+
+def _local_clock(tz: str | None, offset_minutes: int) -> Callable[[datetime], datetime]:
+    """Viewer-local conversion: an IANA zone when resolvable (DST-correct),
+    otherwise the fixed offset."""
+    if tz:
+        try:
+            zone = ZoneInfo(tz)
+        except (ZoneInfoNotFoundError, ValueError):
+            pass
+        else:
+            return lambda dt: _utc(dt).astimezone(zone)
+    shift = timedelta(minutes=offset_minutes)
+    return lambda dt: _utc(dt) + shift
+
+
+def collect_activity(
+    store: KBStore,
+    *,
+    days: int = 365,
+    tz_offset_minutes: int = 0,
+    tz: str | None = None,
+    viewer: ViewerContext | None = None,
+) -> dict[str, Any]:
+    """Bucket audit events for the console dashboard — `kb.activity`.
+
+    One pass over the audit log: per-day totals (with proposal/decision
+    breakdowns), an hour-of-week matrix, and actor/event histograms.
+    ``days=0`` means all-time; otherwise the window is the last ``days``
+    viewer-local calendar days including today, so the oldest day in a
+    dashboard heatmap is never partially counted. ``tz`` (IANA name) wins
+    over ``tz_offset_minutes`` for local bucketing. ``viewer`` applies the
+    same scope filtering as `kb.audit`.
+    """
+    if days < 0:
+        raise ValueError("days must be >= 0")
+    window = None if days == 0 else days
+    offset = max(-_MAX_TZ_OFFSET_MINUTES, min(_MAX_TZ_OFFSET_MINUTES, tz_offset_minutes))
+    to_local = _local_clock(tz, offset)
+    cutoff_day = (
+        None
+        if window is None
+        else to_local(datetime.now(UTC)).date() - timedelta(days=window - 1)
+    )
+
+    by_day: dict[str, dict[str, int]] = {}
+    # by_hour[weekday][hour], Monday = 0 — matches datetime.weekday().
+    by_hour = [[0] * 24 for _ in range(7)]
+    by_actor: dict[str, int] = {}
+    by_event: dict[str, int] = {}
+    total = 0
+
+    for ev in audit.read_events(store.kb_dir, store=store, viewer=viewer):
+        local = to_local(ev.created_at)
+        if cutoff_day is not None and local.date() < cutoff_day:
+            continue
+        day = by_day.setdefault(
+            local.date().isoformat(),
+            {"total": 0, "proposals": 0, "decisions": 0},
+        )
+        day["total"] += 1
+        if _is_proposal_create(ev.event):
+            day["proposals"] += 1
+        elif _audit_decision_kind(ev.event) is not None:
+            day["decisions"] += 1
+        by_hour[local.weekday()][local.hour] += 1
+        by_actor[ev.actor] = by_actor.get(ev.actor, 0) + 1
+        by_event[ev.event] = by_event.get(ev.event, 0) + 1
+        total += 1
+
+    days_seen = sorted(by_day)
+    return {
+        "generated_at": datetime.now(UTC).isoformat(),
+        "window_days": window,
+        "tz_offset_minutes": offset,
+        "viewer": {
+            "project": viewer.project if viewer else None,
+            "agent": viewer.agent if viewer else None,
+        },
+        "total_events": total,
+        "active_days": len(by_day),
+        "first_event_day": days_seen[0] if days_seen else None,
+        "last_event_day": days_seen[-1] if days_seen else None,
+        "by_day": {d: by_day[d] for d in days_seen},
+        "by_hour": by_hour,
+        "by_actor": dict(sorted(by_actor.items(), key=lambda kv: (-kv[1], kv[0]))),
+        "by_event": dict(sorted(by_event.items(), key=lambda kv: (-kv[1], kv[0]))),
     }
 
 
