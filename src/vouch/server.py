@@ -292,14 +292,20 @@ def kb_synthesize(
     query: str,
     depth: int = 3,
     max_chars: int = 4000,
+    llm: bool = False,
 ) -> dict[str, Any]:
-    """Answer a query from approved claims only, with inline `[claim_id]`
-    citations, an explicit gaps block, and a synthesis_confidence grade.
+    """Answer a query from the review-gated KB, with inline `[id]` citations,
+    an explicit gaps block, and a synthesis_confidence grade.
 
     Unlike `kb_context` (a ranked list), this returns prose where every
-    sentence is traceable to an approved claim.
+    sentence is traceable to a source. Deterministic by default (approved
+    claims only); `llm=True` drafts the answer with the deployment-configured
+    LLM (compile.llm_cmd) grounded in pages and approved claims — citations
+    are still verified mechanically, and the call is synchronous.
     """
-    return synthesize(_store(), query=query, depth=depth, max_chars=max_chars)
+    return synthesize(
+        _store(), query=query, depth=depth, max_chars=max_chars, llm=llm,
+    )
 
 
 @mcp.tool()

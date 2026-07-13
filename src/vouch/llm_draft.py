@@ -56,6 +56,23 @@ def run_llm(
     return proc.stdout
 
 
+def parse_object(raw: str, *, noun: str = "answer") -> dict[str, Any]:
+    """Parse LLM stdout into a single JSON object.
+
+    The object-shaped sibling of `parse_drafts`: same fence stripping, same
+    LLMDraftError contract, for callers whose LLM returns one object (e.g.
+    synthesize's `{"answer": …, "gaps": […]}`) rather than an array of drafts.
+    """
+    text = _FENCE_RE.sub("", raw.strip()).strip()
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as e:
+        raise LLMDraftError(f"{noun} output is not valid JSON: {e}") from e
+    if not isinstance(data, dict):
+        raise LLMDraftError(f"{noun} output must be a single JSON object")
+    return data
+
+
 def parse_drafts(raw: str, *, noun: str = "page") -> list[dict[str, Any]]:
     """Parse LLM stdout into a list of draft dicts.
 
