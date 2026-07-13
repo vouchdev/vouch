@@ -24,7 +24,6 @@ import click
 import yaml
 
 from . import __version__, bundle, health, volunteer_context
-from . import anomaly as anomaly_mod
 from . import audit as audit_mod
 from . import capture as capture_mod
 from . import codex_rollout as codex_rollout_mod
@@ -932,62 +931,6 @@ def pending(as_json: bool) -> None:
         preview = pr.payload.get("text") or pr.payload.get("title") or pr.payload.get("name") or "—"
         click.echo(f"• {pr.id}  [{pr.kind.value}]  by {pr.proposed_by}")
         click.echo(f"    {str(preview).strip()[:120]}")
-
-
-@cli.command(name="flag-anomalies")
-@click.option(
-    "--min-evidence",
-    default=None,
-    type=int,
-    help="Flag a pending claim whose evidence count is at or below this "
-    "(default from review.anomaly.min_evidence, else 1).",
-)
-@click.option(
-    "--contradictions",
-    "contradiction_count",
-    default=None,
-    type=int,
-    help="Flag a claim declaring at least this many approved contradictions "
-    "(default from review.anomaly.contradiction_count, else 1).",
-)
-@click.option(
-    "--far-floor",
-    default=None,
-    type=float,
-    help="Flag a claim whose best cosine to the approved corpus is below this "
-    "(default from review.anomaly.far_from_corpus_floor, else 0.35; needs the "
-    "embeddings extra — skipped otherwise).",
-)
-@click.option("--json", "as_json", is_flag=True, help="Emit the machine shape instead of text.")
-def flag_anomalies(
-    min_evidence: int | None,
-    contradiction_count: int | None,
-    far_floor: float | None,
-    as_json: bool,
-) -> None:
-    """Advisory flags on pending proposals that deserve a closer look (#323).
-
-    \b
-    Scores every pending claim proposal, worst-first, with reason codes:
-      • thin_evidence   — barely cited
-      • contradicts_many — declares contradictions against approved claims
-      • far_from_corpus — an outlier vs the approved corpus (needs embeddings)
-
-    Read-only — a hint for the reviewer. It flags nothing durable: no proposal,
-    no approval, no write. Never rejects or quarantines; the human gate is
-    untouched.
-    """
-    store = _load_store()
-    anomalies = anomaly_mod.flag_anomalies(
-        store,
-        min_evidence=min_evidence,
-        contradiction_count=contradiction_count,
-        far_floor=far_floor,
-    )
-    if as_json:
-        _emit_json([a.to_dict() for a in anomalies])
-        return
-    click.echo(anomaly_mod.render_text(anomalies), nl=False)
 
 
 def _proposal_preview(pr: Proposal) -> str:

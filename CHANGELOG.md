@@ -202,24 +202,6 @@ All notable changes to vouch are documented here. Format follows
 ## [1.1.0] — 2026-07-03
 
 ### Added
-- `kb.diff` — `vouch diff <id-old> <id-new>` (0.1.0) now has full `kb.*`
-  parity: an MCP tool and a JSONL `kb.diff` handler alongside the existing
-  CLI, registered in `capabilities.METHODS` like every other read method.
-  `<id-new>` is now optional for a claim: omitting it resolves the diff
-  against `superseded_by`, with a clear error when the claim has no
-  successor (pages still require an explicit `new_id` — they have no
-  successor pointer). Read-only throughout; still no writes, proposals, or
-  audit events (#327).
-- `vouch flag-anomalies` — advisory anomaly flags on pending proposals (#323).
-  scores every pending claim proposal worst-first with reason codes:
-  `thin_evidence` (barely cited), `contradicts_many` (declares contradictions
-  against approved live claims), and `far_from_corpus` (an outlier vs the
-  approved corpus by nearest-neighbour cosine). the embedding-derived
-  `far_from_corpus` degrades gracefully to no code when the embeddings extra is
-  absent — the two non-embedding codes still compute. thresholds resolve from
-  `review.anomaly.*` in `.vouch/config.yaml`. read-only by construction — a hint
-  for the reviewer that flags nothing durable and never rejects or quarantines,
-  so the review gate is untouched. `--json` for the machine shape.
 - auto-capture: claude code sessions are harvested via hooks and filed as a
   single pending session-summary proposal for human approval. a `PostToolUse`
   hook (`vouch capture observe`) appends compact tool-use observations to an
