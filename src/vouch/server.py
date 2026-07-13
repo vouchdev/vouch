@@ -26,6 +26,7 @@ from . import lifecycle as life
 from . import metrics as metrics_mod
 from . import salience as salience_mod
 from . import sessions as sess_mod
+from . import skills as skills_mod
 from . import trust as trust_mod
 from . import verify as verify_mod
 from .capabilities import capabilities as build_caps
@@ -78,7 +79,11 @@ def _agent() -> str:
 @mcp.tool()
 def kb_capabilities() -> dict[str, Any]:
     """Return the protocol capabilities of this server."""
-    return build_caps().model_dump(mode="json")
+    try:
+        publish_skills = skills_mod.publish_skills_enabled(_store())
+    except Exception:
+        publish_skills = True
+    return build_caps(publish_skills=publish_skills).model_dump(mode="json")
 
 
 @mcp.tool()
@@ -95,6 +100,38 @@ def kb_stats(*, days: int = 30) -> dict[str, Any]:
     """
     since = None if days == 0 else days
     return collect_stats(_store(), since_days=since)
+
+
+@mcp.tool()
+def kb_list_skills() -> list[dict[str, Any]]:
+    """Enumerate every Claude Code skill / slash command visible to vouch.
+
+    Scans, in priority order:
+      1. ``<kb_root>/.claude/skills/<name>/SKILL.md`` — project-local skills
+      2. ``<kb_root>/.claude/commands/<name>.md``     — project-local commands
+      3. ``~/.claude/skills/<name>/SKILL.md``         — user-global skills
+      4. ``~/.claude/commands/<name>.md``             — user-global commands
+
+    Project entries override user ones with the same name. Returns
+    ``[{name, description, scope, kind, path}]``. Returns an empty list
+    when ``mcp.publish_skills`` is ``false`` in config.yaml.
+    """
+    return skills_mod.list_skills(_store())
+
+
+@mcp.tool()
+def kb_get_skill(name: str) -> dict[str, Any]:
+    """Return the full markdown body of a named skill / slash command.
+
+    Errors with ``permission_denied`` when ``mcp.publish_skills`` is
+    ``false``, and ``not_found`` when the name isn't in the catalogue.
+    """
+    try:
+        return skills_mod.get_skill(_store(), name)
+    except skills_mod.SkillsDisabledError as e:
+        raise PermissionError(str(e)) from e
+    except KeyError as e:
+        raise ValueError(str(e)) from e
 
 
 @mcp.tool()
