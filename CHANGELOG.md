@@ -42,6 +42,10 @@ All notable changes to vouch are documented here. Format follows
   (#294)
 
 ### Fixed
+- `vouch digest --limit` now caps the followups-due section like the
+  pending, decisions, and stale sections — it previously returned every
+  due followup regardless of the limit, contradicting the `--limit` help.
+
 - the dual-solve diff renderer dropped added/removed lines whose content
   starts with `++`/`--` (e.g. an added `++counter` line) by treating them as
   `+++`/`---` file headers; the header skip now requires the trailing
