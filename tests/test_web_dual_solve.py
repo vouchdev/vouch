@@ -40,6 +40,17 @@ def test_dual_solve_page_renders_when_enabled(git_kb):
     assert "dual-solve-app" in r.text  # the Vue mount point
 
 
+def test_dual_solve_serves_diff_view_module(git_kb):
+    # the file-changes view imports the pure diff/tree helpers as a separate
+    # module; a broken static path would fail only at runtime in the browser.
+    c = _client(git_kb)
+    r = c.get("/static/diff_view.js")
+    assert r.status_code == 200
+    assert "export function parseDiff" in r.text
+    assert "export function buildFileTree" in r.text
+    assert 'from "/static/diff_view.js"' in c.get("/static/dual_solve.js").text
+
+
 def test_dual_solve_routes_absent_when_disabled(git_kb):
     # the security gate: with --allow-dual-solve off, NOTHING mounts -- not just
     # the page, but the executing run/choose routes that spawn engines.

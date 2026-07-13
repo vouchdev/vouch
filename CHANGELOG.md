@@ -20,8 +20,17 @@ All notable changes to vouch are documented here. Format follows
   filtered like `kb.audit`.
 - console Dashboard view: 12-month activity calendar, last-30-days bars,
   hour-of-week heatmap, top actors and event mix, driven by `kb.activity`.
+- dual-solve web ui: file-changes tree view in the candidate panes — a compact
+  folders-first file tree drives a per-file diff pane, replacing the flat
+  changed-files list and the stacked all-files diff. selection is
+  per-candidate, so inspecting claude's diff never moves the codex pane.
+  (#294)
 
 ### Fixed
+- the dual-solve diff renderer dropped added/removed lines whose content
+  starts with `++`/`--` (e.g. an added `++counter` line) by treating them as
+  `+++`/`---` file headers; the header skip now requires the trailing
+  space-and-path form. (#294)
 - `compile_kb()` could file two page proposals for the same title when the
   LLM's batch drafted the same topic (or same slug, e.g. "Retry Policy" vs
   "retry policy") twice — `taken_names` was only seeded from on-disk pages

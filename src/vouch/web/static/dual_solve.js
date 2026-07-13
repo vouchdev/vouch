@@ -1,31 +1,5 @@
 import { ref, reactive, onMounted } from "/static/vendor/vue.esm-browser.prod.js";
-
-// Minimal unified-diff parser: groups lines per file with +/-/context classes.
-function parseDiff(diff) {
-  const files = [];
-  let cur = null;
-  for (const line of (diff || "").split("\n")) {
-    if (line.startsWith("diff --git")) {
-      const m = line.match(/ b\/(.+)$/);
-      cur = { path: m ? m[1] : line, lines: [] };
-      files.push(cur);
-    } else if (!cur) {
-      continue;
-    } else if (line.startsWith("+++") || line.startsWith("---") ||
-               line.startsWith("index ")) {
-      continue;
-    } else if (line.startsWith("@@")) {
-      cur.lines.push({ cls: "hunk", text: line });
-    } else if (line.startsWith("+")) {
-      cur.lines.push({ cls: "add", text: line });
-    } else if (line.startsWith("-")) {
-      cur.lines.push({ cls: "del", text: line });
-    } else {
-      cur.lines.push({ cls: "ctx", text: line });
-    }
-  }
-  return files;
-}
+import { parseDiff, buildFileTree, flattenTree } from "/static/diff_view.js";
 
 export default {
   setup() {
@@ -39,11 +13,32 @@ export default {
       changed_files: [], recommendation: null,
     });
 
+    // engine -> selected file path in that candidate's file-changes view.
+    // selection is per-candidate by design: picking a file in the claude pane
+    // never moves the codex pane. lives outside applyState so polling doesn't
+    // reset it.
+    const selected = reactive({});
+
     function applyState(s) {
       Object.assign(job, s, {
-        candidates: (s.candidates || []).map(
-          (c) => ({ ...c, files: parseDiff(c.diff) })),
+        candidates: (s.candidates || []).map((c) => {
+          const files = parseDiff(c.diff);
+          return {
+            ...c,
+            files,
+            rows: flattenTree(buildFileTree(files.map((f) => f.path))),
+          };
+        }),
       });
+    }
+    // selected file object for a candidate; falls back to the first changed
+    // file when nothing is selected yet or the diff no longer has the path.
+    function activeFile(c) {
+      const want = selected[c.engine];
+      return c.files.find((f) => f.path === want) || c.files[0] || null;
+    }
+    function selectFile(engine, path) {
+      selected[engine] = path;
     }
     async function refresh() {
       if (!job.id) return;
@@ -90,7 +85,10 @@ export default {
     }
 
     onMounted(connectWs);
-    return { issueUrl, claudeEffort, codexEffort, reason, job, run, choose };
+    return {
+      issueUrl, claudeEffort, codexEffort, reason, job, run, choose,
+      activeFile, selectFile,
+    };
   },
   template: `
 <section class="ds">
@@ -117,17 +115,29 @@ export default {
     <div v-for="c in job.candidates" :key="c.engine" class="ds-pane">
       <h2>{{c.engine}} <small>{{c.branch}}</small></h2>
       <p v-if="!c.ok" class="ds-error">failed: {{c.error}}</p>
-      <ul v-if="c.changed_files && c.changed_files.length" class="ds-changed-files">
-        <li v-for="f in c.changed_files" :key="f">{{f}}</li>
-      </ul>
       <details v-if="c.log" class="ds-log">
         <summary>{{c.engine}} log</summary>
         <pre>{{c.log}}</pre>
       </details>
-      <div v-for="f in c.files" :key="f.path" class="ds-file">
-        <div class="ds-file-head">{{f.path}}</div>
-        <pre><code><span v-for="(l,i) in f.lines" :key="i" :class="'ln-'+l.cls">{{l.text}}\\n</span></code></pre>
+      <div v-if="c.ok && c.files.length" class="fc">
+        <div class="fc-rail">
+          <template v-for="r in c.rows" :key="r.path">
+            <div v-if="r.type==='tree'" class="fc-dir"
+                 :style="{paddingLeft: (r.depth*10)+'px'}" :title="r.path">{{r.name}}/</div>
+            <button v-else type="button" class="fc-file"
+                    :class="{sel: activeFile(c) && activeFile(c).path===r.path}"
+                    :style="{paddingLeft: (r.depth*10+4)+'px'}" :title="r.path"
+                    @click="selectFile(c.engine, r.path)">{{r.name}}</button>
+          </template>
+        </div>
+        <div class="fc-pane">
+          <div v-if="activeFile(c)" class="ds-file">
+            <div class="ds-file-head">{{activeFile(c).path}}</div>
+            <pre><code><span v-for="(l,i) in activeFile(c).lines" :key="i" :class="'ln-'+l.cls">{{l.text + '\\n'}}</span></code></pre>
+          </div>
+        </div>
       </div>
+      <p v-else-if="c.ok" class="fc-empty">(no file changes)</p>
     </div>
   </div>
 
