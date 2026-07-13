@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 import json
 import sys
 from pathlib import Path
@@ -11,6 +12,20 @@ from .context_engine import create_vouch_context_engine
 from .types import CompactParams
 
 _METHODS = frozenset({"ingest", "assemble", "compact", "info"})
+
+
+def _json_default(obj: Any) -> Any:
+    """Serialize the non-JSON-native types that leak into wire payloads.
+
+    ``contextPack.generated_at`` is a ``datetime`` — without this hook the
+    assemble response crashes ``json.dumps`` on any turn where a KB was
+    found, and OpenClaw quarantines the engine for the process.
+    """
+    if isinstance(obj, (datetime.datetime, datetime.date)):
+        return obj.isoformat()
+    if isinstance(obj, Path):
+        return str(obj)
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
 
 def _parse_envelope(raw: str) -> dict[str, Any]:
@@ -88,5 +103,5 @@ def run_stdio() -> int:
     except ValueError as exc:
         sys.stdout.write(json.dumps({"ok": False, "error": {"message": str(exc)}}) + "\n")
         return 1
-    sys.stdout.write(json.dumps(handle_request(env)) + "\n")
+    sys.stdout.write(json.dumps(handle_request(env), default=_json_default) + "\n")
     return 0

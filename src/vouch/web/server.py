@@ -39,8 +39,10 @@ import logging
 import os
 import secrets
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from fastapi import (
     Depends,
@@ -57,6 +59,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
 
 from .. import audit as audit_mod
+from .. import compile as compile_mod
 from .. import lifecycle as life
 from .. import proposals as proposals_mod
 from ..models import Proposal, ProposalStatus
@@ -195,7 +198,7 @@ def _pending_page(store: KBStore, page: int, page_size: int
     proposals: list[Proposal] = []
     for p in paths[lo:hi]:
         try:
-            proposals.append(Proposal.model_validate(_yaml_load(p.read_text())))
+            proposals.append(Proposal.model_validate(_yaml_load(p.read_text(encoding="utf-8"))))
         except Exception as e:
             _log.warning("skipping unreadable proposal %s: %s", p.name, e)
     return proposals, page, pages, total
@@ -387,7 +390,13 @@ def build_app(
         }
 
     @app.get("/", response_class=HTMLResponse, dependencies=guarded)
-    def queue(request: Request, page: int = 1) -> Any:
+    def queue(
+        request: Request,
+        page: int = 1,
+        compiled: int | None = None,
+        dropped: int | None = None,
+        compile_error: str | None = None,
+    ) -> Any:
         proposals, page, pages, total = _pending_page(store, page, page_size)
         return _tmpl(request, "queue.html", {
             "items": [_row(p) for p in proposals],
@@ -396,6 +405,13 @@ def build_app(
             "pages": pages,
             "page_size": page_size,
             "active": "queue",
+            # compile is available only when the deployment configured an LLM
+            # command; re-read per request so a config.yaml edit shows up
+            # without restarting the server.
+            "compile_enabled": compile_mod.load_config(store).llm_cmd is not None,
+            "compiled": compiled,
+            "compile_dropped": dropped,
+            "compile_error": compile_error,
         })
 
     # --- claim detail ---
@@ -513,6 +529,48 @@ def build_app(
         await _notify("queue", action="reject", proposal_id=proposal_id)
         return RedirectResponse(url="/", status_code=303)
 
+    # One compile at a time per KB: each run holds a threadpool thread and a
+    # live LLM subprocess for up to compile.timeout_seconds, so an unguarded
+    # button (or a double-click) could exhaust the pool and run up LLM spend.
+    compile_lock = asyncio.Lock()
+    app.state.compile_lock = compile_lock
+
+    @app.post("/compile", dependencies=guarded)
+    async def compile_wiki() -> Any:
+        """Run the llm-wiki ingest pass and land its drafts in this queue.
+
+        Compile only *proposes* — the drafts appear as pending page proposals
+        for the reviewer to decide, so this button adds to the queue and never
+        writes a durable artifact. Synchronous by design: the reviewer clicked
+        it and is waiting for the drafts; the LLM call is offloaded to the
+        threadpool so other reviewers' requests aren't blocked meanwhile.
+        """
+        cfg = compile_mod.load_config(store)
+        if cfg.llm_cmd is None:
+            raise HTTPException(
+                status_code=400,
+                detail="compile.llm_cmd is not configured in .vouch/config.yaml",
+            )
+        if compile_lock.locked():
+            reason = quote("a compile is already running — refresh in a moment")
+            return RedirectResponse(url=f"/?compile_error={reason}", status_code=303)
+        async with compile_lock:
+            try:
+                report = await run_in_threadpool(
+                    compile_mod.compile_kb, store,
+                    config=cfg, triggered_by=reviewer(),
+                )
+            except compile_mod.CompileError as e:
+                reason = quote(str(e)[:200])
+                return RedirectResponse(
+                    url=f"/?compile_error={reason}", status_code=303,
+                )
+        await _notify("queue", action="compile", proposed=len(report.proposed))
+        return RedirectResponse(
+            url=f"/?compiled={len(report.proposed)}&dropped={len(report.dropped)}",
+            status_code=303,
+        )
+
     @app.post("/contradict/{claim_id}", dependencies=guarded)
     async def contradict(claim_id: str, against: str = Form(...)) -> Any:
         """Mark two durable claims as contradicting each other — a gate action
@@ -527,6 +585,71 @@ def build_app(
             raise HTTPException(status_code=400, detail=str(e)) from e
         await _notify("audit", action="contradict", claim_id=claim_id)
         return RedirectResponse(url="/audit", status_code=303)
+
+    # --- bulk-clear auto-approved claims (issue #433) ---
+    #
+    # A viewport over ``lifecycle.clear_claims``: the GET renders a dry-run
+    # preview of every auto-approved durable claim that matches the filter,
+    # and the POST archives them (never deletes) under a single
+    # ``claim.bulk_clear`` audit event — identical to ``vouch claims-clear``.
+    # Human-approved claims are never touched. ``auto_only`` is fixed on so
+    # the console can only ever clear the calibration cruft the feature
+    # targets, not reviewed knowledge.
+
+    def _parse_before(value: str | None) -> datetime | None:
+        if not value:
+            return None
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError as e:
+            raise HTTPException(
+                status_code=400,
+                detail=f"invalid date: {value} (use ISO 8601, e.g. 2026-07-01)",
+            ) from e
+
+    @app.get("/clear-claims", response_class=HTMLResponse, dependencies=guarded)
+    def clear_claims_view(
+        request: Request, before: str | None = None, cleared: int | None = None,
+    ) -> Any:
+        before_err: str | None = None
+        candidates: list[dict[str, Any]] = []
+        try:
+            before_dt = _parse_before(before)
+            preview = life.clear_claims(
+                store, auto_only=True, before=before_dt,
+                actor=reviewer(), dry_run=True,
+            )
+            candidates = [
+                {
+                    "id": c.id,
+                    "text": c.text[:200],
+                    "created_at": c.created_at.isoformat(timespec="seconds"),
+                }
+                for c in preview
+            ]
+        except HTTPException as e:
+            before_err = str(e.detail)
+        return _tmpl(request, "clear.html", {
+            "candidates": candidates,
+            "count": len(candidates),
+            "before": before or "",
+            "before_err": before_err,
+            "cleared": cleared,
+            "active": "clear",
+        })
+
+    @app.post("/clear-claims", dependencies=guarded)
+    async def clear_claims_apply(before: str | None = Form(default=None)) -> Any:
+        before_dt = _parse_before(before)
+        cleared = await run_in_threadpool(
+            life.clear_claims, store,
+            auto_only=True, before=before_dt, actor=reviewer(), dry_run=False,
+        )
+        await _notify("clear", action="clear_claims", count=len(cleared))
+        suffix = f"&before={quote(before)}" if before else ""
+        return RedirectResponse(
+            url=f"/clear-claims?cleared={len(cleared)}{suffix}", status_code=303,
+        )
 
     # --- audit timeline ---
 

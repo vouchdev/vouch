@@ -1,0 +1,19 @@
+id: 20260703-091453-4ca258b5
+kind: claim
+proposed_by: a
+session_id: null
+proposed_at: '2026-07-03T09:14:53.157795Z'
+payload:
+  id: free-tier-gets-100-requests-per-day-as-baseline
+  text: Free tier gets 100 requests per day as baseline.
+  type: decision
+  confidence: 0.92
+  evidence:
+  - 3131367abbcefab105fa2fcaa36617bfdda15511cc8880145af113731e95ad6d
+  entities: []
+  tags: []
+rationale: null
+status: approved
+decided_at: '2026-07-03T09:15:19.468018Z'
+decided_by: a
+decision_reason: approved in Q1 decision review

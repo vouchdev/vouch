@@ -181,6 +181,7 @@ def test_read_methods_constant_covers_declared_reads() -> None:
         if m.startswith(read_prefixes) or m in {
             "kb.capabilities",
             "kb.stats",
+            "kb.activity",
             "kb.audit",
             "kb.why",
             "kb.trace",

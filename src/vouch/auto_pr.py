@@ -319,10 +319,10 @@ def detect_or_bootstrap_guidance(ctx: RepoCtx, engine: Engine,
         "---\nname: auto-pr-contributing\ndescription: synthesized contribution "
         f"guide for {ctx.repo}, derived from merged PRs.\n---\n\n"
     )
-    skill.write_text(front + guide)
+    skill.write_text(front + guide, encoding="utf-8")
     codex_mirror = ctx.clone_dir / ".codex" / "auto-pr-contributing.md"
     codex_mirror.parent.mkdir(parents=True, exist_ok=True)
-    codex_mirror.write_text(guide)
+    codex_mirror.write_text(guide, encoding="utf-8")
     return guide
 
 

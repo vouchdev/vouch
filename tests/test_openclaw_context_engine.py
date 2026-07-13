@@ -18,7 +18,7 @@ from vouch.openclaw.context_engine import (
     resolve_task_query,
     token_budget_to_max_chars,
 )
-from vouch.openclaw.rpc import handle_request
+from vouch.openclaw.rpc import handle_request, run_stdio
 from vouch.openclaw.synthesis import (
     format_context_item,
     format_hot_memory_section,
@@ -249,6 +249,40 @@ def test_openclaw_rpc_assemble(store: KBStore) -> None:
     })
     assert resp["ok"] is True
     assert "rpc-claim" in resp["result"]["systemPromptAddition"]
+
+
+def test_openclaw_rpc_stdio_serializes_context_pack(
+    store: KBStore, monkeypatch, capsys
+) -> None:
+    """run_stdio must survive datetimes in contextPack (quarantine regression).
+
+    handle_request alone doesn't cross the json.dumps boundary; the live
+    OpenClaw turn does, and contextPack.generated_at is a datetime.
+    """
+    import io
+    import json as json_mod
+    import sys as sys_mod
+
+    src = store.put_source(b"evidence")
+    store.put_claim(Claim(id="wire-claim", text="wire claim", evidence=[src.id]))
+    health.rebuild_index(store)
+
+    envelope = {
+        "id": "openclaw",
+        "method": "assemble",
+        "params": {
+            "kbPath": str(store.root),
+            "sessionId": "wire",
+            "prompt": "wire claim",
+            "tokenBudget": 2000,
+            "messages": [{"role": "user", "content": "wire claim"}],
+        },
+    }
+    monkeypatch.setattr(sys_mod, "stdin", io.StringIO(json_mod.dumps(envelope)))
+    assert run_stdio() == 0
+    resp = json_mod.loads(capsys.readouterr().out)
+    assert resp["ok"] is True
+    assert "wire-claim" in resp["result"]["systemPromptAddition"]
 
 
 def test_openclaw_rpc_info() -> None:

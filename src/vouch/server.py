@@ -19,8 +19,11 @@ from typing import Any
 import yaml
 from mcp.server.fastmcp import FastMCP
 
-from . import audit, bundle, health, volunteer_context
+from . import audit, bundle, health, mcp_profiles, volunteer_context
+from . import compile as compile_mod
+from . import digest as digest_mod
 from . import lifecycle as life
+from . import metrics as metrics_mod
 from . import salience as salience_mod
 from . import sessions as sess_mod
 from . import trust as trust_mod
@@ -29,12 +32,14 @@ from .capabilities import capabilities as build_caps
 from .context import build_context_pack
 from .logging_config import configure_logging
 from .models import ProposalStatus
+from .page_filters import filter_pages
 from .proposals import (
     EXPIRE_ACTOR,
     ProposalError,
     approve,
     expire_pending,
     propose_claim,
+    propose_delete,
     propose_entity,
     propose_page,
     propose_relation,
@@ -42,7 +47,7 @@ from .proposals import (
     reject_auto_extracted,
 )
 from .scoping import filter_hits, scoped_fetch_limit, viewer_from
-from .stats import collect_stats
+from .stats import collect_activity, collect_stats
 from .storage import (
     ArtifactNotFoundError,
     KBNotFoundError,
@@ -90,6 +95,54 @@ def kb_stats(*, days: int = 30) -> dict[str, Any]:
     """
     since = None if days == 0 else days
     return collect_stats(_store(), since_days=since)
+
+
+@mcp.tool()
+def kb_activity(
+    *,
+    days: int = 365,
+    tz_offset_minutes: int = 0,
+    tz: str | None = None,
+    project: str | None = None,
+    agent: str | None = None,
+) -> dict[str, Any]:
+    """Audit activity buckets for dashboards: per-day counts, hour-of-week
+    matrix, actor and event histograms. Scope-filtered like kb.audit.
+
+    days: window in local calendar days; 0 means all-time.
+    tz: IANA zone for local-time bucketing; falls back to tz_offset_minutes.
+    """
+    store = _store()
+    viewer = viewer_from(
+        config_path=store.config_path,
+        project=project,
+        agent=agent,
+    )
+    return collect_activity(
+        store, days=days, tz_offset_minutes=tz_offset_minutes, tz=tz, viewer=viewer,
+    )
+
+
+@mcp.tool()
+def kb_digest(
+    *,
+    since: str = digest_mod.DEFAULT_SINCE_SPEC,
+    stale_days: int = metrics_mod.DEFAULT_STALE_DAYS,
+    limit: int = digest_mod.DEFAULT_LIMIT,
+) -> dict[str, Any]:
+    """Read-only reviewer briefing: pending proposals oldest-first, recent
+    decisions, stale claims, and followups due.
+
+    since: window spec — a duration ("7d", "12h"), an ISO date, or "all".
+    """
+    store = _store()
+    d = digest_mod.build(
+        store,
+        since=metrics_mod.parse_since(since),
+        stale_after_days=stale_days,
+        limit=limit,
+    )
+    return d.to_dict()
 
 
 # === read tools (unrestricted) ============================================
@@ -177,7 +230,7 @@ def kb_search(
 
 def _load_cfg(store: KBStore) -> dict[str, Any]:
     try:
-        loaded = yaml.safe_load((store.kb_dir / "config.yaml").read_text())
+        loaded = yaml.safe_load((store.kb_dir / "config.yaml").read_text(encoding="utf-8"))
     except Exception:
         return {}
     return loaded if isinstance(loaded, dict) else {}
@@ -284,10 +337,42 @@ def kb_read_relation(relation_id: str) -> dict[str, Any]:
 
 
 @mcp.tool()
-def kb_list_pages() -> list[dict[str, Any]]:
+def kb_diff(old_id: str, new_id: str | None = None) -> dict[str, Any]:
+    """Field-level diff between two claim revisions or two page revisions.
+
+    new_id is optional for a superseded claim: resolves to superseded_by.
+    """
+    from dataclasses import asdict
+
+    from .diff import diff_artifacts
+    return asdict(diff_artifacts(_store(), old_id, new_id))
+
+
+@mcp.tool()
+def kb_list_pages(
+    *,
+    type: str | None = None,
+    meta: dict[str, str] | None = None,
+    meta_before: dict[str, str] | None = None,
+    meta_after: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
+    """List pages, optionally filtered by kind and frontmatter.
+
+    type: page kind (built-in or config-declared, e.g. "followup").
+    meta: frontmatter equality, e.g. {"followup_status": "open"}.
+    meta_before / meta_after: inclusive bounds — numbers or ISO dates,
+    e.g. meta_before={"due_at": "2026-07-10"} for followups due by then.
+    """
+    pages = filter_pages(
+        _store().list_pages(),
+        kind=type,
+        equals=meta,
+        before=meta_before,
+        after=meta_after,
+    )
     return [
-        {"id": p.id, "title": p.title, "type": p.type, "tags": p.tags}
-        for p in _store().list_pages()
+        {"id": p.id, "title": p.title, "type": p.type, "tags": p.tags, "metadata": p.metadata}
+        for p in pages
     ]
 
 
@@ -334,6 +419,23 @@ def kb_list_pending() -> list[dict[str, Any]]:
         p.model_dump(mode="json")
         for p in _store().list_proposals(ProposalStatus.PENDING)
     ]
+
+
+@mcp.tool()
+def kb_triage_pending(proposal_ids: list[str] | None = None) -> list[dict[str, Any]]:
+    """Advisory triage scoring over the pending-review queue.
+
+    Attaches `_meta.vouch_triage` (recommendation/score/signals/rationale)
+    to each pending proposal's view. Read-only — never approves, rejects,
+    or otherwise decides; a human still calls `kb_approve` / `kb_reject`.
+    Opt-in: disabled unless `triage.enabled: true` is set in config.yaml.
+    """
+    from . import triage as triage_mod
+
+    try:
+        return triage_mod.triage_pending(_store(), proposal_ids=proposal_ids)
+    except (ValueError, ArtifactNotFoundError) as e:
+        raise ValueError(str(e)) from e
 
 
 # === write tools — gated (produce proposals) =============================
@@ -430,6 +532,72 @@ def kb_propose_page(
 
 
 @mcp.tool()
+def kb_compile(
+    max_pages: int | None = None,
+    dry_run: bool = False,
+    session_id: str | None = None,
+) -> dict[str, Any]:
+    """Compile live approved claims into topic-page proposals.
+
+    Runs the deployment-configured LLM (compile.llm_cmd in config.yaml),
+    validates every citation in the drafts, and files survivors as PENDING
+    page proposals by the wiki-compiler actor. Long-running (the LLM call is
+    synchronous); never approves.
+    """
+    try:
+        report = compile_mod.compile_kb(
+            _store(), triggered_by=_agent(),
+            max_pages=max_pages, dry_run=dry_run, session_id=session_id,
+        )
+    except compile_mod.CompileError as e:
+        raise ValueError(str(e)) from e
+    return report.to_dict()
+
+
+@mcp.tool()
+def kb_summarize_session(
+    session_id: str,
+    mode: str = "auto",
+) -> dict[str, Any]:
+    """Summarize a captured session into PENDING page proposals.
+
+    Reads the host-neutral observation buffer for `session_id` and files either
+    one mechanical rollup page (small sessions) or several LLM-drafted topical
+    `session` pages (large sessions). `mode` is "auto" | "split" | "mechanical".
+    Long-running when it splits (the LLM call is synchronous). Never approves.
+    """
+    from . import session_split
+    return session_split.summarize(_store(), session_id, mode=mode)
+
+
+@mcp.tool()
+def kb_list_sessions() -> dict[str, Any]:
+    """List captured sessions in the review pipeline: open buffers awaiting a
+    summary, and filed summary proposals awaiting review.
+
+    Read-only. Each row: session_id, stage ("buffer" | "pending"), proposal_id,
+    kind, title, summarized, observations, last_activity.
+    """
+    from . import session_split
+    return {"sessions": session_split.build_session_rows(_store())}
+
+
+@mcp.tool()
+def kb_session_transcript(session_id: str, agent: str | None = None) -> dict[str, Any]:
+    """Render a captured session's full transcript from its raw agent JSONL.
+
+    Read-only. Locates the raw Claude Code / Codex file on disk and normalizes
+    it into message blocks (text, thinking, tool_use with paired results).
+    ``agent`` restricts the search ("claude" | "codex"); omit to try both.
+    Degrades to compact capture observations when the raw file is unavailable.
+    """
+    from . import transcript
+    if agent is not None and agent not in ("claude", "codex"):
+        raise ValueError(f"unknown agent: {agent!r} (expected 'claude' or 'codex')")
+    return transcript.load_transcript(_store(), session_id, agent=agent)
+
+
+@mcp.tool()
 def kb_propose_entity(
     name: str,
     entity_type: str,
@@ -470,6 +638,27 @@ def kb_propose_relation(
             confidence=confidence, evidence=evidence,
             rationale=rationale, session_id=session_id,
             dry_run=dry_run, proposed_by=_agent(),
+        )
+    except (ProposalError, ArtifactNotFoundError, ValueError) as e:
+        raise ValueError(str(e)) from e
+    return _proposal_response(pr, dry_run)
+
+
+@mcp.tool()
+def kb_propose_delete(
+    target_kind: str, target_id: str, rationale: str | None = None,
+    session_id: str | None = None, dry_run: bool = False,
+) -> dict[str, Any]:
+    """Propose hard-deleting a durable artifact (claim/page/entity/relation).
+
+    Files a PENDING delete request that a *different* reviewer approves via
+    kb.approve. Refused if the target is still referenced by another artifact.
+    """
+    try:
+        pr = propose_delete(
+            _store(), target_kind=target_kind, target_id=target_id,
+            proposed_by=_agent(), rationale=rationale,
+            session_id=session_id, dry_run=dry_run,
         )
     except (ProposalError, ArtifactNotFoundError, ValueError) as e:
         raise ValueError(str(e)) from e
@@ -584,6 +773,42 @@ def kb_archive(claim_id: str) -> dict[str, Any]:
 def kb_confirm(claim_id: str) -> dict[str, Any]:
     c = life.confirm(_store(), claim_id=claim_id, actor=_agent())
     return {"id": c.id, "last_confirmed_at": c.last_confirmed_at}
+
+
+@mcp.tool()
+def kb_clear_claims(
+    auto_only: bool = True,
+    before: str | None = None,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Clear auto-approved claims, optionally filtered by date range.
+
+    Args:
+        auto_only: If True, only clear auto-approved claims.
+        before: If set, only clear claims created before this ISO 8601 date.
+        dry_run: If True, preview without making changes.
+
+    Returns:
+        Dictionary with count of cleared claims and their IDs.
+    """
+    from datetime import datetime
+
+    before_dt = None
+    if before:
+        before_dt = datetime.fromisoformat(before)
+
+    to_clear = life.clear_claims(
+        _store(),
+        auto_only=auto_only,
+        before=before_dt,
+        actor=_agent(),
+        dry_run=dry_run,
+    )
+    return {
+        "count": len(to_clear),
+        "claim_ids": [c.id for c in to_clear],
+        "dry_run": dry_run,
+    }
 
 
 @mcp.tool()
@@ -857,6 +1082,77 @@ def kb_provenance_rebuild() -> dict[str, Any]:
     return {"edges": prov.rebuild_prov_edges(_store())}
 
 
+# === cross-session themes =================================================
+
+
+@mcp.tool()
+def kb_detect_themes(
+    *,
+    min_sessions: int | None = None,
+    min_claims: int | None = None,
+    top_k: int | None = None,
+) -> dict[str, Any]:
+    """Detect recurring entity clusters across completed sessions.
+
+    Read-only — returns ranked clusters without persisting anything.
+    Scoring is deterministic (entity co-occurrence, no LLM).
+
+    min_sessions: minimum sessions an entity pair must span (default from config or 2).
+    min_claims: minimum claims supporting the cluster (default from config or 3).
+    top_k: maximum clusters to return (default from config or 10).
+    """
+    from . import themes
+    store = _store()
+    result = themes.detect_themes(
+        store,
+        min_sessions=min_sessions,
+        min_claims=min_claims,
+        top_k=top_k,
+    )
+    return {
+        "clusters": [
+            {
+                "entities": c.entities,
+                "claim_ids": c.claim_ids,
+                "session_ids": c.session_ids,
+                "score": c.score,
+                "session_count": c.session_count,
+                "claim_count": c.claim_count,
+            }
+            for c in result.clusters
+        ],
+        "config": result.config_used,
+    }
+
+
+@mcp.tool()
+def kb_propose_theme(
+    *,
+    entities: list[str],
+    claim_ids: list[str],
+    session_ids: list[str],
+    score: float = 0.0,
+    agent: str | None = None,
+) -> dict[str, Any]:
+    """Propose a theme synthesis page from a detected cluster.
+
+    Routes through the review gate — appears in kb.list_pending.
+    Pass a cluster from kb.detect_themes directly.
+    """
+    from . import themes
+    store = _store()
+    actor = agent or os.environ.get("VOUCH_AGENT", "unknown-agent")
+    cluster = themes.ThemeCluster(
+        entities=entities,
+        claim_ids=claim_ids,
+        session_ids=session_ids,
+        score=score,
+        session_count=len(session_ids),
+        claim_count=len(claim_ids),
+    )
+    return themes.propose_theme(store, cluster, proposed_by=actor)
+
+
 def _current_model_name() -> str:
     try:
         from .embeddings import get_embedder
@@ -872,4 +1168,12 @@ def run_stdio() -> None:
     """Entry point used by `vouch serve`."""
     configure_logging()
     trust_mod.set_stdio_default(trust_mod.MCP_STDIO)
+    try:
+        cfg: dict[str, Any] | None = _load_cfg(_store())
+    except Exception:
+        cfg = None
+    profile = mcp_profiles.resolve_profile_name(cfg)
+    mcp_profiles.apply_tool_profile(mcp, profile)
+    if profile != "full":
+        mcp_profiles.compact_descriptions(mcp)
     mcp.run()

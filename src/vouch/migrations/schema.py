@@ -25,7 +25,7 @@ def read_schema_version(store: KBStore) -> str:
     p = schema_version_path(store)
     if not p.exists():
         return BASELINE_SCHEMA_VERSION
-    raw = p.read_text().strip()
+    raw = p.read_text(encoding="utf-8").strip()
     if not raw:
         return BASELINE_SCHEMA_VERSION
     semver.parse(raw)  # validate; raises ValueError on garbage

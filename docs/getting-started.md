@@ -95,13 +95,40 @@ vouch approve prop-abc123 --reason "matches the meeting notes"
 The claim is now durable. The proposal moves to
 `.vouch/decided/prop-abc123.yaml` (committed, for audit).
 
+**Note on approval:** By default, vouch requires human approval and
+prevents self-approval (a proposer cannot approve their own proposal).
+For local testing, you can add `approver_role: trusted-agent` to 
+`.vouch/config.yaml`. Production deployments should keep the default
+`require_human_approval: true` to preserve the review gate.
+
 ```bash
 git add .vouch && git commit -m "kb: approve auth-uses-jwt"
 ```
 
 ## 6. Wire an agent
 
-Drop this into `.mcp.json` at the project root:
+`vouch serve` is a stdio MCP server, so the agent's native registration is all
+you need:
+
+```bash
+claude mcp add vouch -- vouch serve    # or: codex mcp add vouch -- vouch serve
+```
+
+Add `-e VOUCH_AGENT=claude-code` to attribute the agent's proposals to it
+rather than your shell user. Confirm with `claude mcp list` (look for
+`vouch … ✓ Connected`).
+
+Prefer a config file, or want the brain-first instructions, guided flows, and
+capture hooks too? The installer ships the full tiered setup for either host:
+
+```bash
+vouch install-mcp claude-code   # .mcp.json + CLAUDE.md + slash commands + hooks
+vouch install-mcp codex         # .codex/config.toml + AGENTS.md + skills + capture
+```
+
+Both are idempotent and merge-safe — existing config files are deep-merged
+into, never clobbered. Or drop this into `.mcp.json` at the project root by
+hand:
 
 ```json
 {
@@ -118,7 +145,21 @@ Drop this into `.mcp.json` at the project root:
 Open Claude Code in the project. It can now call `kb_search`,
 `kb_propose_claim`, etc.
 
-## 7. Lint and verify
+## 7. Read approved artifacts
+
+Once you've approved claims and pages, read them with:
+
+```bash
+vouch read-claim auth-uses-jwt      # read an approved claim
+vouch read-page <page-id>           # read an approved page
+vouch read-entity <entity-id>       # read an approved entity
+vouch read-relation <relation-id>   # read an approved relation
+```
+
+All of these methods are also available over the MCP and JSONL servers
+(`kb.read_claim`, `kb.read_page`, etc.) for agent integration.
+
+## 8. Lint and verify
 
 Run periodically:
 

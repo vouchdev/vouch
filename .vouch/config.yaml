@@ -5,3 +5,5 @@ retrieval:
   backends:
   - fts5
   - substring
+compile:
+  llm_cmd: "claude -p --model sonnet"

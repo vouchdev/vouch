@@ -170,3 +170,79 @@ def test_crystallize_audit_event_records_summary_page_id(
     assert cryst_events, "no session.crystallize audit event found"
     last = cryst_events[-1]
     assert page_id in last["object_ids"], last["object_ids"]
+
+
+def test_crystallize_retry_updates_existing_summary_page(store: KBStore) -> None:
+    from unittest.mock import patch
+
+    src = store.put_source(b"e")
+    sess = sess_mod.session_start(store, agent="a", task="retry")
+    propose_claim(store, text="first", evidence=[src.id], proposed_by="a", session_id=sess.id)
+    propose_claim(store, text="second", evidence=[src.id], proposed_by="a", session_id=sess.id)
+    sess_mod.session_end(store, sess.id)
+
+    real_approve = approve
+    calls = {"n": 0}
+
+    def flaky_approve(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise ValueError("transient")
+        return real_approve(*args, **kwargs)
+
+    with patch("vouch.sessions.approve", side_effect=flaky_approve):
+        first = sess_mod.crystallize(store, sess.id, approver="u")
+
+    assert len(first["approved"]) == 1
+    assert len(first["failures"]) == 1
+    assert first["summary_page_id"] is not None
+
+    second = sess_mod.crystallize(store, sess.id, approver="u")
+    assert len(second["approved"]) == 1
+    assert second["failures"] == []
+    assert second["summary_page_id"] == first["summary_page_id"]
+
+    summary = store.get_page(second["summary_page_id"])
+    assert sorted(summary.claims) == sorted([c.id for c in store.list_claims()])
+
+
+def test_crystallize_open_session_summary_body_is_idempotent(
+    store: KBStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # crystallize never ends the session, so sess.ended_at stays None. #256
+    # made the retry stop crashing, but the summary body still embedded a
+    # wall-clock 'Ended' stamp, so each rewrite produced a different body (and
+    # re-embedded). Retrying on an unchanged, still-open session must yield an
+    # identical page body.
+    import datetime as _dt
+
+    from vouch import sessions as s
+
+    src = store.put_source(b"e")
+    sess = sess_mod.session_start(store, agent="a", task="t")
+    propose_claim(
+        store, text="finding", evidence=[src.id], proposed_by="a",
+        session_id=sess.id,
+    )
+
+    # a clock that advances on every read, so any wall-clock stamp in the body
+    # would differ between the two crystallize calls.
+    ticks = iter([
+        _dt.datetime(2026, 1, 1, tzinfo=_dt.UTC),
+        _dt.datetime(2026, 6, 30, 12, tzinfo=_dt.UTC),
+        _dt.datetime(2026, 12, 31, tzinfo=_dt.UTC),
+    ])
+
+    class _Clock:
+        @staticmethod
+        def now(tz: object = None) -> _dt.datetime:
+            return next(ticks)
+
+    monkeypatch.setattr(s, "datetime", _Clock)
+
+    first = sess_mod.crystallize(store, sess.id, approver="u")
+    body1 = store.get_page(first["summary_page_id"]).body
+    second = sess_mod.crystallize(store, sess.id, approver="u")
+    body2 = store.get_page(second["summary_page_id"]).body
+
+    assert body1 == body2

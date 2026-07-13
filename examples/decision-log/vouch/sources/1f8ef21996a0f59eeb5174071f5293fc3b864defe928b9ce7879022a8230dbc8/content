@@ -1,0 +1,8 @@
+# Q1 2026 Decisions
+
+## Infrastructure decisions made in Q1 2026
+
+- Infrastructure review meeting held 2026-01-15
+- Decided to migrate to Postgres 15 for enhanced features
+- Decision on billing storage backend: PostgreSQL for ACID guarantees
+- Incident response SLA set to 15 minutes for critical systems

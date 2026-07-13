@@ -40,13 +40,20 @@ KB_PLACEHOLDER = "/your/project"
 
 
 def _vouch_bin() -> str:
-    """Resolve the `vouch` console script — the same entry point a user runs."""
-    found = shutil.which("vouch")
-    if found:
-        return found
+    """Resolve the `vouch` console script that matches the running interpreter.
+
+    Prefer the `vouch` installed alongside this Python (the venv carrying the
+    repo's editable build) over whatever is first on PATH. A stale global
+    `vouch` shadowing the venv would otherwise render against the wrong build —
+    silently overwriting the committed images with output from a different CLI.
+    Fall back to PATH only when no interpreter-local script exists.
+    """
     candidate = Path(sys.executable).parent / "vouch"
     if candidate.exists():
         return str(candidate)
+    found = shutil.which("vouch")
+    if found:
+        return found
     raise SystemExit("`vouch` console script not found; pip install -e '.[dev]' first")
 
 
@@ -64,15 +71,19 @@ SHOTS: list[Shot] = [
     Shot("tiny-search", "tiny", ["search", "auth"], "tiny/ — vouch search auth"),
     Shot("tiny-show", "tiny", ["show", "prop-001"], "tiny/ — vouch show prop-001"),
     Shot("tiny-audit", "tiny", ["audit"], "tiny/ — vouch audit"),
-    # decision-log/ — demonstrates supersession across two pricing claims.
+    # decision-log/ — decisions as claims; diff shows how one evolved.
     Shot(
-        "decision-log-search", "decision-log", ["search", "free-tier"],
-        "decision-log/ — vouch search free-tier",
+        "decision-log-search", "decision-log", ["search", "postgresql"],
+        "decision-log/ — vouch search postgresql",
     ),
     Shot(
         "decision-log-diff", "decision-log",
-        ["diff", "free-tier-100-req-superseded", "free-tier-500-req"],
-        "decision-log/ — vouch diff (supersession)",
+        [
+            "diff",
+            "billing-data-requires-acid-guarantees-postgresql-is-the-prim",
+            "use-postgresql-15-for-enhanced-replication-and-monitoring-fe",
+        ],
+        "decision-log/ — vouch diff (decision evolution)",
     ),
 ]
 
