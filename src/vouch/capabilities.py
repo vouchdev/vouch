@@ -31,6 +31,7 @@ METHODS = [
     "kb.capabilities",
     "kb.status",
     "kb.stats",
+    "kb.activity",
     "kb.digest",
     "kb.search",
     "kb.neighbors",
@@ -54,6 +55,7 @@ METHODS = [
     "kb.propose_page",
     "kb.propose_entity",
     "kb.propose_relation",
+    "kb.propose_delete",
     "kb.approve",
     "kb.reject",
     "kb.reject_extracted",
@@ -62,12 +64,16 @@ METHODS = [
     "kb.contradict",
     "kb.archive",
     "kb.confirm",
+    "kb.clear_claims",
     "kb.cite",
     "kb.source_verify",
     "kb.session_start",
     "kb.session_end",
+    "kb.list_sessions",
+    "kb.session_transcript",
     "kb.volunteer_context",
     "kb.crystallize",
+    "kb.summarize_session",
     "kb.index_rebuild",
     "kb.lint",
     "kb.doctor",
@@ -88,6 +94,8 @@ METHODS = [
     "kb.detect_themes",
     "kb.propose_theme",
     "kb.compile",
+    "kb.list_skills",
+    "kb.get_skill",
 ]
 
 
@@ -112,7 +120,7 @@ def _load_host_compat() -> dict[str, dict[str, str]]:
     return {"openclaw": {k: str(v) for k, v in compat.items()}}
 
 
-def capabilities() -> Capabilities:
+def capabilities(*, publish_skills: bool = True) -> Capabilities:
     retrieval = ["fts5", "substring"]
     try:
         from .embeddings import get_embedder
@@ -134,5 +142,6 @@ def capabilities() -> Capabilities:
             "config_path": "retrieval.scope",
         },
         context_engines=[describe_engine()],
+        mcp={"publish_skills": publish_skills},
         host_compat=_load_host_compat(),
     )

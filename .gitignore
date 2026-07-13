@@ -23,3 +23,5 @@ build/
 # and adapters/claude-code/.claude stay tracked)
 /web/
 /.claude/
+.vouch
+docs

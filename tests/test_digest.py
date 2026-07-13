@@ -146,6 +146,24 @@ def test_build_limit_caps_sections(store: KBStore) -> None:
     assert len(d.decisions) <= 1
 
 
+def test_build_limit_caps_followups(tmp_path: Path) -> None:
+    # --limit documents that it caps every section including followups; seed
+    # more due-open followups than the limit and confirm the list is bounded
+    # like pending/decisions/stale rather than returned whole.
+    s = KBStore.init(tmp_path)
+    for i in range(5):
+        due = (NOW - timedelta(days=i + 1)).date().isoformat()
+        s.put_page(
+            Page(
+                id=f"fu-{i}", title=f"followup {i}", type="followup",
+                status=PageStatus.ACTIVE,
+                metadata={"due_at": due, "followup_status": "open"},
+            )
+        )
+    d = digest_mod.build(s, limit=3, now=NOW)
+    assert len(d.followups_due) == 3
+
+
 def test_digest_is_read_only(store: KBStore) -> None:
     audit_before = (store.kb_dir / "audit.log.jsonl").read_text(encoding="utf-8")
     files_before = sorted(p.name for p in (store.kb_dir / "proposed").glob("*"))

@@ -43,6 +43,11 @@ CODEX_ACTOR = "codex"
 
 _ZSTD_MAGIC = b"\x28\xb5\x2f\xfd"
 _MAX_PROMPT_CHARS = 240
+# Upper bound on a rollout file we'll parse. Rollouts carry large tool
+# outputs, so this is generous, but an unbounded read (a huge file, or a
+# newline-free blob that the streaming reader would slurp whole) must not be
+# able to exhaust memory. Mirrors the byte caps elsewhere (fetch, http_server).
+_MAX_ROLLOUT_BYTES = 64 * 1024 * 1024
 _PATCH_FILE_RE = re.compile(r"^\*\*\* (Add|Update|Delete) File: (.+)$", re.MULTILINE)
 _EXIT_CODE_RE = re.compile(r"exited with code (\d+)")
 
@@ -152,14 +157,23 @@ def _iter_rollout_lines(path: Path) -> Iterator[str]:
     """Yield the rollout's lines one at a time, decoded as UTF-8.
 
     Streams from the file handle rather than slurping the whole file into
-    memory — codex rollouts can carry large tool outputs. The zstd magic
-    header is checked up front (compressed rollouts aren't parsed here).
+    memory — codex rollouts can carry large tool outputs. The size is checked
+    up front so an oversized rollout (or a newline-free blob that iterating the
+    handle would otherwise read whole) is refused instead of exhausting memory.
+    The zstd magic header is checked up front too (compressed rollouts aren't
+    parsed here).
     """
     try:
         fh = path.open("rb")
     except OSError as e:
         raise CodexRolloutError(f"cannot read rollout file {path}: {e}") from e
     with fh:
+        size = os.fstat(fh.fileno()).st_size
+        if size > _MAX_ROLLOUT_BYTES:
+            raise CodexRolloutError(
+                f"{path.name} is too large to parse "
+                f"({size} bytes > {_MAX_ROLLOUT_BYTES} byte limit)"
+            )
         if fh.read(4) == _ZSTD_MAGIC:
             raise CodexRolloutError(
                 f"{path.name} is zstd-compressed; decompress it first "

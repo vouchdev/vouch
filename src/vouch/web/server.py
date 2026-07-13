@@ -39,6 +39,7 @@ import logging
 import os
 import secrets
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -584,6 +585,71 @@ def build_app(
             raise HTTPException(status_code=400, detail=str(e)) from e
         await _notify("audit", action="contradict", claim_id=claim_id)
         return RedirectResponse(url="/audit", status_code=303)
+
+    # --- bulk-clear auto-approved claims (issue #433) ---
+    #
+    # A viewport over ``lifecycle.clear_claims``: the GET renders a dry-run
+    # preview of every auto-approved durable claim that matches the filter,
+    # and the POST archives them (never deletes) under a single
+    # ``claim.bulk_clear`` audit event — identical to ``vouch claims-clear``.
+    # Human-approved claims are never touched. ``auto_only`` is fixed on so
+    # the console can only ever clear the calibration cruft the feature
+    # targets, not reviewed knowledge.
+
+    def _parse_before(value: str | None) -> datetime | None:
+        if not value:
+            return None
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError as e:
+            raise HTTPException(
+                status_code=400,
+                detail=f"invalid date: {value} (use ISO 8601, e.g. 2026-07-01)",
+            ) from e
+
+    @app.get("/clear-claims", response_class=HTMLResponse, dependencies=guarded)
+    def clear_claims_view(
+        request: Request, before: str | None = None, cleared: int | None = None,
+    ) -> Any:
+        before_err: str | None = None
+        candidates: list[dict[str, Any]] = []
+        try:
+            before_dt = _parse_before(before)
+            preview = life.clear_claims(
+                store, auto_only=True, before=before_dt,
+                actor=reviewer(), dry_run=True,
+            )
+            candidates = [
+                {
+                    "id": c.id,
+                    "text": c.text[:200],
+                    "created_at": c.created_at.isoformat(timespec="seconds"),
+                }
+                for c in preview
+            ]
+        except HTTPException as e:
+            before_err = str(e.detail)
+        return _tmpl(request, "clear.html", {
+            "candidates": candidates,
+            "count": len(candidates),
+            "before": before or "",
+            "before_err": before_err,
+            "cleared": cleared,
+            "active": "clear",
+        })
+
+    @app.post("/clear-claims", dependencies=guarded)
+    async def clear_claims_apply(before: str | None = Form(default=None)) -> Any:
+        before_dt = _parse_before(before)
+        cleared = await run_in_threadpool(
+            life.clear_claims, store,
+            auto_only=True, before=before_dt, actor=reviewer(), dry_run=False,
+        )
+        await _notify("clear", action="clear_claims", count=len(cleared))
+        suffix = f"&before={quote(before)}" if before else ""
+        return RedirectResponse(
+            url=f"/clear-claims?cleared={len(cleared)}{suffix}", status_code=303,
+        )
 
     # --- audit timeline ---
 

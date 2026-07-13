@@ -267,6 +267,8 @@ class Claim(BaseModel):
     updated_at: datetime = Field(default_factory=utcnow)
     last_confirmed_at: datetime | None = None
     approved_by: str | None = None  # vouch: review-gate audit
+    proposed_by: str | None = None  # vouch: tracks who proposed this claim
+    auto_approved: bool = False  # vouch: true if approved by proposer (trusted-agent mode)
 
     @field_validator("scope", mode="before")
     @classmethod
@@ -394,6 +396,7 @@ class ProposalKind(StrEnum):
     PAGE = "page"
     ENTITY = "entity"
     RELATION = "relation"
+    DELETE = "delete"
 
 
 class ProposalStatus(StrEnum):
@@ -492,6 +495,13 @@ class Capabilities(BaseModel):
     context_engines: list[dict[str, Any]] = Field(
         default_factory=list,
         description="OpenClaw context engines exposed (see openclaw.plugin.json)",
+    )
+    mcp: dict[str, Any] = Field(
+        default_factory=lambda: {"publish_skills": True},
+        description=(
+            "mcp surface flags mirrored from config.yaml `mcp:` block. "
+            "`publish_skills` gates kb.list_skills / kb.get_skill."
+        ),
     )
     host_compat: dict[str, Any] = Field(
         default_factory=dict,

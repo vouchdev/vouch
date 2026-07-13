@@ -73,6 +73,11 @@ class InstallResult:
     appended: list[str] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)
     merged: list[str] = field(default_factory=list)
+    # files vouch wanted to install but could not (e.g. a config it can't
+    # faithfully re-serialize, or a malformed existing file). Kept distinct
+    # from ``skipped`` so "already installed" and "install failed" never look
+    # the same to the caller / CLI.
+    failed: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -235,6 +240,16 @@ def install(adapter: str, *, target: Path, tier: str = "T4") -> InstallResult:
         for entry in entries:
             src = src_root / entry.src
             dst = target / entry.dst
+            # Defense in depth: `dst` comes from the manifest. Adapters ship
+            # with vouch (trusted), but a `..`/absolute `dst` must never let a
+            # manifest write outside the target tree. `target` is already
+            # resolved above; resolve `dst` (normalizes `..`, even when the
+            # file doesn't exist yet) and require containment.
+            if not dst.resolve().is_relative_to(target):
+                raise AdapterError(
+                    f"{adapter}: install.yaml dst {entry.dst!r} escapes the "
+                    f"target tree ({target})"
+                )
             if not src.is_file():
                 # Manifest declares a template that doesn't exist in the
                 # adapter directory: a contributor-time bug, but surface it
@@ -588,12 +603,17 @@ def _install_toml_merge(
     * dst exists, merge adds keys -> merge + rewrite (``merged``)
     * dst exists, nothing to add  -> skip (``skipped``); already installed
     * dst exists, unparseable     -> skip (``skipped``); never clobber the user
+    * dst exists, can't re-emit   -> ``failed``; the minimal serializer can't
+                                     round-trip the merged data, so vouch is
+                                     left unwired — reported, not silently
+                                     bucketed as "already present"
 
     Rewriting re-serializes the whole file (comments and formatting are not
     preserved — same trade-off ``_install_json_merge`` already makes). The
     serialized result must survive a tomllib round-trip back to the merged
     data; anything the minimal serializer can't faithfully re-emit degrades
-    to ``skipped`` rather than risking the user's config.
+    to ``failed`` (the user's config is left untouched) rather than being
+    reported as a successful no-op.
     """
     if not dst.exists():
         dst.parent.mkdir(parents=True, exist_ok=True)
@@ -605,7 +625,8 @@ def _install_toml_merge(
         dst_data = tomllib.loads(dst.read_text(encoding="utf-8"))
         src_data = tomllib.loads(src.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
-        # Malformed or unreadable user file — leave it untouched.
+        # Malformed or unreadable user file — leave it untouched (existing
+        # "never clobber the user" contract; see the skipped test).
         result.skipped.append(rel_dst)
         return
 
@@ -618,7 +639,10 @@ def _install_toml_merge(
         if tomllib.loads(text) != dst_data:
             raise ValueError("serializer round-trip mismatch")
     except (ValueError, tomllib.TOMLDecodeError):
-        result.skipped.append(rel_dst)
+        # The minimal serializer can't faithfully re-emit the merged config
+        # (e.g. a non-BMP string value, or a nan/inf float). Leave the user's
+        # file alone, but report it as a failure — not "already present".
+        result.failed.append(rel_dst)
         return
 
     dst.write_text(text, encoding="utf-8")
