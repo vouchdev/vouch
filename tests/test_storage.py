@@ -927,3 +927,12 @@ def test_list_claims_skips_unreadable_file(store: KBStore) -> None:
 
     claims = store.list_claims()
     assert [c.id for c in claims] == ["c-ok"]
+
+
+def test_list_pages_skips_unreadable_file(store: KBStore) -> None:
+    """One corrupt page must not take down vouch search/status/lint."""
+    store.put_page(Page(id="p-ok", title="ok", body="content"))
+    (store.kb_dir / "pages" / "p-bad.md").write_text("not valid frontmatter")
+
+    pages = store.list_pages()
+    assert [p.id for p in pages] == ["p-ok"]

@@ -209,6 +209,15 @@ def _deserialize_page(text: str) -> Page:
     return Page(body=body, **meta)
 
 
+def _load_page_or_skip(path: Path) -> Page | None:
+    """Parse one page file; skip corrupt/unreadable files like ``_load_or_skip``."""
+    try:
+        return _deserialize_page(path.read_text(encoding="utf-8"))
+    except (yaml.YAMLError, ValidationError, UnicodeDecodeError, OSError, ValueError) as e:
+        _log.warning("skipping unreadable page %s: %s", path.name, e)
+        return None
+
+
 class KBStore:
     """File-backed CRUD layer. Pure I/O — no business logic."""
 
@@ -566,8 +575,9 @@ class KBStore:
         if not pdir.is_dir():
             return []
         return [
-            _deserialize_page(p.read_text(encoding="utf-8"))
+            pg
             for p in sorted(pdir.glob("*.md"))
+            if (pg := _load_page_or_skip(p)) is not None
         ]
 
     # --- entities ----------------------------------------------------------
