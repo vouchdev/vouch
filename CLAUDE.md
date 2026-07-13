@@ -85,6 +85,14 @@ make check
 For the embedding-heavy tests (separate job in CI): `pip install
 -e '.[embeddings]'` then drop the `--ignore=tests/embeddings` flag.
 
+To *run* the thing you're hacking on (dev mode): the editable install's
+`vouch` runs straight from `src/`. Init a scratch KB (`vouch init` in a
+temp dir, or `VOUCH_KB_PATH=/abs/path/.vouch`) — the repo root's own
+`.vouch/` is real and committed, don't experiment against it. `make
+console` runs the HTTP backend + vouch-ui dev server as a pair. Full
+walkthrough: "Running vouch in dev mode" in
+[`CONTRIBUTING.md`](./CONTRIBUTING.md).
+
 ## Ship a feature branch
 
 ```bash
