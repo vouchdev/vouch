@@ -115,7 +115,7 @@ LIST_ENVELOPE_DEPRECATION: dict[str, str] = {
         "reading the flat list at result directly is deprecated"
     ),
     "migration": "use result.items instead of result when result is a list",
-    "remove_in": "0.3.0",
+    "remove_in": "1.4.0",
 }
 
 # kb.* methods that attach ``_meta.vouch_hot_memory`` on read responses.

@@ -59,18 +59,12 @@ All notable changes to vouch are documented here. Format follows
   changed-files list and the stacked all-files diff. selection is
   per-candidate, so inspecting claude's diff never moves the codex pane.
   (#294)
-- `kb.synthesize` llm backend: `llm=true` drafts the answer with the
-  deployment-configured `compile.llm_cmd`, grounded in retrieved kb pages
-  and approved claims. code still verifies every `[id]` citation against
-  the offered sources — invented ids are stripped, and a draft left with no
-  verifiable citation returns an empty answer rather than a guess. the wire
-  shape is unchanged plus additive `pages` and `_meta.synthesis_backend`
-  fields. cli mirror: `vouch synthesize --llm`; the jsonl/http surface
-  already forwarded the flag.
-- console Chat: llm answers activated — the chat asks `kb.synthesize` with
-  `llm: true` and falls back to deterministic claim synthesis when no
-  `compile.llm_cmd` is configured. page citations open the page drawer, and
-  llm answers carry an `llm` badge next to the confidence grade.
+- ``_meta.vouch_hot_memory`` on every primary read-side ``kb.*`` response
+  (``kb.search``, ``kb.context``, ``kb.read_*``, ``kb.list_*``): a TTL-cached
+  sidebar of recently approved claims, query-biased where the tool has a
+  natural anchor (entity name/aliases, page title/tags, claim text, search
+  query). ``kb.list_pending`` uses recency only. Meta-tools, write paths, and
+  lifecycle ops are excluded by design (#225).
 
 ### Changed
 - ``kb.list_*`` JSONL/MCP responses now use a dict envelope
@@ -357,12 +351,6 @@ All notable changes to vouch are documented here. Format follows
   as reviewer; a PR opens only when the repo's own test gate is green and the
   reviewer signs off. A sibling tool — it never writes to the KB or the review
   gate. Paired with the `auto-pr` skill.
-- ``_meta.vouch_hot_memory`` on every primary read-side ``kb.*`` response
-  (``kb.search``, ``kb.context``, ``kb.read_*``, ``kb.list_*``): a TTL-cached
-  sidebar of recently approved claims, query-biased where the tool has a
-  natural anchor (entity name/aliases, page title/tags, claim text, search
-  query). ``kb.list_pending`` uses recency only. Meta-tools, write paths, and
-  lifecycle ops are excluded by design (#225).
 - typed page kinds (#234): a KB can declare extra page kinds in
   `.vouch/config.yaml` under `page_kinds`, each with `required_fields`, a
   JSON-Schema-subset `frontmatter_schema`, `required_citations`, and one level
