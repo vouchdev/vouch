@@ -94,6 +94,8 @@ METHODS = [
     "kb.detect_themes",
     "kb.propose_theme",
     "kb.compile",
+    "kb.list_skills",
+    "kb.get_skill",
 ]
 
 
@@ -118,7 +120,7 @@ def _load_host_compat() -> dict[str, dict[str, str]]:
     return {"openclaw": {k: str(v) for k, v in compat.items()}}
 
 
-def capabilities() -> Capabilities:
+def capabilities(*, publish_skills: bool = True) -> Capabilities:
     retrieval = ["fts5", "substring"]
     try:
         from .embeddings import get_embedder
@@ -140,5 +142,6 @@ def capabilities() -> Capabilities:
             "config_path": "retrieval.scope",
         },
         context_engines=[describe_engine()],
+        mcp={"publish_skills": publish_skills},
         host_compat=_load_host_compat(),
     )

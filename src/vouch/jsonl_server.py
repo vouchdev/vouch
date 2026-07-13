@@ -35,6 +35,7 @@ from . import lifecycle as life
 from . import metrics as metrics_mod
 from . import salience as salience_mod
 from . import sessions as sess_mod
+from . import skills as skills_mod
 from . import trust as trust_mod
 from . import verify as verify_mod
 from .capabilities import capabilities as build_caps
@@ -89,7 +90,11 @@ def _agent() -> str:
 
 
 def _h_capabilities(_: dict) -> dict:
-    return build_caps().model_dump(mode="json")
+    try:
+        publish_skills = skills_mod.publish_skills_enabled(_store())
+    except Exception:
+        publish_skills = True
+    return build_caps(publish_skills=publish_skills).model_dump(mode="json")
 
 
 def _h_status(_: dict) -> dict:
@@ -721,6 +726,20 @@ def _h_embeddings_stats(_: dict) -> dict:
     }
 
 
+def _h_list_skills(_: dict) -> list[dict]:
+    return skills_mod.list_skills(_store())
+
+
+def _h_get_skill(p: dict) -> dict:
+    name = p.get("name")
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError("`name` is required")
+    try:
+        return skills_mod.get_skill(_store(), name)
+    except KeyError as e:
+        raise ValueError(str(e)) from e
+
+
 def _h_why(p: dict) -> dict:
     from . import provenance as prov
 
@@ -866,6 +885,8 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.provenance_rebuild": _h_provenance_rebuild,
     "kb.detect_themes": _h_detect_themes,
     "kb.propose_theme": _h_propose_theme,
+    "kb.list_skills": _h_list_skills,
+    "kb.get_skill": _h_get_skill,
 }
 
 
@@ -885,6 +906,11 @@ def handle_request(envelope: dict) -> dict:
             "id": req_id,
             "ok": True,
             "result": trust_mod.finish_kb_result(result),
+        }
+    except skills_mod.SkillsDisabledError as e:
+        return {
+            "id": req_id, "ok": False,
+            "error": {"code": "permission_denied", "message": str(e)},
         }
     except KeyError as e:
         return {
