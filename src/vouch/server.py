@@ -47,7 +47,7 @@ from .proposals import (
     reject,
     reject_auto_extracted,
 )
-from .scoping import filter_hits, scoped_fetch_limit, viewer_from
+from .scoping import viewer_from
 from .stats import collect_activity, collect_stats
 from .storage import (
     ArtifactNotFoundError,
@@ -190,79 +190,31 @@ def kb_search(
     query: str,
     *,
     limit: int = 10,
-    backend: str = "auto",
+    backend: str | None = None,
     min_score: float = 0.0,
     project: str | None = None,
     agent: str | None = None,
 ) -> dict[str, Any]:
     """Search the KB.
 
-    backend: "auto" (default, embedding then fts5 then substring),
-    "embedding", "fts5", "substring", or "hybrid".
+    backend: None (default) defers to retrieval.backend in config.yaml;
+    "auto"/"hybrid" fuse embedding + fts5 via RRF (substring fallback under
+    "auto"), or pin "embedding", "fts5", or "substring". The response
+    retrieval block reports the backend that actually served the query.
     project/agent: optional viewer context for scope filtering.
     """
-    from . import index_db
-    store = _store()
-    viewer = viewer_from(
-        config_path=store.config_path,
+    from .context import search_kb
+
+    # One shared implementation across MCP / JSONL — see context.search_kb.
+    return search_kb(
+        _store(),
+        query=query,
+        limit=limit,
+        backend=backend,
+        min_score=min_score,
         project=project,
         agent=agent,
     )
-    fetch_limit = scoped_fetch_limit(limit, viewer)
-    hits: list[tuple[str, str, str, float]] = []
-
-    def _to_dicts(h: list[tuple[str, str, str, float]], used: str) -> dict[str, Any]:
-        scoped = filter_hits(store, h, viewer, limit=limit)
-        return {
-            "backend": used,
-            "viewer": {"project": viewer.project, "agent": viewer.agent},
-            "hits": [
-                {"kind": k, "id": i, "snippet": sn, "score": sc, "backend": used}
-                for k, i, sn, sc in scoped
-            ],
-        }
-
-    if backend in ("auto", "embedding"):
-        hits = index_db.search_semantic(
-            store.kb_dir, query, limit=fetch_limit, min_score=min_score,
-        )
-        if hits:
-            return _to_dicts(hits, "embedding")
-        if backend == "embedding":
-            return _to_dicts([], "embedding")
-
-    if backend in ("auto", "fts5"):
-        try:
-            hits = index_db.search(store.kb_dir, query, limit=fetch_limit)
-        except Exception:
-            hits = []
-        if hits:
-            return _to_dicts(hits, "fts5")
-        if backend == "fts5":
-            return _to_dicts([], "fts5")
-
-    if backend in ("auto", "substring"):
-        hits = store.search_substring(query, limit=fetch_limit)
-        return _to_dicts(hits, "substring")
-
-    if backend == "hybrid":
-        from .embeddings.fusion import (  # type: ignore[import-not-found,import-untyped,unused-ignore]
-            rrf_fuse,
-        )
-        # Hybrid must honour min_score (the embedding side can return
-        # low-relevance noise otherwise) and survive FTS failures the same
-        # way the dedicated fts5 branch does.
-        emb = index_db.search_semantic(
-            store.kb_dir, query, limit=fetch_limit * 2, min_score=min_score,
-        )
-        try:
-            fts = index_db.search(store.kb_dir, query, limit=fetch_limit * 2)
-        except Exception:
-            fts = []
-        hits = rrf_fuse(emb, fts, limit=fetch_limit)
-        return _to_dicts(hits, "hybrid")
-
-    raise ValueError(f"unknown backend: {backend}")
 
 
 def _load_cfg(store: KBStore) -> dict[str, Any]:

@@ -132,70 +132,20 @@ def _h_digest(p: dict) -> dict:
 
 
 def _h_search(p: dict) -> dict:
-    from . import index_db
-    from .scoping import filter_hits, scoped_fetch_limit, viewer_from
+    from .context import search_kb
 
-    s = _store()
-    q = p["query"]
-    limit = int(p.get("limit", 10))
-    backend_arg = p.get("backend", "auto")
-    min_score = float(p.get("min_score", 0.0))
-    viewer = viewer_from(
-        config_path=s.config_path,
+    # One shared implementation across MCP / JSONL — see context.search_kb.
+    # No explicit backend on the wire -> the deployment's retrieval.backend
+    # decides, same as kb.context.
+    return search_kb(
+        _store(),
+        query=p["query"],
+        limit=int(p.get("limit", 10)),
+        backend=p.get("backend"),
+        min_score=float(p.get("min_score", 0.0)),
         project=p.get("project"),
         agent=p.get("agent"),
     )
-    fetch_limit = scoped_fetch_limit(limit, viewer)
-    hits: list[tuple[str, str, str, float]] = []
-    used = backend_arg
-
-    valid_backends = {"auto", "embedding", "fts5", "substring", "hybrid"}
-    if backend_arg not in valid_backends:
-        raise ValueError(
-            f"unknown backend: {backend_arg!r} "
-            f"(expected one of {sorted(valid_backends)})"
-        )
-
-    if backend_arg in ("auto", "embedding"):
-        hits = index_db.search_semantic(
-            s.kb_dir, q, limit=fetch_limit, min_score=min_score,
-        )
-        if hits:
-            used = "embedding"
-    if not hits and backend_arg in ("auto", "fts5"):
-        try:
-            hits = index_db.search(s.kb_dir, q, limit=fetch_limit)
-            used = "fts5" if hits else used
-        except Exception:
-            hits = []
-    if not hits and backend_arg in ("auto", "substring"):
-        hits = s.search_substring(q, limit=fetch_limit)
-        used = "substring"
-    if backend_arg == "hybrid":
-        from .embeddings.fusion import (  # type: ignore[import-not-found,import-untyped,unused-ignore]
-            rrf_fuse,
-        )
-        # Hybrid must honour min_score and survive FTS failures the same
-        # way the dedicated fts5 branch does.
-        emb = index_db.search_semantic(
-            s.kb_dir, q, limit=fetch_limit * 2, min_score=min_score,
-        )
-        try:
-            fts = index_db.search(s.kb_dir, q, limit=fetch_limit * 2)
-        except Exception:
-            fts = []
-        hits = rrf_fuse(emb, fts, limit=fetch_limit)
-        used = "hybrid"
-
-    scoped = filter_hits(s, hits, viewer, limit=limit)
-    return {
-        "backend": used,
-        "viewer": {"project": viewer.project, "agent": viewer.agent},
-        "hits": [
-            {"kind": k, "id": i, "snippet": sn, "score": sc, "backend": used}
-            for k, i, sn, sc in scoped
-        ],
-    }
 
 
 def _load_cfg(store: KBStore) -> dict:
