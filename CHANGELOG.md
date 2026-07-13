@@ -6,18 +6,109 @@ All notable changes to vouch are documented here. Format follows
 
 ## [Unreleased]
 
+### Fixed
+- `lifecycle.contradict()` no longer lets a claim contradict itself. calling
+  it with the same claim id on both sides previously wrote a self-loop
+  `contradicts` reference and flipped the claim to `contested` with no
+  actual counterparty; it now raises `LifecycleError`, mirroring the
+  existing guard in `supersede()`.
+
 ### Added
-- `kb.triage_pending` — advisory triage scoring over the pending-review queue.
-  Scores each pending proposal on fit, citation quality, duplication risk, and
-  contradiction risk, then attaches a `_meta.vouch_triage` block
-  (`recommendation`, `score`, `signals`, `rationale`) to help a reviewer
-  prioritize a long `kb.list_pending`. Read-only and advisory only: it never
-  calls `kb.approve` / `kb.reject` and never moves a proposal out of pending —
-  a human still decides. Duplication and fit reuse the propose-time embedding
-  similarity path and degrade to a `difflib` heuristic when the `[embeddings]`
-  extra isn't installed. Opt-in via `triage.enabled: true` in `config.yaml`.
-  `vouch triage [proposal-id...]` mirrors it on the CLI with `--json` and
-  `--reverse` (#322).
+- `kb.list_skills` / `kb.get_skill` — agents can enumerate the Claude Code
+  slash-command and `SKILL.md` catalogue visible at `<kb_root>/.claude/` and
+  `~/.claude/` over MCP, then fetch the full body of one by name (project-local
+  entries override user-global on collision). Exposed across MCP (`kb_list_skills`
+  / `kb_get_skill`), JSONL, and the CLI (`vouch list-skills` / `vouch get-skill`).
+- `mcp.publish_skills` config flag (default `true`) — gates the skill catalogue
+  for "company-brain" deployments where the catalogue itself is sensitive. When
+  `false`, `kb.list_skills` returns an empty list and `kb.get_skill` errors with
+  `permission_denied`; the flag is read fresh on every call so flipping it hides
+  the catalogue without restarting the server, and is surfaced on
+  `kb.capabilities.mcp.publish_skills` so clients can detect the gate. An
+  existing KB with no `mcp:` block stays default-on (#235).
+- `vouch console`: serve the vendored React web console straight from the
+  installed package — a same-origin `/proxy` bridge (loopback-guarded) to
+  `vouch serve --transport http` backends, reimplementing the vite dev-proxy
+  in python. the built SPA is bundled into the wheel as `vouch/web/console`
+  (conditionally, via a hatch build hook), so `pip install 'vouch-kb[web]'`
+  then `vouch console` needs no node and no repo clone.
+- `kb.activity` read method (+ `vouch activity` CLI mirror): audit-log
+  activity buckets for dashboards — per-day counts with proposal/decision
+  breakdowns, an hour-of-week matrix, and actor/event histograms. windowed
+  in viewer-local calendar days (IANA `tz` or a fixed utc offset), scope-
+  filtered like `kb.audit`.
+- console Dashboard view: 12-month activity calendar, last-30-days bars,
+  hour-of-week heatmap, top actors and event mix, driven by `kb.activity`.
+- codex: wired `UserPromptSubmit` to `vouch context-hook` for the first
+  time, reusing the existing command unmodified — codex's hook
+  payload/response shape matches claude-code's exactly. (#425)
+- dual-solve web ui: file-changes tree view in the candidate panes — a compact
+  folders-first file tree drives a per-file diff pane, replacing the flat
+  changed-files list and the stacked all-files diff. selection is
+  per-candidate, so inspecting claude's diff never moves the codex pane.
+  (#294)
+
+### Fixed
+- `vouch digest --limit` now caps the followups-due section like the
+  pending, decisions, and stale sections — it previously returned every
+  due followup regardless of the limit, contradicting the `--limit` help.
+
+- the dual-solve diff renderer dropped added/removed lines whose content
+  starts with `++`/`--` (e.g. an added `++counter` line) by treating them as
+  `+++`/`---` file headers; the header skip now requires the trailing
+  space-and-path form. (#294)
+- `compile_kb()` could file two page proposals for the same title when the
+  LLM's batch drafted the same topic (or same slug, e.g. "Retry Policy" vs
+  "retry policy") twice — `taken_names` was only seeded from on-disk pages
+  and pending proposals, never updated as drafts were accepted within the
+  batch. Approving the second proposal would silently route through
+  `update_page()` and overwrite the first. (#439)
+
+### Fixed
+- claude-code: the `UserPromptSubmit` context hook computed retrieval but
+  never fed the entity-salience reflex (#223) — `salience.record_query`
+  was never called from the hook path, leaving the reflex permanently
+  dormant for every claude-code session. OpenClaw's context engine already
+  called it correctly; cursor's `beforeSubmitPrompt` hook cannot accept
+  injected context at all, so it is not wired. (#425)
+## [1.2.2] — 2026-07-07
+
+### Packaging
+- published to the mcp registry (`registry.modelcontextprotocol.io`, mirrored
+  at `github.com/mcp/vouchdev/vouch`) as `io.github.vouchdev/vouch`. a
+  `server.json` at the repo root carries the metadata; the pypi `vouch-kb`
+  package is the artifact, run over stdio via `uvx vouch-kb serve`.
+- `vouch-kb` console-script alias (alongside `vouch`) so `uvx vouch-kb serve`
+  resolves — the registry launches a package by its pypi identifier, which
+  otherwise wouldn't match the `vouch` script name.
+- README carries an `<!-- mcp-name: io.github.vouchdev/vouch -->` marker;
+  the registry verifies package ownership by matching it against `server.json`.
+
+### Fixed
+- `vouch install-mcp <host>` (codex `toml_merge`): a `config.toml` the minimal
+  serializer couldn't faithfully re-emit (a non-BMP string value, a `nan`/`inf`
+  float) was bucketed as `skipped` and printed as `(already present)` with a
+  clean `Done`, so the user believed vouch was wired into codex when it wasn't.
+  serializer-failure now lands in a distinct `failed` bucket, is reported as
+  such, and the command exits non-zero — "already installed" and "install
+  failed" no longer look the same.
+- `vouch install-mcp <host>`: a manifest `dst` that escaped the target tree
+  (via `..` or an absolute path) is now refused with an `AdapterError` instead
+  of writing outside `target` (defense in depth for the manifest file writer;
+  shipped adapters are unaffected).
+- dual-solve review-ui: the recommendation hint rendered "neither engine
+  produced a usable diff" for the entire duration of a still-running job — the
+  hint was computed over the not-yet-populated candidate list on every poll.
+  it is now omitted until candidates exist.
+- `session.crystallize`: retrying on a session that hasn't been ended rewrote
+  the `session-<id>` summary page with a fresh wall-clock `Ended:` stamp each
+  time (and needlessly re-embedded it), so the "idempotent retry" wasn't. an
+  open session now renders a stable marker, so retries produce an identical
+  body.
+- `vouch capture ingest-codex`: rollout parsing had no size cap and could read
+  an oversized (or newline-free blob) rollout whole into memory. the file is
+  now bounded to 64 MiB up front, mirroring the byte caps on other untrusted
+  reads.
 
 ## [1.2.1] — 2026-07-06
 
@@ -119,6 +210,16 @@ All notable changes to vouch are documented here. Format follows
   successor (pages still require an explicit `new_id` — they have no
   successor pointer). Read-only throughout; still no writes, proposals, or
   audit events (#327).
+- `vouch flag-anomalies` — advisory anomaly flags on pending proposals (#323).
+  scores every pending claim proposal worst-first with reason codes:
+  `thin_evidence` (barely cited), `contradicts_many` (declares contradictions
+  against approved live claims), and `far_from_corpus` (an outlier vs the
+  approved corpus by nearest-neighbour cosine). the embedding-derived
+  `far_from_corpus` degrades gracefully to no code when the embeddings extra is
+  absent — the two non-embedding codes still compute. thresholds resolve from
+  `review.anomaly.*` in `.vouch/config.yaml`. read-only by construction — a hint
+  for the reviewer that flags nothing durable and never rejects or quarantines,
+  so the review gate is untouched. `--json` for the machine shape.
 - auto-capture: claude code sessions are harvested via hooks and filed as a
   single pending session-summary proposal for human approval. a `PostToolUse`
   hook (`vouch capture observe`) appends compact tool-use observations to an
@@ -220,12 +321,6 @@ All notable changes to vouch are documented here. Format follows
   temporary copied home containing known Claude/Codex credential files, so agent
   writes stay in the throwaway dual-solve branches and host credential files are
   not modified.
-- dual-solve JSON, review-ui job, and choose responses now include
-  `changed_files` for each candidate and the kept branch, so desktop and browser
-  clients can show the resulting files without parsing unified diffs.
-- dual-solve JSON and review-ui job responses now include each engine's returned
-  output log plus a deterministic recommendation hint based on success and diff
-  scope, so clients can compare Claude and Codex results before choosing.
 - `vouch review-ui --allow-dual-solve` — a browser SPA that runs `dual-solve`
   on a github issue link, streams progress over the review-ui's websocket, shows
   both engines' diffs side by side, and lets you pick the winner. Off by default;
@@ -248,7 +343,6 @@ All notable changes to vouch are documented here. Format follows
   New `vouch schema list` and `vouch schema sync` commands inspect declared
   kinds and audit existing pages against them; `propose-page` gains `--kind`
   and repeatable `--meta key=value`.
-- `kb.capabilities` now reports a `host_compat` block mirroring the `openclaw.compat` constraints declared in `openclaw.plugin.json` (e.g. `pluginApi`), so non-OpenClaw clients can detect compat without parsing the manifest. A new test asserts the two stay in sync and fails CI on drift (#237).
 - `kb.synthesize` — answer-mode retrieval over the review-gated KB. Answers a
   query in prose from approved claims only, with an inline `[claim_id]`
   citation behind every sentence, an explicit `gaps` block listing query
@@ -283,6 +377,11 @@ All notable changes to vouch are documented here. Format follows
 ### Fixed
 - artifact ids that contain a path separator, `..`, a nul byte, or are empty are now rejected at the storage layer, closing a path-traversal hole. `Source.id` is hex-locked, but the other models (`Claim`, `Page`, `Entity`, `Relation`, `Evidence`, `Session`, `Proposal`) carry a bare `id: str`, so a poisoned id — e.g. one smuggled through a bundle body under a safe on-disk filename — could resolve to a path outside `kb_dir` on the next put / update / lifecycle write (or read an arbitrary file on get). The guard sits at the `_yaml` / `_page_path` chokepoint every `_*_path` helper funnels through, mirroring the `bundle._safe_member_path` tar-traversal fix (fixes #149).
 - `Claim.text`, `Entity.name`, and `Page.title` now reject empty / whitespace-only values at the model layer via `@field_validator`s, mirroring the `Claim.evidence` min-citation validator (#81/#82). The non-empty contract previously lived only in the `propose_*` helpers, so `store.put_*`, `store.update_*`, and bundle/sync import all silently accepted blank-content artifacts; enforcing on the model closes every write path at once (fixes #155).
+- `build_context_pack` now evaluates the `require_citations` gate (and
+  `quality.uncited_items`) after the `max_chars` budget drops tail items, so
+  the pack is never failed for uncited claims the caller did not receive.
+  Fixes #174.
+- `audit.log_event` now holds an exclusive cross-process lock around read-prev-hash → derive → append, closing a TOCTOU race where two concurrent writers observed the same `prev_hash` and forked the chain — `verify_chain` then reported "previous hash mismatch" at the second concurrent event forever, breaking the tamper-evidence guarantee from #244 under ordinary multi-writer usage (`vouch serve` + concurrent CLI, multiple agents on JSONL, scripted backgrounded approvals). Uses `fcntl.flock` on POSIX and `msvcrt.locking` on Windows against a sibling `audit.log.jsonl.lock` file so the audit log itself is never opened in a mode that could truncate it. Fixes #262.
 - `parse_since` (the `--since` parser behind `vouch metrics`/`vouch audit`) now raises a clean `MetricsError` for a duration too large to represent (e.g. `--since 1000000000000d`), instead of letting an uncaught `OverflowError` traceback escape — restoring the documented "clean error, not a traceback" contract.
 - `sync_apply` now loads the sync source exactly once and passes the same `_SyncSource` instance into `sync_check`, closing a TOCTOU window where a bundle replaced on disk between the two `_load_source` calls could cause the validation and write phases to operate on different snapshots. Also eliminates redundant directory walks (KB sources) and triple tarball opens (bundle sources). Fixes #217.
 - `vault_to_kb` now passes `slug_hint=page_id` to `propose_page` so vault edit proposals target the existing page id from frontmatter instead of a slugified copy of the title (fixes #219).
@@ -290,8 +389,6 @@ All notable changes to vouch are documented here. Format follows
 - `vault_to_kb` skips filing a second proposal when a pending proposal already targets the same page id (with differing body), preventing duplicate proposals on repeated sync runs before approval (fixes #219).
 - `vault_to_kb` now warns when a user edits a claim stub instead of silently dropping the edit, directing the user to edit the citing page instead, and reports it via the dedicated `claim_stubs_edited` field on `VaultSyncResult` (fixes #219).
 - `approve()` now supports updating an existing page via `KBStore.update_page` when a PAGE proposal's id matches an existing artifact (the vault-edit flow), instead of raising `cannot approve: page already exists` for every vault edit (fixes #219).
-- `crystallize()` now updates an existing session summary page on retry instead of
-  failing with `page session-... already exists` after a partial approval run (#139).
 
 ### Fixed
 - `vouch serve` now fails fast with a clear `vouch init` hint when no `.vouch/` KB is present, instead of starting a server that immediately misbehaves (#95).

@@ -94,3 +94,79 @@ def test_audit_chain_detects_legacy_events(store: KBStore) -> None:
     assert not status.ok
     assert status.line == 1
     assert status.reason == "legacy event is not hash-chained"
+
+
+def _writer_worker(kb_dir_str: str, actor: str, count: int) -> None:
+    """Subprocess entry point for the concurrency test — module level so
+    multiprocessing's spawn context can pickle it."""
+    from pathlib import Path as _Path
+
+    from vouch import audit as _audit
+    kb_dir = _Path(kb_dir_str)
+    for i in range(count):
+        _audit.log_event(
+            kb_dir, event="claim.create", actor=actor,
+            object_ids=[f"{actor}-{i}"],
+        )
+
+
+def test_audit_chain_survives_concurrent_writers(store: KBStore) -> None:
+    """Concurrent processes must not fork the chain.
+
+    Without the file lock around _last_hash → derive → append, two workers
+    observe the same prev_hash and both chain off it. verify_chain then
+    reports "previous hash mismatch" at the second concurrent event. Use
+    multiprocessing.Process — the GIL serialises Python code and hides the
+    file-level race that threads would expose.
+    """
+    import multiprocessing as mp
+
+    n_workers = 4
+    per_worker = 20
+
+    ctx = mp.get_context("spawn")
+    procs = [
+        ctx.Process(target=_writer_worker,
+                    args=(str(store.kb_dir), f"agent-{i}", per_worker))
+        for i in range(n_workers)
+    ]
+    for p in procs:
+        p.start()
+    for p in procs:
+        p.join(timeout=120)
+    for p in procs:
+        assert p.exitcode == 0, f"worker exit={p.exitcode}"
+
+    status = audit.verify_chain(store.kb_dir)
+    assert status.ok, f"chain broken at line {status.line}: {status.reason}"
+    assert audit.count_events(store.kb_dir) == n_workers * per_worker
+
+
+def test_audit_lock_released_on_exception(
+    store: KBStore, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A writer raising mid-event releases the lock so the next call lands."""
+    import os as _os
+
+    audit.log_event(store.kb_dir, event="x.first", actor="u")
+
+    original_fsync = _os.fsync
+    remaining = {"raises": 1}
+
+    def _flaky_fsync(fd: int) -> None:
+        if remaining["raises"] > 0:
+            remaining["raises"] -= 1
+            raise OSError("simulated I/O failure")
+        original_fsync(fd)
+
+    monkeypatch.setattr(_os, "fsync", _flaky_fsync)
+    with pytest.raises(OSError, match="simulated I/O failure"):
+        audit.log_event(store.kb_dir, event="x.boom", actor="u")
+
+    monkeypatch.setattr(_os, "fsync", original_fsync)
+    audit.log_event(store.kb_dir, event="x.third", actor="u")
+    events = list(audit.read_events(store.kb_dir))
+    # x.first and x.third land; x.boom may have written its line before the
+    # fsync raised. In either case the surviving entries chain forward.
+    assert events[0].event == "x.first"
+    assert events[-1].event == "x.third"

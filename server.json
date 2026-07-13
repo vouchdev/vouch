@@ -1,0 +1,36 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.vouchdev/vouch",
+  "title": "Vouch",
+  "description": "Git-native, review-gated knowledge base for LLM agents. Cited retrieval, audited writes.",
+  "repository": {
+    "url": "https://github.com/vouchdev/vouch",
+    "source": "github"
+  },
+  "version": "1.2.2",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "vouch-kb",
+      "version": "1.2.2",
+      "transport": {
+        "type": "stdio"
+      },
+      "runtimeHint": "uvx",
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "serve"
+        }
+      ],
+      "environmentVariables": [
+        {
+          "name": "VOUCH_KB_PATH",
+          "description": "Absolute path to the .vouch directory; if unset, vouch walks up from the cwd to find it.",
+          "isRequired": false,
+          "format": "string"
+        }
+      ]
+    }
+  ]
+}

@@ -35,6 +35,7 @@ from . import lifecycle as life
 from . import metrics as metrics_mod
 from . import salience as salience_mod
 from . import sessions as sess_mod
+from . import skills as skills_mod
 from . import trust as trust_mod
 from . import verify as verify_mod
 from .capabilities import capabilities as build_caps
@@ -48,13 +49,14 @@ from .proposals import (
     approve,
     expire_pending,
     propose_claim,
+    propose_delete,
     propose_entity,
     propose_page,
     propose_relation,
     reject,
     reject_auto_extracted,
 )
-from .stats import collect_stats
+from .stats import collect_activity, collect_stats
 from .storage import (
     ArtifactNotFoundError,
     KBNotFoundError,
@@ -88,7 +90,11 @@ def _agent() -> str:
 
 
 def _h_capabilities(_: dict) -> dict:
-    return build_caps().model_dump(mode="json")
+    try:
+        publish_skills = skills_mod.publish_skills_enabled(_store())
+    except Exception:
+        publish_skills = True
+    return build_caps(publish_skills=publish_skills).model_dump(mode="json")
 
 
 def _h_status(_: dict) -> dict:
@@ -99,6 +105,20 @@ def _h_stats(p: dict) -> dict:
     days = int(p.get("days", 30))
     since = None if days == 0 else days
     return collect_stats(_store(), since_days=since)
+
+
+def _h_activity(p: dict) -> dict:
+    from .scoping import viewer_from_params
+
+    s = _store()
+    viewer = viewer_from_params(s, p)
+    return collect_activity(
+        s,
+        days=int(p.get("days", 365)),
+        tz_offset_minutes=int(p.get("tz_offset_minutes", 0)),
+        tz=p.get("tz"),
+        viewer=viewer,
+    )
 
 
 def _h_digest(p: dict) -> dict:
@@ -184,6 +204,20 @@ def _load_cfg(store: KBStore) -> dict:
     except Exception:
         return {}
     return loaded if isinstance(loaded, dict) else {}
+
+
+def _h_experts(p: dict) -> dict:
+    from .experts import rank_experts
+
+    return {
+        "experts": rank_experts(
+            _store(),
+            p["topic"],
+            limit=int(p.get("limit", 10)),
+            min_claims=int(p.get("min_claims", 1)),
+            weight=p.get("weight", "count"),
+        )
+    }
 
 
 def _h_neighbors(p: dict) -> dict:
@@ -399,6 +433,27 @@ def _h_compile(p: dict) -> dict:
     return report.to_dict()
 
 
+def _h_summarize_session(p: dict) -> dict:
+    from . import session_split
+    return session_split.summarize(
+        _store(), p["session_id"], mode=p.get("mode", "auto"),
+    )
+
+
+def _h_list_sessions(p: dict) -> dict:
+    from . import session_split
+    return {"sessions": session_split.build_session_rows(_store())}
+
+
+def _h_session_transcript(p: dict) -> dict:
+    from . import transcript
+    session_id = p["session_id"]
+    agent = p.get("agent")
+    if agent is not None and agent not in ("claude", "codex"):
+        raise ValueError(f"unknown agent: {agent!r} (expected 'claude' or 'codex')")
+    return transcript.load_transcript(_store(), session_id, agent=agent)
+
+
 def _h_propose_entity(p: dict) -> dict:
     pr = propose_entity(
         _store(),
@@ -424,6 +479,24 @@ def _h_propose_relation(p: dict) -> dict:
         proposed_by=_agent(),
     )
     return {"proposal_id": pr.id, "status": pr.status.value, "kind": pr.kind.value}
+
+
+def _h_propose_delete(p: dict) -> dict:
+    pr = propose_delete(
+        _store(),
+        target_kind=p["target_kind"],
+        target_id=p["target_id"],
+        rationale=p.get("rationale"),
+        session_id=p.get("session_id"),
+        dry_run=bool(p.get("dry_run", False)),
+        proposed_by=_agent(),
+    )
+    return {
+        "proposal_id": pr.id,
+        "status": pr.status.value,
+        "kind": pr.kind.value,
+        "dry_run": bool(p.get("dry_run", False)),
+    }
 
 
 def _h_approve(p: dict) -> dict:
@@ -484,6 +557,25 @@ def _h_confirm(p: dict) -> dict:
     c = life.confirm(_store(), claim_id=p["claim_id"], actor=_agent())
     return {"id": c.id, "last_confirmed_at": c.last_confirmed_at.isoformat()
             if c.last_confirmed_at else None}
+
+
+def _h_clear_claims(p: dict) -> dict:
+    from datetime import datetime
+    before_dt = None
+    if p.get("before"):
+        before_dt = datetime.fromisoformat(p["before"])
+    to_clear = life.clear_claims(
+        _store(),
+        auto_only=p.get("auto_only", True),
+        before=before_dt,
+        actor=_agent(),
+        dry_run=p.get("dry_run", False),
+    )
+    return {
+        "count": len(to_clear),
+        "claim_ids": [c.id for c in to_clear],
+        "dry_run": p.get("dry_run", False),
+    }
 
 
 def _h_cite(p: dict) -> list:
@@ -648,6 +740,20 @@ def _h_embeddings_stats(_: dict) -> dict:
     }
 
 
+def _h_list_skills(_: dict) -> list[dict]:
+    return skills_mod.list_skills(_store())
+
+
+def _h_get_skill(p: dict) -> dict:
+    name = p.get("name")
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError("`name` is required")
+    try:
+        return skills_mod.get_skill(_store(), name)
+    except KeyError as e:
+        raise ValueError(str(e)) from e
+
+
 def _h_why(p: dict) -> dict:
     from . import provenance as prov
 
@@ -730,9 +836,11 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.capabilities": _h_capabilities,
     "kb.status": _h_status,
     "kb.stats": _h_stats,
+    "kb.activity": _h_activity,
     "kb.digest": _h_digest,
     "kb.search": _h_search,
     "kb.neighbors": _h_neighbors,
+    "kb.experts": _h_experts,
     "kb.context": _h_context,
     "kb.synthesize": _h_synthesize,
     "kb.read_page": _h_read_page,
@@ -752,8 +860,12 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.propose_claim": _h_propose_claim,
     "kb.propose_page": _h_propose_page,
     "kb.compile": _h_compile,
+    "kb.summarize_session": _h_summarize_session,
+    "kb.list_sessions": _h_list_sessions,
+    "kb.session_transcript": _h_session_transcript,
     "kb.propose_entity": _h_propose_entity,
     "kb.propose_relation": _h_propose_relation,
+    "kb.propose_delete": _h_propose_delete,
     "kb.approve": _h_approve,
     "kb.reject": _h_reject,
     "kb.reject_extracted": _h_reject_extracted,
@@ -762,6 +874,7 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.contradict": _h_contradict,
     "kb.archive": _h_archive,
     "kb.confirm": _h_confirm,
+    "kb.clear_claims": _h_clear_claims,
     "kb.cite": _h_cite,
     "kb.source_verify": _h_source_verify,
     "kb.session_start": _h_session_start,
@@ -787,6 +900,8 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.provenance_rebuild": _h_provenance_rebuild,
     "kb.detect_themes": _h_detect_themes,
     "kb.propose_theme": _h_propose_theme,
+    "kb.list_skills": _h_list_skills,
+    "kb.get_skill": _h_get_skill,
 }
 
 
@@ -806,6 +921,11 @@ def handle_request(envelope: dict) -> dict:
             "id": req_id,
             "ok": True,
             "result": trust_mod.finish_kb_result(result),
+        }
+    except skills_mod.SkillsDisabledError as e:
+        return {
+            "id": req_id, "ok": False,
+            "error": {"code": "permission_denied", "message": str(e)},
         }
     except KeyError as e:
         return {

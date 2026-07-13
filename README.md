@@ -2,16 +2,18 @@
 
 **Git-native, review-gated knowledge base for LLM agents. MCP server + JSONL tool server + CLI.**
 
-<p align="center">
-  <img src="docs/banner.svg" alt="vouch — sessions auto-capture into a review-gated knowledge base: propose or capture → review → commit → retrieve" width="100%"/>
-</p>
+<!-- mcp-name: io.github.vouchdev/vouch -->
+<!-- the mcp registry verifies package ownership by matching this marker against
+     server.json's `name`; keep it in lockstep with server.json at the repo root. -->
 
 <p align="center">
   <a href="https://github.com/vouchdev/vouch/actions/workflows/ci.yml"><img src="https://github.com/vouchdev/vouch/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
   <a href="https://pypi.org/project/vouch-kb/"><img src="https://img.shields.io/pypi/v/vouch-kb.svg" alt="PyPI"></a>
+  <a href="https://github.com/mcp/vouchdev/vouch"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fregistry.modelcontextprotocol.io%2Fv0.1%2Fservers%3Fsearch%3Dio.github.vouchdev%2Fvouch&query=%24.servers%5B0%5D.server.version&label=MCP%20Registry&logo=modelcontextprotocol&logoColor=white&color=6E56CF&prefix=v" alt="MCP Registry"></a>
   <a href="https://pypi.org/project/vouch-kb/"><img src="https://img.shields.io/pypi/pyversions/vouch-kb.svg" alt="Python versions"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/vouchdev/vouch.svg" alt="MIT licensed"></a>
   <a href="https://x.com/vouch_dev"><img src="https://img.shields.io/badge/follow-%40vouch__dev-000000?logo=x&logoColor=white" alt="Follow @vouch_dev on X"></a>
+  <a href="https://gittensor.io/miners/repository?name=vouchdev/vouch"><img src="https://api.gittensor.io/repos/vouchdev%2Fvouch/badge.svg" alt="Gittensor impact"></a>
 </p>
 
 > Agents should not start every session with amnesia — but they shouldn't get to write whatever they want either.
@@ -30,6 +32,27 @@ Everything below exists to reproduce that loop on your own project.
 
 ## Install
 
+**For the full UI experience** (recommended first time):
+
+```bash
+docker run --rm -p 127.0.0.1:5173:5173 -v vouch-demo-data:/data ghcr.io/plind-junior/vouch-demo
+# then open http://localhost:5173
+```
+
+Pre-seeded KB + full webapp console, zero setup. Pass `-e ANTHROPIC_API_KEY=sk-ant-...` to enable LLM features.
+
+**For the full UI without Docker** — Python only, no clone, no node:
+
+```bash
+pipx install 'vouch-kb[web]'                  # the browser console ships inside the wheel
+vouch serve --transport http --port 8731 &    # a backend for the current .vouch/
+vouch console                                 # console at http://localhost:5173 — connect it to :8731
+```
+
+`vouch console` serves the same React console as the Docker demo, straight from the installed package.
+
+**For CLI + Claude Code integration** (most common ongoing workflow):
+
 ```bash
 # one-liner (Linux + macOS) — picks a Python, ensures pipx, installs vouch-kb
 curl -fsSL https://raw.githubusercontent.com/vouchdev/vouch/main/install.sh | sh
@@ -38,7 +61,9 @@ curl -fsSL https://raw.githubusercontent.com/vouchdev/vouch/main/install.sh | sh
 pipx install vouch-kb
 ```
 
-The one-liner is POSIX `sh` and never needs `sudo` — inspect [`install.sh`](install.sh) first if you'd like. Prefer containers? The released image runs the same CLI and MCP server ([`ghcr.io/vouchdev/vouch`](https://github.com/vouchdev/vouch/pkgs/container/vouch)):
+The one-liner is POSIX `sh` and never needs `sudo` — inspect [`install.sh`](install.sh) first if you'd like.
+
+**For MCP server or CLI-only use**:
 
 ```bash
 docker run -i --rm -v "$PWD:/data" ghcr.io/vouchdev/vouch:latest          # stdio MCP server
@@ -47,15 +72,17 @@ docker run --rm -v "$PWD:/data" ghcr.io/vouchdev/vouch:latest status      # any 
 
 ## Reproduce the loop on your project
 
+After exploring the demo above, set up vouch in your own project:
+
 **1. Set up the KB and wire Claude Code** (one-time, per repo):
 
 ```bash
 cd /path/to/your/project
-vouch init
-vouch install-mcp claude-code
+vouch init                          # creates .vouch/ with starter config
+vouch install-mcp claude-code       # wires capture hooks into Claude Code
 ```
 
-`init` creates `.vouch/` with a starter config; `install-mcp` writes `.mcp.json` (the `kb.*` MCP tools), the `/vouch-*` slash commands, and three hooks — `PostToolUse` capture, `SessionEnd` rollup, `SessionStart` recall. Restart Claude Code so they load.
+`install-mcp` writes `.mcp.json` (the `kb.*` MCP tools), the `/vouch-*` slash commands, and three hooks — `PostToolUse` capture, `SessionEnd` rollup, `SessionStart` recall. Restart Claude Code so they load.
 
 **2. Point `compile` at an LLM** — the only step that needs a model. In `.vouch/config.yaml`:
 
@@ -76,16 +103,43 @@ compile:
 vouch review                    # walk pending proposals one at a time
 ```
 
-The browser console in the video is the **[vouch webapp](https://github.com/vouchdev/webApp)** — chat, review, pending queue, claims, and stats over a running KB. Connect it in two commands:
+**Want a browser UI for reviewing and proposing?** The video shows the **vouch webapp** — chat, review queue, claims, and stats. You have four options:
+
+- **No setup**: Use the Docker demo (recommended)
+- **pip, no clone**: `pipx install 'vouch-kb[web]'` then `vouch console` — serves the same React console from the installed package (Python only, no Docker, no node), open http://localhost:5173
+- **Local development**: Clone the repo, run `make console`, open http://localhost:5173
+- **CLI-only**: Use `vouch review`, `vouch show <id>`, `vouch approve <id>` commands instead
+
+**Point the webapp at your existing KB:**
 
 ```bash
-vouch serve --transport http    # serves the kb.* surface on 127.0.0.1:8731
-# then, in a clone of the vouch webapp:
-npm install && npm run dev      # opens http://localhost:5173 — point the
-                                # connect dialog at http://127.0.0.1:8731
+# Terminal 1: start the vouch server pointing at your .vouch/
+cd /path/to/your/project
+vouch serve --transport http --port 8731
+
+# Terminal 2: run the Docker UI pointing at that server
+docker run --rm -p 127.0.0.1:5173:5173 \
+  -e VOUCH_TARGET=http://host.docker.internal:8731 \
+  ghcr.io/plind-junior/vouch-demo
+# then open http://localhost:5173
 ```
 
-Lighter alternatives ship with vouch itself: `vouch review-ui` (a built-in browser queue; `pipx install 'vouch-kb[web]'` for the extra), or piecemeal `vouch pending`, `vouch show <id>`, `vouch approve <id>`, `vouch reject <id> --reason "…"`.
+Or serve that same console with no Docker — `vouch console` in place of Terminal 2 (needs the `[web]` extra), then add the `:8731` backend in the connect dialog:
+
+```bash
+vouch console                   # http://localhost:5173, proxying to the server above
+```
+
+Or to skip the browser entirely and use the CLI tools:
+
+```bash
+vouch review                    # walk pending proposals
+vouch show <id>                 # inspect a claim or page
+vouch approve <id>              # approve a proposal
+vouch reject <id> --reason "…"  # reject with feedback
+```
+
+Both browser UIs ship with vouch under the `[web]` extra (`pipx install 'vouch-kb[web]'`): `vouch console` is the full React console shown in the video; `vouch review-ui` is a lighter built-in review queue. Or go piecemeal: `vouch pending`, `vouch show <id>`, `vouch approve <id>`, `vouch reject <id> --reason "…"`.
 
 **5. Compile the wiki.**
 
@@ -144,6 +198,10 @@ Pending drafts (`proposed/`) and the derived search index (`state.db`) are gitig
 * `vouch install-mcp <host>` also wires cursor, codex, zed, windsurf, openclaw and friends ([adapters/](adapters/))
 * [vouch webapp](https://github.com/vouchdev/webApp) — the chat-first browser console from the video; [vouch-desktop](https://github.com/vouchdev/vouch-desktop) wraps the same loop as a desktop app
 * [CONTRIBUTING.md](CONTRIBUTING.md) — development setup and the test gate
+
+## Incubated by Gittensor
+
+Vouch was incubated and supported by [Gittensor](https://gittensor.io), a protocol that rewards open-source contributions. The knowledge-base-as-code pattern and review-gated persistence model emerged directly from conversations about trusted AI agents and long-term memory in collaborative development workflows.
 
 ## License
 

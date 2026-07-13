@@ -89,6 +89,11 @@
       "default": null,
       "title": "Approved By"
     },
+    "auto_approved": {
+      "default": false,
+      "title": "Auto Approved",
+      "type": "boolean"
+    },
     "confidence": {
       "default": 0.7,
       "maximum": 1.0,
@@ -140,6 +145,18 @@
       ],
       "default": null,
       "title": "Last Confirmed At"
+    },
+    "proposed_by": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Proposed By"
     },
     "scope": {
       "$ref": "#/$defs/ArtifactScope"

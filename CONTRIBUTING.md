@@ -125,6 +125,9 @@ strict:
 - A `CHANGELOG.md` entry under `## [Unreleased]` for user-visible changes.
 - Lowercase prose in the PR body, matching the repo voice. No
   `Co-Authored-By` or AI-attribution trailers in commits.
+- For changes that affect the webapp, CLI output, or user-facing behavior:
+  screenshots or screenrecording from the vouch-ui webapp showing the
+  behavior working as intended.
 
 ## Commit and PR titles
 

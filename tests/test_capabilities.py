@@ -24,10 +24,10 @@ def test_capabilities_matches_jsonl_handlers() -> None:
 
 # --- host_compat drift detection (#237) -----------------------------------
 #
-# vouch declares openclaw.compat.pluginApi in package.json (the loader-facing
-# manifest the 2026.6 repackage moved it to). The same value must surface in
+# vouch declares openclaw.compat.pluginApi in package.json (openclaw.plugin.json
+# bans openclaw.* dead dialect fields). The same value must surface in
 # kb.capabilities so non-OpenClaw clients can detect compat without parsing
-# the manifest. These tests fail CI with a clear message if the two
+# package.json. These tests fail CI with a clear message if the two
 # declarations drift apart.
 
 _PACKAGE_JSON_PATH = (
@@ -35,7 +35,7 @@ _PACKAGE_JSON_PATH = (
 )
 
 
-def _manifest_plugin_api() -> str:
+def _package_plugin_api() -> str:
     manifest = json.loads(_PACKAGE_JSON_PATH.read_text(encoding="utf-8"))
     return manifest["openclaw"]["compat"]["pluginApi"]
 
@@ -46,7 +46,7 @@ def test_capabilities_host_compat_matches_openclaw_manifest() -> None:
     without the other is exactly the "host compat drift" #237 asks CI to
     catch."""
     caps = capabilities.capabilities()
-    manifest_range = _manifest_plugin_api()
+    manifest_range = _package_plugin_api()
     capabilities_range = caps.host_compat.get("openclaw", {}).get("pluginApi")
     assert capabilities_range == manifest_range, (
         f"host compat drift: package.json declares pluginApi="
@@ -80,9 +80,28 @@ def test_load_host_compat_returns_empty_on_missing_manifest(
 def test_load_host_compat_returns_empty_on_malformed_manifest(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
-    """A malformed manifest must not crash capabilities() -- it's reporting
-    diagnostic info, not validating the install."""
+    """A malformed package.json must not crash capabilities() -- it's
+    reporting diagnostic info, not validating the install."""
     bad = tmp_path / "package.json"
     bad.write_text("{not valid json", encoding="utf-8")
     monkeypatch.setattr(capabilities, "_PACKAGE_JSON_PATH", bad)
     assert capabilities._load_host_compat() == {}
+
+
+def test_mcp_tools_match_methods() -> None:
+    """Every MCP kb_* tool maps to a capabilities method and vice-versa.
+
+    Closes the MCP half of the 3-surface parity invariant that the JSONL
+    check above did not cover. Uses the unfiltered server object (profiles
+    apply only in run_stdio).
+    """
+    from vouch.server import mcp
+
+    tool_names = {n for n in mcp._tool_manager._tools if n.startswith("kb_")}
+    as_methods = {"kb." + n.split("_", 1)[1] for n in tool_names}
+    declared = set(capabilities.METHODS)
+    assert as_methods == declared, (
+        f"mcp/methods mismatch: "
+        f"missing tools={declared - as_methods}, "
+        f"undeclared tools={as_methods - declared}"
+    )

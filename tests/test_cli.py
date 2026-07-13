@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -292,6 +293,59 @@ def test_search_substring_backend_label(store: KBStore, monkeypatch: pytest.Monk
     result = runner.invoke(cli, ["search", "findable"])
     assert result.exit_code == 0, result.output
     assert "(substring)" in result.output
+
+
+def test_search_auto_falls_back_when_fts_raises(
+    store: KBStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Auto search should mirror context/server resilience on FTS errors."""
+    from vouch import index_db
+    from vouch.proposals import approve as do_approve
+    from vouch.proposals import propose_claim
+
+    src = store.put_source(b"e")
+    pr = propose_claim(store, text="findable token", evidence=[src.id], proposed_by="agent")
+    do_approve(store, pr.id, approved_by="reviewer")
+    monkeypatch.setattr(
+        index_db,
+        "search",
+        lambda *a, **k: (_ for _ in ()).throw(sqlite3.Error("fts unavailable")),
+    )
+    monkeypatch.setattr(index_db, "search_semantic", lambda *a, **k: [])
+
+    result = CliRunner().invoke(cli, ["search", "findable"])
+
+    assert result.exit_code == 0, result.output
+    assert "(substring)" in result.output
+
+
+def test_search_hybrid_keeps_semantic_hits_when_fts_raises(
+    store: KBStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Hybrid search should degrade to semantic-only when FTS5 is unavailable."""
+    from vouch import index_db
+    from vouch.models import Claim
+
+    src = store.put_source(b"e")
+    store.put_claim(Claim(id="c1", text="semantic token", evidence=[src.id]))
+    monkeypatch.setattr(
+        index_db,
+        "search_semantic",
+        lambda *a, **k: [("claim", "c1", "semantic token", 0.9)],
+    )
+    monkeypatch.setattr(
+        index_db,
+        "search",
+        lambda *a, **k: (_ for _ in ()).throw(sqlite3.Error("fts unavailable")),
+    )
+
+    result = CliRunner().invoke(cli, ["search", "semantic", "--backend", "hybrid"])
+
+    assert result.exit_code == 0, result.output
+    assert "claim/c1" in result.output
+    assert "(hybrid)" in result.output
 
 
 def test_crystallize_cli_all_failures_exits_1(store: KBStore) -> None:
