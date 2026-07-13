@@ -368,6 +368,10 @@ All notable changes to vouch are documented here. Format follows
   KB under `eval/fixture-kb/`, and an `eval` workflow gating retrieval changes
   (#226).
 ### Fixed
+- `build_context_pack` now evaluates the `require_citations` gate (and
+  `quality.uncited_items`) after the `max_chars` budget drops tail items, so
+  the pack is never failed for uncited claims the caller did not receive.
+  Fixes #174.
 - `audit.log_event` now holds an exclusive cross-process lock around read-prev-hash → derive → append, closing a TOCTOU race where two concurrent writers observed the same `prev_hash` and forked the chain — `verify_chain` then reported "previous hash mismatch" at the second concurrent event forever, breaking the tamper-evidence guarantee from #244 under ordinary multi-writer usage (`vouch serve` + concurrent CLI, multiple agents on JSONL, scripted backgrounded approvals). Uses `fcntl.flock` on POSIX and `msvcrt.locking` on Windows against a sibling `audit.log.jsonl.lock` file so the audit log itself is never opened in a mode that could truncate it. Fixes #262.
 - `parse_since` (the `--since` parser behind `vouch metrics`/`vouch audit`) now raises a clean `MetricsError` for a duration too large to represent (e.g. `--since 1000000000000d`), instead of letting an uncaught `OverflowError` traceback escape — restoring the documented "clean error, not a traceback" contract.
 - `sync_apply` now loads the sync source exactly once and passes the same `_SyncSource` instance into `sync_check`, closing a TOCTOU window where a bundle replaced on disk between the two `_load_source` calls could cause the validation and write phases to operate on different snapshots. Also eliminates redundant directory walks (KB sources) and triple tarball opens (bundle sources). Fixes #217.
