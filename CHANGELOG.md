@@ -42,6 +42,32 @@ All notable changes to vouch are documented here. Format follows
 - README carries an `<!-- mcp-name: io.github.vouchdev/vouch -->` marker;
   the registry verifies package ownership by matching it against `server.json`.
 
+### Fixed
+- `vouch install-mcp <host>` (codex `toml_merge`): a `config.toml` the minimal
+  serializer couldn't faithfully re-emit (a non-BMP string value, a `nan`/`inf`
+  float) was bucketed as `skipped` and printed as `(already present)` with a
+  clean `Done`, so the user believed vouch was wired into codex when it wasn't.
+  serializer-failure now lands in a distinct `failed` bucket, is reported as
+  such, and the command exits non-zero — "already installed" and "install
+  failed" no longer look the same.
+- `vouch install-mcp <host>`: a manifest `dst` that escaped the target tree
+  (via `..` or an absolute path) is now refused with an `AdapterError` instead
+  of writing outside `target` (defense in depth for the manifest file writer;
+  shipped adapters are unaffected).
+- dual-solve review-ui: the recommendation hint rendered "neither engine
+  produced a usable diff" for the entire duration of a still-running job — the
+  hint was computed over the not-yet-populated candidate list on every poll.
+  it is now omitted until candidates exist.
+- `session.crystallize`: retrying on a session that hasn't been ended rewrote
+  the `session-<id>` summary page with a fresh wall-clock `Ended:` stamp each
+  time (and needlessly re-embedded it), so the "idempotent retry" wasn't. an
+  open session now renders a stable marker, so retries produce an identical
+  body.
+- `vouch capture ingest-codex`: rollout parsing had no size cap and could read
+  an oversized (or newline-free blob) rollout whole into memory. the file is
+  now bounded to 64 MiB up front, mirroring the byte caps on other untrusted
+  reads.
+
 ## [1.2.1] — 2026-07-06
 
 ### Fixed

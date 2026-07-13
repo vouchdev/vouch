@@ -918,3 +918,75 @@ def test_installed_wheel_resolves_adapters(tmp_path: Path) -> None:
     assert "claude-code" in result["hosts"], (
         f"installed copy can't resolve adapters: {result}"
     )
+
+
+# --- toml_merge failure is not silent success -----------------------------
+
+
+def test_toml_merge_unserializable_config_is_failed_not_skipped(tmp_path: Path) -> None:
+    # A user config.toml carrying a non-BMP char in a string value can't
+    # survive the minimal serializer's json.dumps -> tomllib round-trip, so
+    # vouch cannot install. That must be reported as a distinct failure, not
+    # bucketed as "already present" (which would tell the user vouch is wired
+    # when it is not).
+    from vouch.install_adapter import _install_toml_merge
+
+    dst = tmp_path / "config.toml"
+    dst.write_text('model = "gpt-5"\nnote = "hi \U0001f600 there"\n', encoding="utf-8")
+    src = tmp_path / "src.toml"
+    src.write_text('[mcp_servers.vouch]\ncommand = "vouch"\n', encoding="utf-8")
+
+    result = InstallResult()
+    _install_toml_merge(src, dst, result, ".codex/config.toml")
+
+    assert result.failed == [".codex/config.toml"]
+    assert result.skipped == []
+    assert "[mcp_servers.vouch]" not in dst.read_text(encoding="utf-8")
+
+
+def test_install_mcp_reports_failure_and_exits_nonzero(tmp_path: Path) -> None:
+    # End-to-end: an existing codex config.toml with an emoji makes the T1
+    # toml_merge fail. The CLI must NOT print "already present" / a clean
+    # "Done" for it, and must exit non-zero so scripts notice.
+    cfg = tmp_path / ".codex" / "config.toml"
+    cfg.parent.mkdir(parents=True)
+    cfg.write_text('model = "gpt-5"\nnote = "\U0001f600"\n', encoding="utf-8")
+
+    result = CliRunner().invoke(
+        cli, ["install-mcp", "codex", "--tier", "T1", "--path", str(tmp_path)]
+    )
+
+    assert result.exit_code != 0, result.output
+    assert "already present" not in result.output
+    assert "[mcp_servers.vouch]" not in cfg.read_text(encoding="utf-8")
+
+
+# --- manifest dst containment (path traversal) ----------------------------
+
+
+def test_install_rejects_dst_escaping_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A manifest whose `dst` escapes the target tree (via `..` or an absolute
+    # path) must be refused, not written outside `target`.
+    import vouch.install_adapter as ia
+
+    adapters = tmp_path / "adapters"
+    (adapters / "evil").mkdir(parents=True)
+    (adapters / "evil" / "payload.txt").write_text("pwned", encoding="utf-8")
+    (adapters / "evil" / "install.yaml").write_text(
+        "host: evil\n"
+        "pretty: Evil\n"
+        "fence: { begin: x, end: y }\n"
+        "tiers:\n"
+        "  T1:\n"
+        "    - { src: payload.txt, dst: ../../escape.txt }\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(ia, "ADAPTERS_DIR", adapters)
+
+    target = tmp_path / "project"
+    target.mkdir()
+    with pytest.raises(AdapterError, match=r"escape|outside|traversal"):
+        install("evil", target=target, tier="T1")
+    assert not (tmp_path / "escape.txt").exists()

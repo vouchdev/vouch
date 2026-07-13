@@ -272,3 +272,37 @@ def test_spa_assets_are_served(git_kb):
         assert c.get(path).status_code == 200, path
     page = c.get("/dual-solve").text
     assert "/static/dual_solve.js" in page and "createApp" in page
+
+
+def _job(**kw):
+    from vouch.web.dual_solve_api import DualSolveJob
+
+    base = dict(id="j", issue_url="o/n#1", claude_effort="high",
+                codex_effort="high")
+    base.update(kw)
+    return DualSolveJob(**base)
+
+
+def test_serialize_omits_recommendation_while_running():
+    # While the job is still running there are no candidates yet, so
+    # recommendation([]) would say "neither engine produced a usable diff".
+    # That false negative must not be surfaced during a running job.
+    from vouch.web.dual_solve_api import _serialize
+
+    data = _serialize(_job())  # status defaults to "running", candidates=[]
+    assert data["status"] == "running"
+    assert data["recommendation"] is None
+
+
+def test_serialize_includes_recommendation_once_candidates_exist():
+    from vouch.dual_solve import Candidate
+    from vouch.web.dual_solve_api import _serialize
+
+    job = _job(status="ready")
+    job.candidates = [
+        Candidate(engine="claude", branch="ds/claude", worktree=Path("/tmp/x"),
+                  diff="+a\n+b\n", ok=True),
+    ]
+    data = _serialize(job)
+    assert data["recommendation"] is not None
+    assert data["recommendation"]["engine"] == "claude"
