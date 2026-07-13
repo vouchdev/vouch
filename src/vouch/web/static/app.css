@@ -248,3 +248,38 @@ pre {
   border-top: 1px solid var(--rule);
   margin-top: 4rem;
 }
+
+/* --- clear auto-claims (issue #433) --- */
+.clear .lede {
+  font-family: var(--sans);
+  font-size: 0.95rem;
+  color: var(--muted);
+  max-width: 60ch;
+  margin: 0.75rem 0 1.25rem;
+}
+.clear-filter {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 1rem 0 1.5rem;
+  font-family: var(--sans);
+  font-size: 0.85rem;
+}
+.clear-filter label { color: var(--muted); }
+button.filter { border-color: var(--ink); color: var(--ink); }
+button.filter:hover { background: var(--ink); color: var(--paper); }
+.clear-list { list-style: none; padding: 0; margin: 0; }
+.clear-row {
+  padding: 0.75rem 0;
+  border-bottom: 1px solid var(--rule);
+}
+.clear-meta {
+  display: flex;
+  gap: 1rem;
+  align-items: baseline;
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.clear-apply { margin-top: 1.5rem; }
+

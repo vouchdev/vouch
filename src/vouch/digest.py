@@ -197,7 +197,7 @@ def build(
             if str(p.metadata.get("followup_status", "")) not in _CLOSED_FOLLOWUP_STATUSES
         ),
         key=lambda r: r.due_at,
-    )
+    )[:limit]
 
     m = compute(store, since=since, stale_after_days=stale_after_days, now=now)
 

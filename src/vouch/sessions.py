@@ -149,11 +149,16 @@ def _build_summary_body(sess: Session, ids: list[str]) -> str:
     # through the review gate. Anything agent-controlled (sess.task,
     # sess.note, sess.agent) is omitted to keep the review-gate guarantee
     # intact for the Page artifact kind. See #76.
+    # crystallize does not end the session, so ended_at is often None here.
+    # A wall-clock fallback would make every retry write a different body,
+    # breaking crystallize idempotency (#256) and re-embedding needlessly, so
+    # emit a stable marker instead of datetime.now() for a still-open session.
+    ended = sess.ended_at.isoformat() if sess.ended_at else "(session still open)"
     lines = [
         f"# Session {sess.id}",
         "",
         f"**Started:** {sess.started_at.isoformat()}",
-        f"**Ended:** {(sess.ended_at or datetime.now(UTC)).isoformat()}",
+        f"**Ended:** {ended}",
         "",
         "## Crystallized artifacts",
         "",

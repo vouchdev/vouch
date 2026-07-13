@@ -40,6 +40,7 @@ from . import pr_cache as prc_mod
 from . import provenance as prov_mod
 from . import recall as recall_mod
 from . import sessions as sess_mod
+from . import skills as skills_mod
 from . import stats as stats_mod
 from . import sync as sync_mod
 from . import synthesize as synth
@@ -237,7 +238,48 @@ def discover(path: str) -> None:
 @cli.command()
 def capabilities() -> None:
     """Emit the JSON capabilities descriptor (mirrors kb.capabilities)."""
-    _emit_json(build_caps().model_dump(mode="json"))
+    # Stay usable outside a KB: fall back to the default-on flag if no
+    # .vouch/ is discoverable here.
+    try:
+        publish_skills = skills_mod.publish_skills_enabled(_load_store())
+    except Exception:
+        publish_skills = True
+    _emit_json(build_caps(publish_skills=publish_skills).model_dump(mode="json"))
+
+
+@cli.command("list-skills")
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON instead of a table.")
+def list_skills(as_json: bool) -> None:
+    """List discoverable Claude Code skills / slash commands (mirrors kb.list_skills)."""
+    store = _load_store()
+    rows = skills_mod.list_skills(store)
+    if as_json:
+        _emit_json(rows)
+        return
+    if not rows:
+        # Either nothing installed, or mcp.publish_skills is false.
+        click.echo("no skills published")
+        return
+    for r in rows:
+        click.echo(f"{r['name']}  [{r['scope']}/{r['kind']}]  {r['description']}")
+
+
+@cli.command("get-skill")
+@click.argument("name")
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON instead of the body.")
+def get_skill(name: str, as_json: bool) -> None:
+    """Print the full body of a named skill / slash command (mirrors kb.get_skill)."""
+    store = _load_store()
+    try:
+        result = skills_mod.get_skill(store, name)
+    except skills_mod.SkillsDisabledError as e:
+        raise click.ClickException(str(e)) from e
+    except KeyError as e:
+        raise click.ClickException(str(e)) from e
+    if as_json:
+        _emit_json(result)
+        return
+    click.echo(result["body"])
 
 
 # --- status / health ------------------------------------------------------
@@ -317,6 +359,59 @@ def stats(days: int, as_json: bool) -> None:
     )
     if cites["invalid_claim"] or cites["broken_citation"]:
         _echo(f"    invalid: {cites['invalid_claim']}, broken: {cites['broken_citation']}")
+
+
+@cli.command()
+@click.option(
+    "--days",
+    default=365,
+    show_default=True,
+    type=click.IntRange(min=0),
+    help="Window (local calendar days). Use 0 for all-time.",
+)
+@click.option(
+    "--tz-offset-minutes",
+    default=0,
+    show_default=True,
+    type=int,
+    help="Viewer's UTC offset in minutes for local-time bucketing.",
+)
+@click.option("--tz", default=None, help="IANA zone for local-time bucketing (wins over offset).")
+@click.option("--project", default=None, help="Viewer project for audit scope filtering.")
+@click.option("--agent", default=None, help="Viewer agent for audit scope filtering.")
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON instead of a table.")
+def activity(
+    days: int,
+    tz_offset_minutes: int,
+    tz: str | None,
+    project: str | None,
+    agent: str | None,
+    as_json: bool,
+) -> None:
+    """Audit activity buckets: per-day counts, hour-of-week matrix, actors."""
+    from .scoping import viewer_from
+
+    store = _load_store()
+    viewer = viewer_from(
+        config_path=store.config_path,
+        project=project,
+        agent=agent,
+    )
+    body = stats_mod.collect_activity(
+        store, days=days, tz_offset_minutes=tz_offset_minutes, tz=tz, viewer=viewer,
+    )
+    if as_json:
+        _emit_json(body)
+        return
+    window = "all time" if body["window_days"] is None else f"last {body['window_days']}d"
+    _echo(
+        f"activity ({window}): {_style(str(body['total_events']), fg='cyan')} events "
+        f"on {body['active_days']} day(s)"
+    )
+    if body["first_event_day"]:
+        _echo(f"  span: {body['first_event_day']} → {body['last_event_day']}")
+    for actor, count in list(body["by_actor"].items())[:8]:
+        _echo(f"  {actor}: {count}")
 
 
 @cli.command(name="digest")
@@ -1628,6 +1723,38 @@ def new_cmd(
         return
     click.echo(pr.id)
 
+@cli.command(name="experts")
+@click.argument("topic")
+@click.option("--limit", default=10, show_default=True, type=int)
+@click.option("--min-claims", "min_claims", default=1, show_default=True, type=int)
+@click.option(
+    "--weight",
+    default="count",
+    show_default=True,
+    help="ranking weight: count | recency | citation (unknown falls back to count).",
+)
+@click.option("--json", "as_json", is_flag=True, help="emit the ranking as JSON.")
+def experts_cmd(
+    topic: str, limit: int, min_claims: int, weight: str, as_json: bool
+) -> None:
+    """Rank entities by evidence density on TOPIC (read-only)."""
+    from .experts import rank_experts
+
+    store = _load_store()
+    rows = rank_experts(store, topic, limit=limit, min_claims=min_claims, weight=weight)
+    if as_json:
+        _emit_json({"experts": rows})
+        return
+    if not rows:
+        click.echo("no experts found.")
+        return
+    for row in rows:
+        click.echo(
+            f"{row['name']} ({row['type']})  "
+            f"claims={row['claim_count']} citations={row['citation_count']} "
+            f"score={row['score']}"
+        )
+
 
 @cli.group(name="schema")
 def schema() -> None:
@@ -1944,6 +2071,69 @@ def archive(claim_id: str) -> None:
     with _cli_errors():
         life.archive(store, claim_id=claim_id, actor=_whoami())
     click.echo(f"archived {claim_id}")
+
+
+@cli.command(name="claims-clear")
+@click.option("--auto-only", is_flag=True, default=True, show_default=True,
+              help="Clear only auto-approved claims (default: yes)")
+@click.option("--before", type=str, default=None,
+              help="Clear only claims created before this date (ISO 8601, e.g. 2026-07-01)")
+@click.option("--confirm", is_flag=True, default=False,
+              help="Skip confirmation prompt")
+@click.option("--dry-run", is_flag=True, default=False,
+              help="Preview what would be cleared without making changes")
+def claims_clear(auto_only: bool, before: str | None, confirm: bool, dry_run: bool) -> None:
+    """Clear auto-saved claims. Archived claims are preserved in history."""
+    from datetime import datetime
+
+    store = _load_store()
+    before_dt = None
+    if before:
+        try:
+            before_dt = datetime.fromisoformat(before)
+        except ValueError as err:
+            raise click.ClickException(
+                f"invalid date format: {before} (use ISO 8601, e.g. 2026-07-01)"
+            ) from err
+
+    with _cli_errors():
+        to_clear = life.clear_claims(
+            store,
+            auto_only=auto_only,
+            before=before_dt,
+            actor=_whoami(),
+            dry_run=True,  # Always dry-run first to show what will be cleared
+        )
+
+    if not to_clear:
+        click.echo("no claims match the criteria")
+        return
+
+    click.echo(f"found {len(to_clear)} claims to clear:")
+    for claim in to_clear[:10]:  # Show first 10
+        click.echo(f"  {claim.id}: {claim.text[:60]}")
+    if len(to_clear) > 10:
+        click.echo(f"  ... and {len(to_clear) - 10} more")
+
+    if dry_run:
+        click.echo("(dry-run mode: no changes made)")
+        return
+
+    if not confirm and not click.confirm(f"\nClear {len(to_clear)} claims?"):
+        click.echo("cancelled")
+        return
+
+    # Now actually clear them
+    with _cli_errors():
+        life.clear_claims(
+            store,
+            auto_only=auto_only,
+            before=before_dt,
+            actor=_whoami(),
+            dry_run=False,
+        )
+
+    click.echo(f"cleared {len(to_clear)} claims")
 
 
 @cli.command()
@@ -2471,6 +2661,31 @@ def context(
         graph_limit=graph_limit,
     )
     _emit_json(pack)
+
+
+@cli.command(name="context-hook", hidden=True)
+def context_hook() -> None:
+    """Emit relevant KB context for a host UserPromptSubmit hook (reads stdin).
+
+    Wired by the claude-code and codex adapters (#425); not meant to be run
+    by hand. Both hosts emit the same {"prompt", "session_id", ...} shape on
+    stdin and expect the same additionalContext envelope back, so one
+    command serves both. Always exits 0 so it can never block a turn.
+    """
+    import sys
+
+    from . import hooks
+
+    stdin_text = sys.stdin.read()
+    store = _capture_store()
+    out = ""
+    if store is not None:
+        try:
+            out = hooks.build_claude_prompt_hook(store, stdin_text)
+        except Exception:
+            out = ""
+    if out:
+        click.echo(out)
 
 
 @cli.command()
@@ -3584,12 +3799,21 @@ def install_mcp(
         click.echo(f"  ~ {f}  (merged into existing)")
     for f in result.skipped:
         click.echo(f"  · {f}  (already present)")
+    for f in result.failed:
+        click.echo(f"  ✗ {f}  (could not install — left unchanged)")
     click.echo(
         f"Done — {len(result.written)} written, "
         f"{len(result.appended)} appended, {len(result.merged)} merged, "
-        f"{len(result.skipped)} skipped "
+        f"{len(result.skipped)} skipped, {len(result.failed)} failed "
         f"under {target}"
     )
+    if result.failed:
+        # a failed install is not a no-op: exit non-zero so scripts (and the
+        # user) notice vouch was NOT wired into these files.
+        raise click.ClickException(
+            f"{len(result.failed)} file(s) could not be installed: "
+            f"{', '.join(result.failed)}"
+        )
 
 
 # --- sync: bidirectional vouch <-> Obsidian-style vault -------------------
@@ -3719,6 +3943,71 @@ def _resolve_auth_token(auth: str | None) -> str | None:
             )
         return env_token
     return auth
+
+
+@cli.command(name="console")
+@click.option(
+    "--bind",
+    "bind",
+    default="127.0.0.1:5173",
+    show_default=True,
+    help="host:port to bind. A non-loopback host (e.g. 0.0.0.0) also "
+    "requires --allow-remote so the proxy bridge isn't exposed openly.",
+)
+@click.option(
+    "--allow-remote",
+    is_flag=True,
+    help="Drop the loopback guard on the /proxy bridge. Only for a deployment "
+    "behind its own auth — a same-origin page could otherwise drive a "
+    "local reviewer's backends.",
+)
+@click.option(
+    "--open-browser/--no-open-browser",
+    default=True,
+    show_default=True,
+    help="Open the browser to the console on startup.",
+)
+def console(bind: str, allow_remote: bool, open_browser: bool) -> None:
+    """Serve the vouch web console (the React review UI) locally.
+
+    Ships the built SPA and a same-origin /proxy bridge to your
+    `vouch serve --transport http` backends — one `pip install 'vouch-kb[web]'`,
+    no node. Add a backend from the connect dialog in the UI.
+    """
+    from .web import _require_console_deps
+
+    try:
+        _require_console_deps()
+    except ImportError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    from .web.console import ConsoleError, resolve_console_dir, serve_console
+
+    host, sep, port_raw = bind.partition(":")
+    if not sep:
+        raise click.ClickException(f"invalid --bind {bind!r}; expected host:port")
+    try:
+        port = int(port_raw)
+    except ValueError as exc:
+        raise click.ClickException(f"invalid port in --bind {bind!r}") from exc
+    host = host or "127.0.0.1"
+    if host not in ("127.0.0.1", "::1", "localhost") and not allow_remote:
+        raise click.ClickException(
+            f"--bind {bind} is non-loopback; pass --allow-remote to expose the "
+            "proxy bridge (only behind your own auth)."
+        )
+
+    url = f"http://{host}:{port}/"
+    if open_browser and resolve_console_dir() is not None:
+        import threading
+        import webbrowser
+
+        threading.Timer(0.6, lambda: webbrowser.open(url)).start()
+    click.echo(f"vouch console → {url}")
+    try:
+        serve_console(host=host, port=port, allow_remote=allow_remote)
+    except ConsoleError as exc:
+        raise click.ClickException(str(exc)) from exc
 
 
 @cli.command(name="review-ui")

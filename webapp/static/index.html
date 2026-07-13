@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>vouch — the record</title>
+<link rel="stylesheet" href="/static/app.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#128210;</text></svg>">
+</head>
+<body>
+
+<header class="ledger-head">
+  <div class="masthead">
+    <span class="wordmark">vouch</span>
+    <span class="tagline">the record, review-gated</span>
+  </div>
+  <form id="search-form" class="lookup" role="search">
+    <input id="search-input" type="search" placeholder="look up the record — claims, pages, entities…"
+           autocomplete="off" aria-label="Search the knowledge base">
+  </form>
+  <div class="gate-lamp" id="gate-lamp" title="proposals awaiting review">
+    <span class="lamp-dot" id="lamp-dot" aria-hidden="true"></span>
+    <span id="lamp-text">…</span>
+  </div>
+</header>
+
+<main class="console">
+  <aside class="gate-rail" aria-label="The gate">
+    <h2 class="rail-title">the gate</h2>
+    <dl class="tallies" id="tallies">
+      <div><dt>claims</dt><dd id="t-claims">–</dd></div>
+      <div><dt>pages</dt><dd id="t-pages">–</dd></div>
+      <div><dt>sources</dt><dd id="t-sources">–</dd></div>
+      <div><dt>pending</dt><dd id="t-pending" class="pending-num">–</dd></div>
+    </dl>
+
+    <section class="rail-section">
+      <h3>awaiting review <span class="mut">oldest first</span></h3>
+      <ol class="pending-list" id="pending-list"><li class="mut">loading…</li></ol>
+      <p class="rail-note">approve in <code>vouch review-ui</code> or <code>vouch approve &lt;id&gt;</code> —
+      this console proposes, it never approves.</p>
+    </section>
+
+    <section class="rail-section">
+      <h3>followups due</h3>
+      <ul class="due-list" id="due-list"><li class="mut">none</li></ul>
+    </section>
+
+    <section class="rail-section">
+      <h3>going stale</h3>
+      <ul class="due-list" id="stale-list"><li class="mut">none</li></ul>
+    </section>
+  </aside>
+
+  <section class="converse" aria-label="Converse with the record">
+    <div class="transcript" id="transcript">
+      <div class="entry entry-system">
+        <p>Ask the record. Every answer cites its ids — click a
+        <button class="cite demo-cite" type="button">citation</button> to open the
+        underlying claim, page, or source with its evidence.</p>
+      </div>
+    </div>
+    <form id="chat-form" class="ask">
+      <textarea id="chat-input" rows="2" placeholder="ask the record, or tell it something to remember…"
+                aria-label="Message"></textarea>
+      <button type="submit" id="chat-send">ask</button>
+    </form>
+    <p class="keyless-note" id="keyless-note" hidden>
+      no model connected — set <code>LLM_API_KEY</code> to converse.
+      lookup and the gate panel work without one.
+    </p>
+  </section>
+</main>
+
+<aside class="drawer" id="drawer" hidden aria-label="Record inspector">
+  <div class="drawer-head">
+    <span class="drawer-kind" id="drawer-kind">record</span>
+    <code class="drawer-id" id="drawer-id"></code>
+    <button class="drawer-close" id="drawer-close" aria-label="Close">×</button>
+  </div>
+  <div class="drawer-body" id="drawer-body"></div>
+</aside>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
