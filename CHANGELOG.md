@@ -7,6 +7,18 @@ All notable changes to vouch are documented here. Format follows
 ## [Unreleased]
 
 ### Added
+- `kb.list_skills` / `kb.get_skill` — agents can enumerate the Claude Code
+  slash-command and `SKILL.md` catalogue visible at `<kb_root>/.claude/` and
+  `~/.claude/` over MCP, then fetch the full body of one by name (project-local
+  entries override user-global on collision). Exposed across MCP (`kb_list_skills`
+  / `kb_get_skill`), JSONL, and the CLI (`vouch list-skills` / `vouch get-skill`).
+- `mcp.publish_skills` config flag (default `true`) — gates the skill catalogue
+  for "company-brain" deployments where the catalogue itself is sensitive. When
+  `false`, `kb.list_skills` returns an empty list and `kb.get_skill` errors with
+  `permission_denied`; the flag is read fresh on every call so flipping it hides
+  the catalogue without restarting the server, and is surfaced on
+  `kb.capabilities.mcp.publish_skills` so clients can detect the gate. An
+  existing KB with no `mcp:` block stays default-on (#235).
 - `vouch console`: serve the vendored React web console straight from the
   installed package — a same-origin `/proxy` bridge (loopback-guarded) to
   `vouch serve --transport http` backends, reimplementing the vite dev-proxy
@@ -20,12 +32,38 @@ All notable changes to vouch are documented here. Format follows
   filtered like `kb.audit`.
 - console Dashboard view: 12-month activity calendar, last-30-days bars,
   hour-of-week heatmap, top actors and event mix, driven by `kb.activity`.
+- codex: wired `UserPromptSubmit` to `vouch context-hook` for the first
+  time, reusing the existing command unmodified — codex's hook
+  payload/response shape matches claude-code's exactly. (#425)
+- dual-solve web ui: file-changes tree view in the candidate panes — a compact
+  folders-first file tree drives a per-file diff pane, replacing the flat
+  changed-files list and the stacked all-files diff. selection is
+  per-candidate, so inspecting claude's diff never moves the codex pane.
+  (#294)
 
 ### Fixed
 - `vouch digest --limit` now caps the followups-due section like the
   pending, decisions, and stale sections — it previously returned every
   due followup regardless of the limit, contradicting the `--limit` help.
 
+- the dual-solve diff renderer dropped added/removed lines whose content
+  starts with `++`/`--` (e.g. an added `++counter` line) by treating them as
+  `+++`/`---` file headers; the header skip now requires the trailing
+  space-and-path form. (#294)
+- `compile_kb()` could file two page proposals for the same title when the
+  LLM's batch drafted the same topic (or same slug, e.g. "Retry Policy" vs
+  "retry policy") twice — `taken_names` was only seeded from on-disk pages
+  and pending proposals, never updated as drafts were accepted within the
+  batch. Approving the second proposal would silently route through
+  `update_page()` and overwrite the first. (#439)
+
+### Fixed
+- claude-code: the `UserPromptSubmit` context hook computed retrieval but
+  never fed the entity-salience reflex (#223) — `salience.record_query`
+  was never called from the hook path, leaving the reflex permanently
+  dormant for every claude-code session. OpenClaw's context engine already
+  called it correctly; cursor's `beforeSubmitPrompt` hook cannot accept
+  injected context at all, so it is not wired. (#425)
 ## [1.2.2] — 2026-07-07
 
 ### Packaging
@@ -38,6 +76,32 @@ All notable changes to vouch are documented here. Format follows
   otherwise wouldn't match the `vouch` script name.
 - README carries an `<!-- mcp-name: io.github.vouchdev/vouch -->` marker;
   the registry verifies package ownership by matching it against `server.json`.
+
+### Fixed
+- `vouch install-mcp <host>` (codex `toml_merge`): a `config.toml` the minimal
+  serializer couldn't faithfully re-emit (a non-BMP string value, a `nan`/`inf`
+  float) was bucketed as `skipped` and printed as `(already present)` with a
+  clean `Done`, so the user believed vouch was wired into codex when it wasn't.
+  serializer-failure now lands in a distinct `failed` bucket, is reported as
+  such, and the command exits non-zero — "already installed" and "install
+  failed" no longer look the same.
+- `vouch install-mcp <host>`: a manifest `dst` that escaped the target tree
+  (via `..` or an absolute path) is now refused with an `AdapterError` instead
+  of writing outside `target` (defense in depth for the manifest file writer;
+  shipped adapters are unaffected).
+- dual-solve review-ui: the recommendation hint rendered "neither engine
+  produced a usable diff" for the entire duration of a still-running job — the
+  hint was computed over the not-yet-populated candidate list on every poll.
+  it is now omitted until candidates exist.
+- `session.crystallize`: retrying on a session that hasn't been ended rewrote
+  the `session-<id>` summary page with a fresh wall-clock `Ended:` stamp each
+  time (and needlessly re-embedded it), so the "idempotent retry" wasn't. an
+  open session now renders a stable marker, so retries produce an identical
+  body.
+- `vouch capture ingest-codex`: rollout parsing had no size cap and could read
+  an oversized (or newline-free blob) rollout whole into memory. the file is
+  now bounded to 64 MiB up front, mirroring the byte caps on other untrusted
+  reads.
 
 ## [1.2.1] — 2026-07-06
 

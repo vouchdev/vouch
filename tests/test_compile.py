@@ -417,3 +417,75 @@ def test_compile_logs_attributed_audit_event(
     events = [e for e in audit_mod.read_events(store.kb_dir)
               if e.event == "compile.run"]
     assert len(events) == 1
+
+
+def test_same_batch_duplicate_title_drops_second(
+    store: KBStore, tmp_path: Path,
+) -> None:
+    """Regression for #439: when the LLM returns two drafts with the same
+    title in a single batch, the second must be dropped as a collision rather
+    than both being filed as proposals (which would cause a duplicate-proposal
+    crash on the second approve).
+
+    Before the fix, taken_names was only seeded from already-on-disk pages
+    and pending proposals — it was never updated as drafts were accepted in
+    the phase-1 loop, so a sibling draft with the same title slipped through
+    _draft_problem's collision guard."""
+    c1 = _approved_claim(store, "a fact about retries")
+    c2 = _approved_claim(store, "a second fact about retries")
+    cmd = _stub_llm(tmp_path, [
+        {
+            "title": "Retry Policy",
+            "type": "decision",
+            "body": f"First version [claim: {c1}]",
+            "claims": [c1],
+        },
+        {
+            "title": "Retry Policy",
+            "type": "decision",
+            "body": f"Duplicate version [claim: {c2}]",
+            "claims": [c2],
+        },
+    ])
+    report = compile_kb(store, config=_cfg(cmd))
+
+    # Only the first draft should be proposed; the second is a same-batch collision.
+    assert len(report.proposed) == 1
+    assert report.proposed[0]["title"] == "Retry Policy"
+    assert len(report.dropped) == 1
+    assert report.dropped[0]["title"] == "Retry Policy"
+    assert "already exists or is pending review" in report.dropped[0]["reason"]
+
+    # Confirm only one pending proposal was filed.
+    pending = store.list_proposals(ProposalStatus.PENDING)
+    assert len(pending) == 1
+    assert pending[0].payload["title"] == "Retry Policy"
+
+
+def test_same_batch_duplicate_slug_drops_second(
+    store: KBStore, tmp_path: Path,
+) -> None:
+    """Regression for #439: titles that slugify to the same id (e.g. 'Retry
+    Policy' and 'retry-policy') must also be caught as same-batch collisions,
+    since approve() uses the slug as the on-disk page id."""
+    c1 = _approved_claim(store, "a fact about auth")
+    c2 = _approved_claim(store, "another fact about auth")
+    cmd = _stub_llm(tmp_path, [
+        {
+            "title": "Auth Flow",
+            "type": "workflow",
+            "body": f"First [claim: {c1}]",
+            "claims": [c1],
+        },
+        {
+            "title": "auth flow",  # same slug as above
+            "type": "workflow",
+            "body": f"Duplicate slug [claim: {c2}]",
+            "claims": [c2],
+        },
+    ])
+    report = compile_kb(store, config=_cfg(cmd))
+
+    assert len(report.proposed) == 1
+    assert len(report.dropped) == 1
+    assert "already exists or is pending review" in report.dropped[0]["reason"]

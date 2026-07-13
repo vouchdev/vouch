@@ -496,6 +496,13 @@ class Capabilities(BaseModel):
         default_factory=list,
         description="OpenClaw context engines exposed (see openclaw.plugin.json)",
     )
+    mcp: dict[str, Any] = Field(
+        default_factory=lambda: {"publish_skills": True},
+        description=(
+            "mcp surface flags mirrored from config.yaml `mcp:` block. "
+            "`publish_skills` gates kb.list_skills / kb.get_skill."
+        ),
+    )
     host_compat: dict[str, Any] = Field(
         default_factory=dict,
         description=(
