@@ -6,6 +6,8 @@ All notable changes to vouch are documented here. Format follows
 
 ## [Unreleased]
 
+## [1.3.0] — 2026-07-14
+
 ### Added
 - `vouch console`: serve the vendored React web console straight from the
   installed package — a same-origin `/proxy` bridge (loopback-guarded) to
@@ -32,6 +34,89 @@ All notable changes to vouch are documented here. Format follows
   `llm: true` and falls back to deterministic claim synthesis when no
   `compile.llm_cmd` is configured. page citations open the page drawer, and
   llm answers carry an `llm` badge next to the confidence grade.
+- session transcript viewer: the console Review view opens the full
+  transcript of a captured session — thinking, per-tool call rendering
+  with diffs, code blocks, and subagent drill-down — via the new
+  `kb.session_transcript` read method. it locates the raw claude code
+  jsonl session file or codex rollout by id, parses it into normalized
+  blocks, and degrades to the observation buffer when the raw file is
+  gone.
+- review-gated artifact delete: `kb.propose_delete` files a delete
+  proposal for a claim, page, entity, or relation. execution happens only
+  through `proposals.approve()`, which checks the referenced-by matrix,
+  removes the file, deindexes it, and records exactly what was removed in
+  the decided proposal and audit event.
+- `kb.clear_claims` / `vouch claims-clear`: bulk-remove auto-approved
+  claims (`--auto-only`, `--before`, `--dry-run`, and a confirm gate) for
+  cleaning up capture noise in one pass (#433).
+- session-split summaries: large captured sessions are split into topical
+  summary pages by a deployment-configured llm (`capture.split` in
+  `config.yaml`; the split `llm_cmd` falls back to `compile.llm_cmd`),
+  each filed as its own pending summary. `kb.summarize_session` runs the
+  pass on demand, `kb.list_sessions` lists captured sessions for the
+  review pipeline, and a filed mechanical summary can be llm-narrated in
+  place.
+- codex adapter: `vouch install-mcp codex` now wires the full tier — a
+  `toml_merge` install strategy for `.codex/config.toml`, an agents.md
+  fenced snippet, skills mirroring the vouch slash commands, and hook
+  wiring for automatic session capture. codex session rollouts are
+  ingested into review-gated summaries.
+- mcp serves a **minimal tool profile by default** (8 core tools) instead
+  of the full method surface; widen with `VOUCH_TOOL_PROFILE=standard|full`
+  or `mcp.tool_profile` in `config.yaml`. approve/reject and maintenance
+  tools live in `standard`/`full` — they stay human/cli actions, not agent
+  defaults. the jsonl and cli surfaces are unaffected.
+- per-prompt auto-recall: the claude-code adapter's `UserPromptSubmit`
+  hook (`vouch context-hook`) injects relevant kb context on every
+  prompt, so recall no longer depends on the agent remembering to ask.
+- `kb.triage_pending` — advisory triage scoring over the pending-review
+  queue. scores each pending proposal on fit, citation quality,
+  duplication risk, and contradiction risk, then attaches a
+  `_meta.vouch_triage` block to help a reviewer prioritize a long
+  `kb.list_pending`. read-only and advisory only: it never approves,
+  rejects, or moves a proposal — a human still decides. degrades to a
+  `difflib` heuristic without the `[embeddings]` extra. opt-in via
+  `triage.enabled: true`; `vouch triage` mirrors it on the cli (#322).
+- `kb.diff` is registered at all four `kb.*` surface sites (mcp tool,
+  jsonl handler, capabilities, cli) instead of cli-only (#327).
+- demo: dual-path llm configuration — compile & summarize run through
+  session-capture replay or directly against the api via a stdlib shim
+  wired as `compile.llm_cmd` with a byo `ANTHROPIC_API_KEY`.
+
+### Changed
+- retrieval `auto`/`hybrid` now **fuses embedding + fts5** results via
+  reciprocal rank fusion instead of a waterfall (embedding-first,
+  fts5-fallback), with near-duplicate suppression over the fused list —
+  the highest-scored near-duplicate wins, caller order is preserved for
+  the context pack.
+- mcp serves one-line tool descriptions under non-full profiles, keeping
+  the default surface cheap in agent context windows.
+
+### Fixed
+- rpc internal errors no longer leak tracebacks over the wire; they log
+  server-side and return a clean error envelope.
+- models reject empty `text`/`name`/`title` on claim, entity, and page at
+  validation time instead of filing empty artifacts.
+- `kb.crystallize` retries are idempotent for summary pages — a re-run
+  after a partial failure no longer files a duplicate page proposal.
+- volunteer scoring treats hybrid relevance as rank-relative instead of
+  assuming pre-normalized scores.
+- `kb.capabilities` reads `openclaw.compat` from `package.json` instead
+  of a stale manifest field (#417).
+- the context hook never raises on a non-dict payload or a missing kb —
+  a broken hook environment degrades to no injection instead of failing
+  the host prompt.
+- `context` and `lifecycle` catch only the exceptions they can handle
+  (sqlite errors on fts5 fallback, missing-artifact on citation lookup)
+  instead of blanket `except Exception`.
+
+### Security
+- `kb.register_source_from_path` blocks path traversal: the path is
+  resolved (following symlinks) and must land inside the kb root before
+  reading, with `O_NOFOLLOW` + `fstat` closing the toctou window between
+  the containment check and the read. previously any file the process
+  could access was registrable as a "source" and retrievable via
+  `kb.cite` / `kb.list_sources` (#421).
 
 ## [1.2.2] — 2026-07-07
 
