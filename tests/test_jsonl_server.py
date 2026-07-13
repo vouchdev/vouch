@@ -248,3 +248,27 @@ def test_jsonl_internal_error_omits_traceback(monkeypatch) -> None:
     assert resp["ok"] is False
     assert resp["error"]["code"] == "internal_error"
     assert "traceback" not in resp["error"]
+
+
+def test_jsonl_lifecycle_guard_maps_to_invalid_request(
+    store: KBStore, monkeypatch,
+) -> None:
+    """Lifecycle guards are caller conditions, not server faults.
+
+    `kb.supersede` of a claim onto itself raises LifecycleError, which the
+    envelope used to misreport as internal_error (and log a full server-side
+    traceback for what is a bad request). It must map to invalid_request,
+    exactly as the CLI already surfaces it via _cli_errors."""
+    monkeypatch.chdir(store.root)
+    src = store.put_source(b"e")
+    store.put_claim(Claim(id="c1", text="a durable claim", evidence=[src.id]))
+    resp = handle_request({
+        "id": "r1", "method": "kb.supersede",
+        "params": {"old_claim_id": "c1", "new_claim_id": "c1"},
+    })
+    assert resp["ok"] is False
+    assert resp["error"]["code"] == "invalid_request"
+    assert "cannot supersede itself" in resp["error"]["message"]
+    # the guard fired before any write — the claim is untouched
+    assert store.get_claim("c1").status.value == "working"
+    assert store.get_claim("c1").superseded_by is None

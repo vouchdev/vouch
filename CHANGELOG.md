@@ -38,6 +38,13 @@ All notable changes to vouch are documented here. Format follows
   batch. Approving the second proposal would silently route through
   `update_page()` and overwrite the first. (#439)
 
+### Fixed
+- the JSONL / HTTP `/rpc` envelope misreported lifecycle guard failures
+  (e.g. `kb.supersede` of a claim onto itself) as `internal_error` and
+  logged a full server-side traceback for what is a bad request —
+  `LifecycleError` now maps to `invalid_request` like `ProposalError`,
+  matching how the CLI already surfaces it.
+
 ## [1.2.2] — 2026-07-07
 
 ### Packaging
