@@ -87,9 +87,13 @@ For the embedding-heavy tests (separate job in CI): `pip install
 
 ## Ship a feature branch
 
+`test` is the integration branch — base feature branches on it and
+target it in the PR. Docs-only changes may branch off `main` instead
+(see the worktree note below).
+
 ```bash
-git fetch origin main
-git switch -c <type>/<topic> origin/main
+git fetch origin test
+git switch -c <type>/<topic> origin/test
 # … work …
 make check
 git add <files-by-name>          # never `git add -A` — leaks .claude/, web/, etc.
