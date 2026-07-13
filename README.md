@@ -81,6 +81,8 @@ pip install -e '.[dev,web]'
 
 `pip install -e` means edits to the source take effect without reinstalling. The `dev,web` extras are what CI installs — `make check` (lint + type + test) needs both. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full dev workflow.
 
+The browser console isn't prebuilt in a source checkout — release wheels ship it ready-built. Run `make webapp-build` once (needs node), then `vouch console` works; `make console` runs the backend and the console dev server together instead.
+
 ## Reproduce the loop on your project
 
 After exploring the demo above, set up vouch in your own project:
