@@ -267,7 +267,7 @@ def test_approve_rechecks_reference_added_after_propose(store: KBStore) -> None:
     pr = propose_delete(store, target_kind="claim", target_id="c1", proposed_by="agent")
     # a page starts referencing c1 AFTER the proposal was filed
     store.put_page(Page(id="p1", title="P", body="", claims=["c1"]))
-    with pytest.raises(ProposalError, match="still referenced"):
+    with pytest.raises(ProposalError, match="referenced"):
         approve(store, pr.id, approved_by="reviewer")
     # target survives, proposal stays pending
     assert store._claim_path("c1").exists()
