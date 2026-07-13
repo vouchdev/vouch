@@ -51,7 +51,15 @@ function ConfidenceBadge({ level }: { level?: Confidence }) {
   )
 }
 
-function AnswerBody({ result, onCite }: { result: SynthesizeResult; onCite: (id: string) => void }) {
+function AnswerBody({
+  result,
+  onCite,
+}: {
+  result: SynthesizeResult
+  onCite: (kind: 'claim' | 'page', id: string) => void
+}) {
+  const citeKind = (id: string): 'claim' | 'page' =>
+    result.pages?.includes(id) ? 'page' : 'claim'
   if (result.answer === '') {
     return (
       <div>
@@ -78,7 +86,7 @@ function AnswerBody({ result, onCite }: { result: SynthesizeResult; onCite: (id:
           ) : (
             <button
               key={i}
-              onClick={() => onCite(seg.claimId)}
+              onClick={() => onCite(citeKind(seg.claimId), seg.claimId)}
               className="mx-0.5 inline-block max-w-72 truncate rounded border border-accent/40 bg-accent/10 px-1.5 align-middle font-mono text-[11px] leading-5 text-accent-2 transition hover:bg-accent/20"
               title={seg.claimId}
             >
@@ -89,6 +97,14 @@ function AnswerBody({ result, onCite }: { result: SynthesizeResult; onCite: (id:
       </p>
       <div className="mt-2 flex items-center gap-2">
         <ConfidenceBadge level={result._meta?.synthesis_confidence} />
+        {result._meta?.synthesis_backend === 'llm' && (
+          <span
+            data-testid="synthesis-backend"
+            className="rounded-full border border-rule px-2 py-0.5 font-mono text-[10px] uppercase tracking-wide text-sepia"
+          >
+            llm
+          </span>
+        )}
         {result.gaps.length > 0 && (
           <span className="text-xs text-sepia">
             gaps: {result.gaps.map((g) => (
@@ -299,7 +315,17 @@ export function ChatView() {
         if (threadEndpointRef.current !== submittedFor) return
         setMessages((m) => [...m, { role: 'vouch', kind: 'search', query, result }])
       } else {
-        const result = await rpc<SynthesizeResult>(conn, 'kb.synthesize', { query: text })
+        // LLM-first: the endpoint drafts the answer with its configured
+        // compile.llm_cmd, grounded in KB pages + approved claims. Endpoints
+        // without an llm_cmd reject with "not configured" — fall back to
+        // deterministic claim synthesis so the chat still answers.
+        let result: SynthesizeResult
+        try {
+          result = await rpc<SynthesizeResult>(conn, 'kb.synthesize', { query: text, llm: true })
+        } catch (err) {
+          if (!(err instanceof VouchRpcError) || !/not configured/i.test(err.message)) throw err
+          result = await rpc<SynthesizeResult>(conn, 'kb.synthesize', { query: text })
+        }
         if (threadEndpointRef.current !== submittedFor) return
         setMessages((m) => [...m, { role: 'vouch', kind: 'answer', result }])
       }
@@ -332,7 +358,7 @@ export function ChatView() {
           ) : (
             <EmptyState
               title="Ask your knowledge base"
-              hint="Answers come only from approved, cited claims — nothing is guessed. Try a question about knowledge your agents have vouched, or run /search <term>."
+              hint="Answers are grounded in your KB's pages and approved claims, every citation verified — nothing is guessed. Try a question about knowledge your agents have vouched, or run /search <term>."
             />
           )
         ) : (
@@ -386,7 +412,7 @@ export function ChatView() {
                 return (
                   <div key={i} className="flex">
                     <div className="max-w-[85%] rounded-2xl rounded-bl-sm border border-rule bg-paper-2 px-4 py-3">
-                      <AnswerBody result={msg.result} onCite={(id) => setDrawer({ kind: 'claim', id })} />
+                      <AnswerBody result={msg.result} onCite={(kind, id) => setDrawer({ kind, id })} />
                     </div>
                   </div>
                 )

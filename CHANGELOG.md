@@ -39,6 +39,18 @@ All notable changes to vouch are documented here. Format follows
   filtered like `kb.audit`.
 - console Dashboard view: 12-month activity calendar, last-30-days bars,
   hour-of-week heatmap, top actors and event mix, driven by `kb.activity`.
+- `kb.synthesize` llm backend: `llm=true` drafts the answer with the
+  deployment-configured `compile.llm_cmd`, grounded in retrieved kb pages
+  and approved claims. code still verifies every `[id]` citation against
+  the offered sources — invented ids are stripped, and a draft left with no
+  verifiable citation returns an empty answer rather than a guess. the wire
+  shape is unchanged plus additive `pages` and `_meta.synthesis_backend`
+  fields. cli mirror: `vouch synthesize --llm`; the jsonl/http surface
+  already forwarded the flag.
+- console Chat: llm answers activated — the chat asks `kb.synthesize` with
+  `llm: true` and falls back to deterministic claim synthesis when no
+  `compile.llm_cmd` is configured. page citations open the page drawer, and
+  llm answers carry an `llm` badge next to the confidence grade.
 - codex: wired `UserPromptSubmit` to `vouch context-hook` for the first
   time, reusing the existing command unmodified — codex's hook
   payload/response shape matches claude-code's exactly. (#425)
