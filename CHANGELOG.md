@@ -61,6 +61,21 @@ All notable changes to vouch are documented here. Format follows
   fenced snippet, skills mirroring the vouch slash commands, and hook
   wiring for automatic session capture. codex session rollouts are
   ingested into review-gated summaries.
+- codex: wired `UserPromptSubmit` to `vouch context-hook` for the first
+  time, reusing the existing command unmodified — codex's hook
+  payload/response shape matches claude-code's exactly. (#425)
+- `kb.list_skills` / `kb.get_skill` — agents can enumerate the Claude Code
+  slash-command and `SKILL.md` catalogue visible at `<kb_root>/.claude/` and
+  `~/.claude/` over MCP, then fetch the full body of one by name (project-local
+  entries override user-global on collision). Exposed across MCP (`kb_list_skills`
+  / `kb_get_skill`), JSONL, and the CLI (`vouch list-skills` / `vouch get-skill`).
+- `mcp.publish_skills` config flag (default `true`) — gates the skill catalogue
+  for "company-brain" deployments where the catalogue itself is sensitive. When
+  `false`, `kb.list_skills` returns an empty list and `kb.get_skill` errors with
+  `permission_denied`; the flag is read fresh on every call so flipping it hides
+  the catalogue without restarting the server, and is surfaced on
+  `kb.capabilities.mcp.publish_skills` so clients can detect the gate. An
+  existing KB with no `mcp:` block stays default-on (#235).
 - mcp serves a **minimal tool profile by default** (8 core tools) instead
   of the full method surface; widen with `VOUCH_TOOL_PROFILE=standard|full`
   or `mcp.tool_profile` in `config.yaml`. approve/reject and maintenance
@@ -69,6 +84,9 @@ All notable changes to vouch are documented here. Format follows
 - per-prompt auto-recall: the claude-code adapter's `UserPromptSubmit`
   hook (`vouch context-hook`) injects relevant kb context on every
   prompt, so recall no longer depends on the agent remembering to ask.
+- `kb.experts` — rank the entities carrying the most matched evidence on
+  a free-text topic (count, recency, and citation weightings). read-only;
+  answers "who/what does this kb actually know about X" (#315).
 - `kb.triage_pending` — advisory triage scoring over the pending-review
   queue. scores each pending proposal on fit, citation quality,
   duplication risk, and contradiction risk, then attaches a
@@ -77,8 +95,16 @@ All notable changes to vouch are documented here. Format follows
   rejects, or moves a proposal — a human still decides. degrades to a
   `difflib` heuristic without the `[embeddings]` extra. opt-in via
   `triage.enabled: true`; `vouch triage` mirrors it on the cli (#322).
+- opt-in cross-encoder rerank of the context pack: enable with
+  `retrieval.rerank.enabled: true` in `config.yaml`; `retrieval.rerank.top_k`
+  bounds the rerank window. off by default (#436).
 - `kb.diff` is registered at all four `kb.*` surface sites (mcp tool,
   jsonl handler, capabilities, cli) instead of cli-only (#327).
+- dual-solve web ui: file-changes tree view in the candidate panes — a compact
+  folders-first file tree drives a per-file diff pane, replacing the flat
+  changed-files list and the stacked all-files diff. selection is
+  per-candidate, so inspecting claude's diff never moves the codex pane.
+  (#294)
 - demo: dual-path llm configuration — compile & summarize run through
   session-capture replay or directly against the api via a stdlib shim
   wired as `compile.llm_cmd` with a byo `ANTHROPIC_API_KEY`.
@@ -93,12 +119,51 @@ All notable changes to vouch are documented here. Format follows
   the default surface cheap in agent context windows.
 
 ### Fixed
+- audit: `log_event` serialises appends with a file lock, so concurrent
+  writers cannot fork the hash chain (#263).
+- `lifecycle.contradict()` no longer lets a claim contradict itself. calling
+  it with the same claim id on both sides previously wrote a self-loop
+  `contradicts` reference and flipped the claim to `contested` with no
+  actual counterparty; it now raises `LifecycleError`, mirroring the
+  existing guard in `supersede()`.
 - rpc internal errors no longer leak tracebacks over the wire; they log
   server-side and return a clean error envelope.
 - models reject empty `text`/`name`/`title` on claim, entity, and page at
   validation time instead of filing empty artifacts.
 - `kb.crystallize` retries are idempotent for summary pages — a re-run
   after a partial failure no longer files a duplicate page proposal.
+- `session.crystallize`: retrying on a session that hasn't been ended rewrote
+  the `session-<id>` summary page with a fresh wall-clock `Ended:` stamp each
+  time (and needlessly re-embedded it), so the "idempotent retry" wasn't. an
+  open session now renders a stable marker, so retries produce an identical
+  body.
+- claude-code: the `UserPromptSubmit` context hook computed retrieval but
+  never fed the entity-salience reflex (#223) — `salience.record_query`
+  was never called from the hook path, leaving the reflex permanently
+  dormant for every claude-code session. OpenClaw's context engine already
+  called it correctly; cursor's `beforeSubmitPrompt` hook cannot accept
+  injected context at all, so it is not wired. (#425)
+- `vouch search` tolerates fts index errors instead of crashing — a
+  broken or stale fts table degrades to the substring path (#438).
+- `list_pages` skips corrupt page files instead of failing the whole
+  listing, so one bad yaml no longer takes down every kb-wide caller
+  (#360).
+- context: the `require_citations` gate is computed after the `max_chars`
+  budget is applied, so a claim trimmed out by the budget can no longer
+  satisfy (or fail) the citation requirement on the pack (#268).
+- `vouch digest --limit` now caps the followups-due section like the
+  pending, decisions, and stale sections — it previously returned every
+  due followup regardless of the limit, contradicting the `--limit` help.
+- the dual-solve diff renderer dropped added/removed lines whose content
+  starts with `++`/`--` (e.g. an added `++counter` line) by treating them as
+  `+++`/`---` file headers; the header skip now requires the trailing
+  space-and-path form. (#294)
+- `compile_kb()` could file two page proposals for the same title when the
+  LLM's batch drafted the same topic (or same slug, e.g. "Retry Policy" vs
+  "retry policy") twice — `taken_names` was only seeded from on-disk pages
+  and pending proposals, never updated as drafts were accepted within the
+  batch. Approving the second proposal would silently route through
+  `update_page()` and overwrite the first. (#439)
 - volunteer scoring treats hybrid relevance as rank-relative instead of
   assuming pre-normalized scores.
 - `kb.capabilities` reads `openclaw.compat` from `package.json` instead
@@ -109,6 +174,25 @@ All notable changes to vouch are documented here. Format follows
 - `context` and `lifecycle` catch only the exceptions they can handle
   (sqlite errors on fts5 fallback, missing-artifact on citation lookup)
   instead of blanket `except Exception`.
+- `vouch install-mcp <host>` (codex `toml_merge`): a `config.toml` the minimal
+  serializer couldn't faithfully re-emit (a non-BMP string value, a `nan`/`inf`
+  float) was bucketed as `skipped` and printed as `(already present)` with a
+  clean `Done`, so the user believed vouch was wired into codex when it wasn't.
+  serializer-failure now lands in a distinct `failed` bucket, is reported as
+  such, and the command exits non-zero — "already installed" and "install
+  failed" no longer look the same.
+- `vouch install-mcp <host>`: a manifest `dst` that escaped the target tree
+  (via `..` or an absolute path) is now refused with an `AdapterError` instead
+  of writing outside `target` (defense in depth for the manifest file writer;
+  shipped adapters are unaffected).
+- dual-solve review-ui: the recommendation hint rendered "neither engine
+  produced a usable diff" for the entire duration of a still-running job — the
+  hint was computed over the not-yet-populated candidate list on every poll.
+  it is now omitted until candidates exist.
+- `vouch capture ingest-codex`: rollout parsing had no size cap and could read
+  an oversized (or newline-free blob) rollout whole into memory. the file is
+  now bounded to 64 MiB up front, mirroring the byte caps on other untrusted
+  reads.
 
 ### Security
 - `kb.register_source_from_path` blocks path traversal: the path is
@@ -378,6 +462,11 @@ All notable changes to vouch are documented here. Format follows
   KB under `eval/fixture-kb/`, and an `eval` workflow gating retrieval changes
   (#226).
 ### Fixed
+- `build_context_pack` now evaluates the `require_citations` gate (and
+  `quality.uncited_items`) after the `max_chars` budget drops tail items, so
+  the pack is never failed for uncited claims the caller did not receive.
+  Fixes #174.
+- `audit.log_event` now holds an exclusive cross-process lock around read-prev-hash → derive → append, closing a TOCTOU race where two concurrent writers observed the same `prev_hash` and forked the chain — `verify_chain` then reported "previous hash mismatch" at the second concurrent event forever, breaking the tamper-evidence guarantee from #244 under ordinary multi-writer usage (`vouch serve` + concurrent CLI, multiple agents on JSONL, scripted backgrounded approvals). Uses `fcntl.flock` on POSIX and `msvcrt.locking` on Windows against a sibling `audit.log.jsonl.lock` file so the audit log itself is never opened in a mode that could truncate it. Fixes #262.
 - `parse_since` (the `--since` parser behind `vouch metrics`/`vouch audit`) now raises a clean `MetricsError` for a duration too large to represent (e.g. `--since 1000000000000d`), instead of letting an uncaught `OverflowError` traceback escape — restoring the documented "clean error, not a traceback" contract.
 - `sync_apply` now loads the sync source exactly once and passes the same `_SyncSource` instance into `sync_check`, closing a TOCTOU window where a bundle replaced on disk between the two `_load_source` calls could cause the validation and write phases to operate on different snapshots. Also eliminates redundant directory walks (KB sources) and triple tarball opens (bundle sources). Fixes #217.
 - `vault_to_kb` now passes `slug_hint=page_id` to `propose_page` so vault edit proposals target the existing page id from frontmatter instead of a slugified copy of the title (fixes #219).

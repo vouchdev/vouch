@@ -69,7 +69,7 @@ Three rules that fall out of the layout:
 ```bash
 # from a clone
 python3 -m venv .venv && . .venv/bin/activate
-pip install -e '.[dev]'
+pip install -e '.[dev,web]'   # dev,web is what ci.yml installs; mypy needs the web extra
 
 # the CI gate — exactly what .github/workflows/ci.yml runs
 .venv/bin/python -m pytest tests/ -q --ignore=tests/embeddings

@@ -11,6 +11,7 @@ import getpass
 import io
 import json
 import os
+import sqlite3
 import sys
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
@@ -39,6 +40,7 @@ from . import pr_cache as prc_mod
 from . import provenance as prov_mod
 from . import recall as recall_mod
 from . import sessions as sess_mod
+from . import skills as skills_mod
 from . import stats as stats_mod
 from . import sync as sync_mod
 from . import synthesize as synth
@@ -236,7 +238,48 @@ def discover(path: str) -> None:
 @cli.command()
 def capabilities() -> None:
     """Emit the JSON capabilities descriptor (mirrors kb.capabilities)."""
-    _emit_json(build_caps().model_dump(mode="json"))
+    # Stay usable outside a KB: fall back to the default-on flag if no
+    # .vouch/ is discoverable here.
+    try:
+        publish_skills = skills_mod.publish_skills_enabled(_load_store())
+    except Exception:
+        publish_skills = True
+    _emit_json(build_caps(publish_skills=publish_skills).model_dump(mode="json"))
+
+
+@cli.command("list-skills")
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON instead of a table.")
+def list_skills(as_json: bool) -> None:
+    """List discoverable Claude Code skills / slash commands (mirrors kb.list_skills)."""
+    store = _load_store()
+    rows = skills_mod.list_skills(store)
+    if as_json:
+        _emit_json(rows)
+        return
+    if not rows:
+        # Either nothing installed, or mcp.publish_skills is false.
+        click.echo("no skills published")
+        return
+    for r in rows:
+        click.echo(f"{r['name']}  [{r['scope']}/{r['kind']}]  {r['description']}")
+
+
+@cli.command("get-skill")
+@click.argument("name")
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON instead of the body.")
+def get_skill(name: str, as_json: bool) -> None:
+    """Print the full body of a named skill / slash command (mirrors kb.get_skill)."""
+    store = _load_store()
+    try:
+        result = skills_mod.get_skill(store, name)
+    except skills_mod.SkillsDisabledError as e:
+        raise click.ClickException(str(e)) from e
+    except KeyError as e:
+        raise click.ClickException(str(e)) from e
+    if as_json:
+        _emit_json(result)
+        return
+    click.echo(result["body"])
 
 
 # --- status / health ------------------------------------------------------
@@ -1624,6 +1667,38 @@ def new_cmd(
         return
     click.echo(pr.id)
 
+@cli.command(name="experts")
+@click.argument("topic")
+@click.option("--limit", default=10, show_default=True, type=int)
+@click.option("--min-claims", "min_claims", default=1, show_default=True, type=int)
+@click.option(
+    "--weight",
+    default="count",
+    show_default=True,
+    help="ranking weight: count | recency | citation (unknown falls back to count).",
+)
+@click.option("--json", "as_json", is_flag=True, help="emit the ranking as JSON.")
+def experts_cmd(
+    topic: str, limit: int, min_claims: int, weight: str, as_json: bool
+) -> None:
+    """Rank entities by evidence density on TOPIC (read-only)."""
+    from .experts import rank_experts
+
+    store = _load_store()
+    rows = rank_experts(store, topic, limit=limit, min_claims=min_claims, weight=weight)
+    if as_json:
+        _emit_json({"experts": rows})
+        return
+    if not rows:
+        click.echo("no experts found.")
+        return
+    for row in rows:
+        click.echo(
+            f"{row['name']} ({row['type']})  "
+            f"claims={row['claim_count']} citations={row['citation_count']} "
+            f"score={row['score']}"
+        )
+
 
 @cli.group(name="schema")
 def schema() -> None:
@@ -2428,14 +2503,20 @@ def search(
         )
         used = "embedding" if hits else used
     if not hits and backend in ("auto", "fts5"):
-        hits = index_db.search(store.kb_dir, q, limit=fetch_limit)
-        used = "fts5" if hits else used
+        try:
+            hits = index_db.search(store.kb_dir, q, limit=fetch_limit)
+            used = "fts5" if hits else used
+        except sqlite3.Error:
+            hits = []
     if not hits and backend in ("auto", "substring"):
         hits = store.search_substring(q, limit=fetch_limit)
         used = "substring"
     if backend == "hybrid":
         emb = index_db.search_semantic(store.kb_dir, q, limit=fetch_limit * 2)
-        fts = index_db.search(store.kb_dir, q, limit=fetch_limit * 2)
+        try:
+            fts = index_db.search(store.kb_dir, q, limit=fetch_limit * 2)
+        except sqlite3.Error:
+            fts = []
         hits = rrf_fuse(emb, fts, limit=fetch_limit)
         used = "hybrid"
 
@@ -2536,9 +2617,10 @@ def context(
 def context_hook() -> None:
     """Emit relevant KB context for a host UserPromptSubmit hook (reads stdin).
 
-    Wired by the claude-code adapter; not meant to be run by hand. Reads the
-    host's JSON hook payload on stdin, prints an additionalContext envelope,
-    and always exits 0 so it can never block a turn.
+    Wired by the claude-code and codex adapters (#425); not meant to be run
+    by hand. Both hosts emit the same {"prompt", "session_id", ...} shape on
+    stdin and expect the same additionalContext envelope back, so one
+    command serves both. Always exits 0 so it can never block a turn.
     """
     import sys
 
@@ -3672,12 +3754,21 @@ def install_mcp(
         click.echo(f"  ~ {f}  (merged into existing)")
     for f in result.skipped:
         click.echo(f"  · {f}  (already present)")
+    for f in result.failed:
+        click.echo(f"  ✗ {f}  (could not install — left unchanged)")
     click.echo(
         f"Done — {len(result.written)} written, "
         f"{len(result.appended)} appended, {len(result.merged)} merged, "
-        f"{len(result.skipped)} skipped "
+        f"{len(result.skipped)} skipped, {len(result.failed)} failed "
         f"under {target}"
     )
+    if result.failed:
+        # a failed install is not a no-op: exit non-zero so scripts (and the
+        # user) notice vouch was NOT wired into these files.
+        raise click.ClickException(
+            f"{len(result.failed)} file(s) could not be installed: "
+            f"{', '.join(result.failed)}"
+        )
 
 
 # --- sync: bidirectional vouch <-> Obsidian-style vault -------------------

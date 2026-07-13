@@ -871,6 +871,16 @@ def test_contradict_marks_both_contested(store: KBStore) -> None:
     assert rel.relation == RelationType.CONTRADICTS
 
 
+def test_contradict_rejects_self_reference(store: KBStore) -> None:
+    src = store.put_source(b"e")
+    store.put_claim(Claim(id="a", text="x", evidence=[src.id]))
+    with pytest.raises(lifecycle.LifecycleError, match="cannot contradict itself"):
+        lifecycle.contradict(store, claim_a="a", claim_b="a", actor="u")
+    claim = store.get_claim("a")
+    assert claim.contradicts == []
+    assert claim.status != ClaimStatus.CONTESTED
+
+
 def test_archive_changes_status(store: KBStore) -> None:
     src = store.put_source(b"e")
     store.put_claim(Claim(id="c1", text="x", evidence=[src.id]))
@@ -927,3 +937,12 @@ def test_list_claims_skips_unreadable_file(store: KBStore) -> None:
 
     claims = store.list_claims()
     assert [c.id for c in claims] == ["c-ok"]
+
+
+def test_list_pages_skips_unreadable_file(store: KBStore) -> None:
+    """One corrupt page must not take down vouch search/status/lint."""
+    store.put_page(Page(id="p-ok", title="ok", body="content"))
+    (store.kb_dir / "pages" / "p-bad.md").write_text("not valid frontmatter")
+
+    pages = store.list_pages()
+    assert [p.id for p in pages] == ["p-ok"]
