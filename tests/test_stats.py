@@ -57,6 +57,20 @@ def test_citation_summary_flags_broken_and_invalid(store: KBStore) -> None:
     assert summary["claims_with_valid_citation"] == 1
 
 
+def test_citation_summary_honest_when_source_meta_unreadable(store: KBStore) -> None:
+    """Corrupt source meta must not inflate broken_citation — mirrors lint."""
+    src = store.put_source(b"e")
+    store.put_claim(Claim(id="c1", text="t", evidence=[src.id]))
+    meta = store.kb_dir / "sources" / src.id / "meta.yaml"
+    meta.write_text(
+        meta.read_text(encoding="utf-8") + "title: conversation \u00e2\u0080\u0094 vouch\n",
+        encoding="utf-8",
+    )
+    summary = stats.citation_summary(store)
+    assert summary["broken_citation"] == 0
+    assert summary["claims_with_valid_citation"] == 1
+
+
 def test_pending_summary_by_agent(store: KBStore) -> None:
     src = store.put_source(b"x")
     propose_claim(store, text="a", evidence=[src.id], proposed_by="agent-a")

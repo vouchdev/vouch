@@ -91,7 +91,10 @@ def _rate(numerator: int, denominator: int) -> float | None:
 
 def citation_summary(store: KBStore) -> dict[str, Any]:
     claims, findings = health._load_claims_for_lint(store)
-    sources_present = {s.id for s in store.list_sources()}
+    # Use the lint source collector, not list_sources(): a corrupt meta.yaml
+    # is still present on disk (id = directory name) and must not be counted
+    # as a broken citation — same invariant as health.lint (#81 follow-up).
+    sources_present, _ = health._collect_sources_for_lint(store)
     evidence_present = {e.id for e in store.list_evidence()}
 
     invalid_claim = sum(
