@@ -32,6 +32,9 @@ All notable changes to vouch are documented here. Format follows
   filtered like `kb.audit`.
 - console Dashboard view: 12-month activity calendar, last-30-days bars,
   hour-of-week heatmap, top actors and event mix, driven by `kb.activity`.
+- codex: wired `UserPromptSubmit` to `vouch context-hook` for the first
+  time, reusing the existing command unmodified — codex's hook
+  payload/response shape matches claude-code's exactly. (#425)
 - dual-solve web ui: file-changes tree view in the candidate panes — a compact
   folders-first file tree drives a per-file diff pane, replacing the flat
   changed-files list and the stacked all-files diff. selection is
@@ -50,6 +53,13 @@ All notable changes to vouch are documented here. Format follows
   batch. Approving the second proposal would silently route through
   `update_page()` and overwrite the first. (#439)
 
+### Fixed
+- claude-code: the `UserPromptSubmit` context hook computed retrieval but
+  never fed the entity-salience reflex (#223) — `salience.record_query`
+  was never called from the hook path, leaving the reflex permanently
+  dormant for every claude-code session. OpenClaw's context engine already
+  called it correctly; cursor's `beforeSubmitPrompt` hook cannot accept
+  injected context at all, so it is not wired. (#425)
 ## [1.2.2] — 2026-07-07
 
 ### Packaging
