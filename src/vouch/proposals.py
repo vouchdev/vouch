@@ -513,6 +513,9 @@ def approve(
     block = _approval_block_reason(store, proposal, approved_by)
     if block:
         raise ProposalError(block)
+    block = _payload_block_reason(store, proposal)
+    if block:
+        raise ProposalError(block)
     payload = dict(proposal.payload)
     # Refuse to overwrite an existing artifact. Without this guard a retry
     # after a crash between put_<kind>() and move_proposal_to_decided() would

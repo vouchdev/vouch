@@ -642,7 +642,7 @@ def test_approve_page_update_rejects_stale_claim_ref(store: KBStore) -> None:
         proposed_by="vault-sync", slug_hint="p1",
     )
     (store.kb_dir / "claims" / "c1.yaml").unlink()
-    with pytest.raises(ValueError, match="unknown claim"):
+    with pytest.raises(ProposalError, match="unknown claim"):
         approve(store, pr.id, approved_by="reviewer")
 
 
