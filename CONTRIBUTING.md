@@ -65,12 +65,84 @@ touch behavior.
 
 ## Dev setup
 
+The Python package:
+
 ```bash
 git clone https://github.com/vouchdev/vouch
 cd vouch
 python -m venv .venv && source .venv/bin/activate
 pip install -e '.[dev]'
 ```
+
+The web console under `webapp/` is a separate npm package (React +
+Vite) and needs Node.js + npm:
+
+```bash
+cd webapp && npm install
+```
+
+You only need the npm step if you work on (or run) the console —
+`make console` performs it automatically on first run.
+
+## Running vouch in dev mode
+
+The editable install puts a `vouch` entry point in `.venv/bin/` that runs
+straight from `src/` — edit, re-run, no reinstall (`python -m vouch` is
+equivalent).
+
+vouch locates its KB the way git locates a repo: it walks up from the
+current directory looking for `.vouch/`. Mind that this repo's root has a
+**real, committed** `.vouch/` (vouch dogfoods itself) and every command
+appends to its audit log, so point experiments at a scratch KB instead:
+
+```bash
+mkdir /tmp/vouch-scratch && cd /tmp/vouch-scratch
+vouch init          # creates ./.vouch/ with a seeded starter KB
+vouch status
+```
+
+`VOUCH_KB_PATH=/abs/path/.vouch` skips the walk and pins the KB
+explicitly, wherever you run from.
+
+Then pick the surface you're working on:
+
+- **CLI** — run commands from the scratch dir; `vouch --help` lists them.
+- **JSONL server** — the quickest way to hit the `kb.*` surface without
+  an agent host (see [docs/transports.md](docs/transports.md)):
+
+  ```bash
+  echo '{"id":"r1","method":"kb.capabilities"}' \
+    | vouch serve --transport jsonl | jq '.result.methods | length'
+  ```
+
+- **MCP against a real agent** — register the venv binary so the agent
+  exercises your working tree:
+
+  ```bash
+  claude mcp add vouch-dev -- /path/to/vouch/.venv/bin/vouch serve
+  ```
+
+- **HTTP + web console** — `make console` starts `vouch serve
+  --transport http` (127.0.0.1:8731) and the vouch-ui Vite dev server
+  (http://localhost:5173) as a pair; Ctrl-C stops both. Edits under
+  `webapp/src/` hot-reload. The backend serves the `.vouch/` discovered
+  from the cwd — set `VOUCH_KB_PATH` to serve a scratch KB instead of
+  the repo's own. To run the console alone against a backend you
+  started yourself: `cd webapp && npm run dev`, then enter the endpoint
+  in the connect dialog. `npm test` runs the vitest suite; `npm run
+  e2e` runs the playwright smoke test (needs `vouch` on PATH). See
+  [webapp/README.md](webapp/README.md) for the full script list.
+
+Useful knobs while iterating:
+
+- `VOUCH_AGENT=alice-example` — set the actor identity, e.g. two shells
+  with different values to exercise the proposer ≠ approver rule.
+- `VOUCH_LOG_LEVEL=DEBUG` — verbose logs; see the environment-variable
+  table below for the other logging knobs.
+- `make smoke-capture` / `make smoke-recall` — end-to-end checks of the
+  session capture and recall flows.
+
+The dockerized end-to-end demo lives in [demo/](demo/README.md).
 
 ## The gate
 
