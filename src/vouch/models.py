@@ -48,6 +48,12 @@ class ClaimType(StrEnum):
     OBSERVATION = "observation"
     QUESTION = "question"
     WARNING = "warning"
+    # A procedural rule with a follow-through signal (issue #428): unlike
+    # WORKFLOW/WARNING, a lesson's actual value is measured over time via
+    # kb.mark_lesson_followed's append-only observation events, not just
+    # its text. Resurfaces through retrieval exactly like any other claim
+    # type -- no special-casing in context.py or search.
+    LESSON = "lesson"
 
 
 class ClaimStatus(StrEnum):
@@ -262,6 +268,7 @@ class Claim(BaseModel):
         # accepted text="" / whitespace and landed a claim carrying zero
         # semantic content. Enforce on the model to close all paths at once.
         return _require_non_empty(v, "claim text")
+
     entities: list[str] = Field(default_factory=list)
     supersedes: list[str] = Field(default_factory=list)
     superseded_by: str | None = None

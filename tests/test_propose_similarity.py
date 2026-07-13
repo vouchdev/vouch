@@ -16,12 +16,25 @@ _SIMILAR_TEXT = "Auth uses JWTs in the Authorization header."
 
 
 @pytest.fixture(autouse=True)
-def _mock_embedder() -> None:
+def _mock_embedder():
     # MockEmbedder requires numpy. Skip cleanly when CI installs only [dev].
     pytest.importorskip("numpy")
     from tests.embeddings._fakes import MockEmbedder
+    from vouch.embeddings import base as embeddings_base
 
+    # _REGISTRY is module-global -- without saving/restoring it, registering
+    # a MockEmbedder here leaks into unrelated later tests in a full-suite
+    # run (e.g. test_cli's fts5-backend-label test, test_delete's deindex
+    # test), flipping their expected backend from fts5/substring to
+    # embedding. Mirrors tests/embeddings/conftest.py's
+    # _isolate_embedder_registry, which only covers that directory.
+    saved_registry = dict(embeddings_base._REGISTRY)
     register(DEFAULT_MODEL_NAME, lambda: MockEmbedder(dim=8))
+    try:
+        yield
+    finally:
+        embeddings_base._REGISTRY.clear()
+        embeddings_base._REGISTRY.update(saved_registry)
 
 
 @pytest.fixture
@@ -71,7 +84,10 @@ def test_propose_no_warning_for_unrelated_text(store: KBStore) -> None:
     src = store.put_source(b"e")
     store.put_claim(Claim(id="c1", text="apples and oranges", evidence=[src.id]))
     result = propose_claim(
-        store, text="zebras run fast in the savanna", evidence=[src.id], proposed_by="agent",
+        store,
+        text="zebras run fast in the savanna",
+        evidence=[src.id],
+        proposed_by="agent",
     )
     assert result.warnings == []
 
@@ -80,15 +96,19 @@ def test_propose_similarity_on_dry_run(store: KBStore) -> None:
     src = store.put_source(b"e")
     store.put_claim(Claim(id="c1", text=_SIMILAR_TEXT, evidence=[src.id]))
     result = propose_claim(
-        store, text=_SIMILAR_TEXT, evidence=[src.id],
-        proposed_by="agent", dry_run=True,
+        store,
+        text=_SIMILAR_TEXT,
+        evidence=[src.id],
+        proposed_by="agent",
+        dry_run=True,
     )
     assert not (store.kb_dir / "proposed" / f"{result.id}.yaml").exists()
     assert any(w["code"] == "similar_approved" for w in result.warnings)
 
 
 def test_jsonl_propose_claim_includes_warnings(
-    store: KBStore, monkeypatch: pytest.MonkeyPatch,
+    store: KBStore,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from vouch.jsonl_server import handle_request
 
@@ -97,21 +117,24 @@ def test_jsonl_propose_claim_includes_warnings(
         Claim(id="c1", text=_SIMILAR_TEXT, evidence=[src.id]),
     )
     monkeypatch.chdir(store.root)
-    resp = handle_request({
-        "id": "1",
-        "method": "kb.propose_claim",
-        "params": {
-            "text": _SIMILAR_TEXT,
-            "evidence": [src.id],
-        },
-    })
+    resp = handle_request(
+        {
+            "id": "1",
+            "method": "kb.propose_claim",
+            "params": {
+                "text": _SIMILAR_TEXT,
+                "evidence": [src.id],
+            },
+        }
+    )
     assert resp["ok"]
     assert "warnings" in resp["result"]
     assert any(w["code"] == "similar_approved" for w in resp["result"]["warnings"])
 
 
 def test_propose_similarity_without_embedder(
-    store: KBStore, monkeypatch: pytest.MonkeyPatch,
+    store: KBStore,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     src = store.put_source(b"e")
     store.put_claim(Claim(id="c1", text=_SIMILAR_TEXT, evidence=[src.id]))
@@ -122,6 +145,9 @@ def test_propose_similarity_without_embedder(
     monkeypatch.setattr("vouch.embeddings.get_embedder", _no_embedder)
 
     result = propose_claim(
-        store, text=_SIMILAR_TEXT, evidence=[src.id], proposed_by="agent",
+        store,
+        text=_SIMILAR_TEXT,
+        evidence=[src.id],
+        proposed_by="agent",
     )
     assert result.warnings == []

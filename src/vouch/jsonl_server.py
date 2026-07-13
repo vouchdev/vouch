@@ -157,6 +157,7 @@ def _h_search(p: dict) -> dict:
     )
 
 
+
 def _load_cfg(store: KBStore) -> dict:
     try:
         loaded = yaml.safe_load((store.kb_dir / "config.yaml").read_text(encoding="utf-8"))
@@ -409,7 +410,8 @@ def _h_propose_claim(p: dict) -> dict:
 def _h_propose_page(p: dict) -> dict:
     pr = propose_page(
         _store(),
-        title=p["title"], body=p.get("body", ""),
+        title=p["title"],
+        body=p.get("body", ""),
         page_type=p.get("page_type", "concept"),
         claim_ids=p.get("claim_ids"),
         entity_ids=p.get("entity_ids"),
@@ -427,7 +429,8 @@ def _h_propose_page(p: dict) -> dict:
 def _h_compile(p: dict) -> dict:
     try:
         report = compile_mod.compile_kb(
-            _store(), triggered_by=_agent(),
+            _store(),
+            triggered_by=_agent(),
             max_pages=p.get("max_pages"),
             dry_run=bool(p.get("dry_run", False)),
             session_id=p.get("session_id"),
@@ -442,18 +445,23 @@ def _h_compile(p: dict) -> dict:
 
 def _h_summarize_session(p: dict) -> dict:
     from . import session_split
+
     return session_split.summarize(
-        _store(), p["session_id"], mode=p.get("mode", "auto"),
+        _store(),
+        p["session_id"],
+        mode=p.get("mode", "auto"),
     )
 
 
 def _h_list_sessions(p: dict) -> dict:
     from . import session_split
+
     return {"sessions": session_split.build_session_rows(_store())}
 
 
 def _h_session_transcript(p: dict) -> dict:
     from . import transcript
+
     session_id = p["session_id"]
     agent = p.get("agent")
     if agent is not None and agent not in ("claude", "codex"):
@@ -464,9 +472,12 @@ def _h_session_transcript(p: dict) -> dict:
 def _h_propose_entity(p: dict) -> dict:
     pr = propose_entity(
         _store(),
-        name=p["name"], entity_type=p["entity_type"],
-        aliases=p.get("aliases"), description=p.get("description"),
-        rationale=p.get("rationale"), slug_hint=p.get("slug_hint"),
+        name=p["name"],
+        entity_type=p["entity_type"],
+        aliases=p.get("aliases"),
+        description=p.get("description"),
+        rationale=p.get("rationale"),
+        slug_hint=p.get("slug_hint"),
         session_id=p.get("session_id"),
         dry_run=bool(p.get("dry_run", False)),
         proposed_by=_agent(),
@@ -477,7 +488,9 @@ def _h_propose_entity(p: dict) -> dict:
 def _h_propose_relation(p: dict) -> dict:
     pr = propose_relation(
         _store(),
-        src=p["src"], relation=p["relation"], target=p["target"],
+        src=p["src"],
+        relation=p["relation"],
+        target=p["target"],
         confidence=float(p.get("confidence", 0.7)),
         evidence=p.get("evidence"),
         rationale=p.get("rationale"),
@@ -507,8 +520,7 @@ def _h_propose_delete(p: dict) -> dict:
 
 
 def _h_approve(p: dict) -> dict:
-    a = approve(_store(), p["proposal_id"], approved_by=_agent(),
-                reason=p.get("reason"))
+    a = approve(_store(), p["proposal_id"], approved_by=_agent(), reason=p.get("reason"))
     return {"kind": type(a).__name__.lower(), "id": a.id}
 
 
@@ -543,15 +555,18 @@ def _h_expire(p: dict) -> dict:
 
 def _h_supersede(p: dict) -> dict:
     old, new = life.supersede(
-        _store(), old_claim_id=p["old_claim_id"],
-        new_claim_id=p["new_claim_id"], actor=_agent(),
+        _store(),
+        old_claim_id=p["old_claim_id"],
+        new_claim_id=p["new_claim_id"],
+        actor=_agent(),
     )
     return {"old": old.id, "new": new.id, "status": old.status.value}
 
 
 def _h_contradict(p: dict) -> dict:
-    a, b, rel = life.contradict(_store(), claim_a=p["claim_a"],
-                                claim_b=p["claim_b"], actor=_agent())
+    a, b, rel = life.contradict(
+        _store(), claim_a=p["claim_a"], claim_b=p["claim_b"], actor=_agent()
+    )
     return {"a": a.id, "b": b.id, "relation_id": rel.id}
 
 
@@ -562,12 +577,25 @@ def _h_archive(p: dict) -> dict:
 
 def _h_confirm(p: dict) -> dict:
     c = life.confirm(_store(), claim_id=p["claim_id"], actor=_agent())
-    return {"id": c.id, "last_confirmed_at": c.last_confirmed_at.isoformat()
-            if c.last_confirmed_at else None}
+    return {
+        "id": c.id,
+        "last_confirmed_at": c.last_confirmed_at.isoformat() if c.last_confirmed_at else None,
+    }
+
+
+def _h_mark_lesson_followed(p: dict) -> dict:
+    return life.mark_lesson_followed(
+        _store(),
+        claim_id=p["claim_id"],
+        followed=p["followed"],
+        actor=_agent(),
+        context=p.get("context"),
+    )
 
 
 def _h_clear_claims(p: dict) -> dict:
     from datetime import datetime
+
     before_dt = None
     if p.get("before"):
         before_dt = datetime.fromisoformat(p["before"])
@@ -595,27 +623,37 @@ def _h_cite(p: dict) -> list:
 def _h_source_verify(_: dict) -> list[dict]:
     results = verify_mod.verify_all(_store(), actor=_agent())
     return [
-        {"source_id": r.source.id, "title": r.source.title,
-         "stored_ok": r.stored_ok, "external_status": r.external_status,
-         "note": r.note}
+        {
+            "source_id": r.source.id,
+            "title": r.source.title,
+            "stored_ok": r.stored_ok,
+            "external_status": r.external_status,
+            "note": r.note,
+        }
         for r in results
     ]
 
 
 def _h_session_start(p: dict) -> dict:
     return sess_mod.session_start(
-        _store(), agent=_agent(), task=p.get("task"), note=p.get("note"),
+        _store(),
+        agent=_agent(),
+        task=p.get("task"),
+        note=p.get("note"),
     ).model_dump(mode="json")
 
 
 def _h_session_end(p: dict) -> dict:
-    return sess_mod.session_end(_store(), p["session_id"],
-                                note=p.get("note")).model_dump(mode="json")
+    return sess_mod.session_end(_store(), p["session_id"], note=p.get("note")).model_dump(
+        mode="json"
+    )
 
 
 def _h_crystallize(p: dict) -> dict:
     return sess_mod.crystallize(
-        _store(), p["session_id"], approver=_agent(),
+        _store(),
+        p["session_id"],
+        approver=_agent(),
         write_summary_page=bool(p.get("write_summary_page", True)),
     )
 
@@ -633,13 +671,16 @@ def _h_index_rebuild(_: dict) -> dict:
 
 
 def _h_lint(p: dict) -> dict:
-    report = health.lint(_store(),
-                         stale_after_days=int(p.get("stale_days", 180)))
+    report = health.lint(_store(), stale_after_days=int(p.get("stale_days", 180)))
     return {
         "ok": report.ok,
         "findings": [
-            {"severity": f.severity, "code": f.code,
-             "message": f.message, "object_ids": f.object_ids}
+            {
+                "severity": f.severity,
+                "code": f.code,
+                "message": f.message,
+                "object_ids": f.object_ids,
+            }
             for f in report.findings
         ],
         "counts": report.counts,
@@ -651,8 +692,12 @@ def _h_doctor(_: dict) -> dict:
     return {
         "ok": report.ok,
         "findings": [
-            {"severity": f.severity, "code": f.code,
-             "message": f.message, "object_ids": f.object_ids}
+            {
+                "severity": f.severity,
+                "code": f.code,
+                "message": f.message,
+                "object_ids": f.object_ids,
+            }
             for f in report.findings
         ],
         "counts": report.counts,
@@ -707,12 +752,14 @@ def _h_audit(p: dict) -> dict:
 
 def _h_reindex_embeddings(p: dict) -> dict:
     from .embeddings.migration import backfill_embeddings
+
     n = backfill_embeddings(_store(), force=bool(p.get("force", False)))
     return {"touched": n}
 
 
 def _h_dedup_scan(p: dict) -> dict:
     from .embeddings.dedup import scan_all
+
     return {
         "duplicates": scan_all(
             _store().kb_dir,
@@ -725,6 +772,7 @@ def _h_dedup_scan(p: dict) -> dict:
 def _h_eval_embeddings(p: dict) -> dict:
 
     from .embeddings.scorer import evaluate
+
     return evaluate(
         kb_dir=_store().kb_dir,
         queries_file=Path(p["queries_path"]),
@@ -735,13 +783,13 @@ def _h_eval_embeddings(p: dict) -> dict:
 def _h_embeddings_stats(_: dict) -> dict:
     from . import index_db
     from .embeddings.cache import query_cache_stats
+
     store = _store()
     meta = index_db.get_embedding_meta(store.kb_dir)
     with index_db.open_db(store.kb_dir) as conn:
         counts = {
-            k: int(n) for k, n in conn.execute(
-                "SELECT kind, COUNT(*) FROM embedding_index GROUP BY kind"
-            )
+            k: int(n)
+            for k, n in conn.execute("SELECT kind, COUNT(*) FROM embedding_index GROUP BY kind")
         }
     return {
         "model": meta.get("embedding_model"),
@@ -884,6 +932,7 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.contradict": _h_contradict,
     "kb.archive": _h_archive,
     "kb.confirm": _h_confirm,
+    "kb.mark_lesson_followed": _h_mark_lesson_followed,
     "kb.clear_claims": _h_clear_claims,
     "kb.cite": _h_cite,
     "kb.source_verify": _h_source_verify,
@@ -921,7 +970,8 @@ def handle_request(envelope: dict) -> dict:
     params = envelope.get("params") or {}
     if not method or method not in HANDLERS:
         return {
-            "id": req_id, "ok": False,
+            "id": req_id,
+            "ok": False,
             "error": {"code": "method_not_found", "message": f"unknown method: {method}"},
         }
     try:
@@ -938,18 +988,21 @@ def handle_request(envelope: dict) -> dict:
         }
     except KeyError as e:
         return {
-            "id": req_id, "ok": False,
+            "id": req_id,
+            "ok": False,
             "error": {"code": "missing_param", "message": str(e)},
         }
     except (ValueError, ProposalError, ArtifactNotFoundError) as e:
         return {
-            "id": req_id, "ok": False,
+            "id": req_id,
+            "ok": False,
             "error": {"code": "invalid_request", "message": str(e)},
         }
     except Exception as e:
         _log.exception("internal error handling %s", method)
         return {
-            "id": req_id, "ok": False,
+            "id": req_id,
+            "ok": False,
             "error": {
                 "code": "internal_error",
                 "message": str(e),
@@ -970,10 +1023,16 @@ def run_jsonl(stdin=None, stdout=None) -> None:
         try:
             envelope = json.loads(line)
         except json.JSONDecodeError as e:
-            stdout.write(json.dumps({
-                "id": None, "ok": False,
-                "error": {"code": "invalid_json", "message": str(e)},
-            }) + "\n")
+            stdout.write(
+                json.dumps(
+                    {
+                        "id": None,
+                        "ok": False,
+                        "error": {"code": "invalid_json", "message": str(e)},
+                    }
+                )
+                + "\n"
+            )
             stdout.flush()
             continue
         response = handle_request(envelope)

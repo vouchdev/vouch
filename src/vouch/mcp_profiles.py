@@ -17,28 +17,33 @@ from typing import Any
 
 from .capabilities import METHODS
 
-_MINIMAL: frozenset[str] = frozenset({
-    "kb.capabilities",
-    "kb.status",
-    "kb.context",
-    "kb.search",
-    "kb.read_page",
-    "kb.propose_claim",
-    "kb.propose_page",
-    "kb.list_pending",
-})
+_MINIMAL: frozenset[str] = frozenset(
+    {
+        "kb.capabilities",
+        "kb.status",
+        "kb.context",
+        "kb.search",
+        "kb.read_page",
+        "kb.propose_claim",
+        "kb.propose_page",
+        "kb.list_pending",
+    }
+)
 
-_STANDARD: frozenset[str] = _MINIMAL | frozenset({
-    "kb.approve",
-    "kb.reject",
-    "kb.supersede",
-    "kb.contradict",
-    "kb.confirm",
-    "kb.read_claim",
-    "kb.list_claims",
-    "kb.neighbors",
-    "kb.why",
-})
+_STANDARD: frozenset[str] = _MINIMAL | frozenset(
+    {
+        "kb.approve",
+        "kb.reject",
+        "kb.supersede",
+        "kb.contradict",
+        "kb.confirm",
+        "kb.mark_lesson_followed",
+        "kb.read_claim",
+        "kb.list_claims",
+        "kb.neighbors",
+        "kb.why",
+    }
+)
 
 PROFILES: dict[str, frozenset[str]] = {
     "minimal": _MINIMAL,
