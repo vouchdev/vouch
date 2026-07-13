@@ -113,6 +113,12 @@ def _starter_config() -> dict[str, Any]:
                 "human review via vouch pending/show/approve",
             ],
         },
+        "mcp": {
+            # Publish the slash-command / SKILL.md catalogue over MCP via
+            # kb.list_skills / kb.get_skill. Flip to false for "company-brain"
+            # mode where the catalogue itself is sensitive.
+            "publish_skills": True,
+        },
         # Extra page kinds beyond the built-in PageType enum. Each maps a kind
         # name to {required_fields, frontmatter_schema, required_citations,
         # extends}. See `vouch schema list` / docs for the shape. (issue #234)
@@ -201,6 +207,15 @@ def _deserialize_page(text: str) -> Page:
     meta = _yaml_load(m.group(1)) or {}
     body = m.group(2)
     return Page(body=body, **meta)
+
+
+def _load_page_or_skip(path: Path) -> Page | None:
+    """Parse one page file; skip corrupt/unreadable files like ``_load_or_skip``."""
+    try:
+        return _deserialize_page(path.read_text(encoding="utf-8"))
+    except (yaml.YAMLError, ValidationError, UnicodeDecodeError, OSError, ValueError) as e:
+        _log.warning("skipping unreadable page %s: %s", path.name, e)
+        return None
 
 
 class KBStore:
@@ -560,8 +575,9 @@ class KBStore:
         if not pdir.is_dir():
             return []
         return [
-            _deserialize_page(p.read_text(encoding="utf-8"))
+            pg
             for p in sorted(pdir.glob("*.md"))
+            if (pg := _load_page_or_skip(p)) is not None
         ]
 
     # --- entities ----------------------------------------------------------

@@ -7,6 +7,7 @@ greps cleanly in git history.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -23,11 +24,51 @@ if TYPE_CHECKING:
     from .storage import KBStore
 
 AUDIT_FILENAME = "audit.log.jsonl"
+AUDIT_LOCKFILE = AUDIT_FILENAME + ".lock"
 GENESIS_HASH = "0" * 64
 
 
 def _audit_path(kb_dir: Path) -> Path:
     return kb_dir / AUDIT_FILENAME
+
+
+def _audit_lockfile(kb_dir: Path) -> Path:
+    return kb_dir / AUDIT_LOCKFILE
+
+
+@contextlib.contextmanager
+def _audit_lock(kb_dir: Path) -> Iterator[None]:
+    """Hold an exclusive cross-process lock for the duration of a log_event.
+
+    Serialises the read-then-append sequence in `log_event` so two concurrent
+    writers cannot both observe the same `prev_hash` and fork the chain.
+    Lock is held on a sibling `audit.log.jsonl.lock` file so the audit log
+    itself is never opened in a mode that could truncate it. Blocks until
+    acquired and is always released, including on exceptions.
+    """
+    lockfile = _audit_lockfile(kb_dir)
+    lockfile.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(lockfile, os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        if os.name == "posix":
+            fcntl = __import__("fcntl")
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+        else:
+            msvcrt = __import__("msvcrt")
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+            try:
+                yield
+            finally:
+                os.lseek(fd, 0, os.SEEK_SET)
+                with contextlib.suppress(OSError):
+                    msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+    finally:
+        os.close(fd)
 
 
 def new_event_id() -> str:
@@ -75,28 +116,35 @@ def log_event(
     reversible: bool = True,
     data: dict[str, Any] | None = None,
 ) -> AuditEvent:
-    """Append one AuditEvent. Returns the persisted event."""
-    prev_hash = _last_hash(kb_dir)
-    ev = AuditEvent(
-        id=new_event_id(),
-        event=event,
-        actor=actor,
-        object_ids=object_ids or [],
-        dry_run=dry_run,
-        reversible=reversible,
-        data=data or {},
-        prev_hash=prev_hash,
-    )
-    ev.hash = _compute_hash(prev_hash, _event_payload_for_hash(ev))
+    """Append one AuditEvent. Returns the persisted event.
+
+    Holds an exclusive cross-process lock around read-prev-hash → derive →
+    append so concurrent writers can't fork the chain. Without the lock, two
+    log_event calls racing on the same KB observe the same prev_hash and both
+    chain off it — verify_chain then reports "previous hash mismatch" forever.
+    """
     path = _audit_path(kb_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
-    line = _canonical_json(ev.model_dump(mode="json"))
-    # Open-write-close for crash safety — if the process dies mid-append the
-    # log is still parseable up to the last newline.
-    with path.open("a", encoding="utf-8") as f:
-        f.write(line + "\n")
-        f.flush()
-        os.fsync(f.fileno())
+    with _audit_lock(kb_dir):
+        prev_hash = _last_hash(kb_dir)
+        ev = AuditEvent(
+            id=new_event_id(),
+            event=event,
+            actor=actor,
+            object_ids=object_ids or [],
+            dry_run=dry_run,
+            reversible=reversible,
+            data=data or {},
+            prev_hash=prev_hash,
+        )
+        ev.hash = _compute_hash(prev_hash, _event_payload_for_hash(ev))
+        line = _canonical_json(ev.model_dump(mode="json"))
+        # Open-write-close for crash safety — if the process dies mid-append
+        # the log is still parseable up to the last newline.
+        with path.open("a", encoding="utf-8") as f:
+            f.write(line + "\n")
+            f.flush()
+            os.fsync(f.fileno())
     return ev
 
 

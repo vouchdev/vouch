@@ -70,6 +70,23 @@ docker run -i --rm -v "$PWD:/data" ghcr.io/vouchdev/vouch:latest          # stdi
 docker run --rm -v "$PWD:/data" ghcr.io/vouchdev/vouch:latest status      # any CLI command
 ```
 
+**For local development** — CLI and webapp, both running from source:
+
+```bash
+git clone https://github.com/vouchdev/vouch
+cd vouch
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e '.[dev,web]'    # dev,web is what CI installs — make check needs both
+vouch --version                # the CLI now runs straight from src/ — edits apply without reinstalling
+
+make console                   # webapp in dev mode: vouch backend on :8731 + live-reload
+                               # console at http://localhost:5173 — Ctrl-C stops both
+
+make check                     # the CI gate: lint + type + test
+```
+
+`make console` needs node — it starts `vouch serve --transport http` and the Vite dev server as a pair, installing the console's node deps automatically on first run. To instead serve the console the way a release wheel does (no dev server), run `make webapp-build` once, then `vouch console`. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full dev workflow.
+
 ## Reproduce the loop on your project
 
 After exploring the demo above, set up vouch in your own project:

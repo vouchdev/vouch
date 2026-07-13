@@ -76,6 +76,8 @@ def contradict(
     actor: str,
 ) -> tuple[Claim, Claim, Relation]:
     """Record that two claims contradict each other (symmetric)."""
+    if claim_a == claim_b:
+        raise LifecycleError("a claim cannot contradict itself")
     a = store.get_claim(claim_a)
     b = store.get_claim(claim_b)
     a.contradicts = sorted({*a.contradicts, b.id})

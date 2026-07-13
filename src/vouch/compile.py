@@ -312,6 +312,12 @@ def compile_kb(
             report.dropped.append({"title": title, "reason": problem})
             continue
         survivors.append((draft, title))
+        # Fix #439: fold accepted title/slug into taken_names immediately so
+        # a later draft in the same batch cannot collide with a just-accepted
+        # one. Without this, two drafts with the same title both pass
+        # _draft_problem's collision guard and land as duplicate proposals.
+        taken_names.add(title.lower())
+        taken_names.add(_slugify(title))
 
     # phase 2: wikilinks resolve against existing pages + the *surviving*
     # batch, to a fixpoint — dropping a draft may dangle a link in another,
