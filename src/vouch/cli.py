@@ -2642,12 +2642,17 @@ def context_hook() -> None:
 @click.argument("query")
 @click.option("--depth", default=3, show_default=True, type=int)
 @click.option("--max-chars", default=4000, show_default=True, type=int)
-def synthesize(query: str, depth: int, max_chars: int) -> None:
-    """Answer a query from approved claims only, with inline citations."""
+@click.option(
+    "--llm", "use_llm", is_flag=True,
+    help="Draft the answer with the configured compile.llm_cmd, grounded in "
+    "pages and approved claims (citations still verified mechanically).",
+)
+def synthesize(query: str, depth: int, max_chars: int, use_llm: bool) -> None:
+    """Answer a query from the KB, with inline citations."""
     store = _load_store()
     with _cli_errors():
         result = synth.synthesize(
-            store, query=query, depth=depth, max_chars=max_chars,
+            store, query=query, depth=depth, max_chars=max_chars, llm=use_llm,
         )
     _emit_json(result)
 

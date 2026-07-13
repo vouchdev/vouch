@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -9,7 +10,7 @@ import pytest
 
 from vouch import capabilities, health, synthesize
 from vouch.jsonl_server import HANDLERS, handle_request
-from vouch.models import Claim, ClaimStatus
+from vouch.models import Claim, ClaimStatus, Page, PageStatus
 from vouch.storage import KBStore
 
 _CITE = re.compile(r"\[([^\[\]]+)\]")
@@ -99,9 +100,93 @@ def test_confidence_reflects_claim_status(store: KBStore) -> None:
     assert contested["_meta"]["synthesis_confidence"] == "low"
 
 
-def test_llm_flag_is_reserved(store: KBStore) -> None:
-    with pytest.raises(ValueError, match="llm synthesis backend not configured"):
+def test_llm_without_config_raises(store: KBStore) -> None:
+    with pytest.raises(ValueError, match="llm synthesis is not configured"):
         synthesize.synthesize(store, query="auth", llm=True)
+
+
+# --- the llm backend --------------------------------------------------------
+
+
+def _wire_llm(store: KBStore, tmp_path: Path, payload: object) -> None:
+    """Point compile.llm_cmd at a stub that emits `payload` as JSON."""
+    out = tmp_path / "answer.json"
+    out.write_text(json.dumps(payload), encoding="utf-8")
+    store.config_path.write_text(
+        store.config_path.read_text(encoding="utf-8")
+        + f'\ncompile:\n  llm_cmd: "cat {out}"\n',
+        encoding="utf-8",
+    )
+
+
+def _auth_page(store: KBStore) -> str:
+    page = Page(
+        id="auth-overview", title="Auth Overview",
+        body="Access tokens are short-lived JWTs; refresh tokens rotate.",
+        status=PageStatus.ACTIVE,
+    )
+    store.put_page(page)
+    health.rebuild_index(store)
+    return page.id
+
+
+def test_llm_synthesize_cites_pages_and_strips_invented_ids(
+    store: KBStore, tmp_path: Path,
+) -> None:
+    _auth_kb(store)
+    pid = _auth_page(store)
+    _wire_llm(store, tmp_path, {
+        "answer": f"Auth uses short-lived JWTs [{pid}]. "
+        "Refresh tokens rotate on every use [c-auth-2]. "
+        "Billing rounds half-up [invented-id].",
+        "gaps": ["billing"],
+    })
+    result = synthesize.synthesize(store, query="auth tokens", llm=True)
+    assert result["pages"] == [pid]
+    assert result["claims"] == ["c-auth-2"]
+    assert "[invented-id]" not in result["answer"]
+    assert "billing" in result["gaps"]
+    assert result["_meta"]["synthesis_backend"] == "llm"
+    assert result["_meta"]["dropped_citations"] == ["invented-id"]
+    assert result["_meta"]["synthesis_confidence"] == "high"
+
+
+def test_llm_uncited_draft_stays_silent(store: KBStore, tmp_path: Path) -> None:
+    _auth_page(store)
+    _wire_llm(store, tmp_path, {"answer": "Auth is fine, trust me.", "gaps": []})
+    result = synthesize.synthesize(store, query="auth", llm=True)
+    assert result["answer"] == ""
+    assert result["claims"] == []
+    assert result["pages"] == []
+    assert result["gaps"]
+
+
+def test_llm_unusable_output_raises(store: KBStore, tmp_path: Path) -> None:
+    _auth_page(store)
+    store.config_path.write_text(
+        store.config_path.read_text(encoding="utf-8")
+        + '\ncompile:\n  llm_cmd: "echo not json"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="not valid JSON"):
+        synthesize.synthesize(store, query="auth", llm=True)
+
+
+def test_jsonl_synthesize_llm_passthrough(
+    store: KBStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pid = _auth_page(store)
+    _wire_llm(store, tmp_path, {
+        "answer": f"Access tokens are short-lived JWTs [{pid}].", "gaps": [],
+    })
+    monkeypatch.chdir(store.root)
+    resp = handle_request({
+        "id": "s2", "method": "kb.synthesize",
+        "params": {"query": "auth tokens", "llm": True},
+    })
+    assert resp["ok"]
+    assert resp["result"]["pages"] == [pid]
+    assert resp["result"]["_meta"]["synthesis_backend"] == "llm"
 
 
 def test_capabilities_lists_synthesize() -> None:
