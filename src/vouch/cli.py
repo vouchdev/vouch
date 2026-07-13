@@ -2239,7 +2239,12 @@ def session_transcript_cmd(session_id: str, agent: str | None) -> None:
 
 @session.command("summarize")
 @click.argument("session_id")
-@click.option("--mode", default="auto", show_default=True)
+@click.option(
+    "--mode",
+    type=click.Choice(["auto", "split", "mechanical"]),
+    default="auto",
+    show_default=True,
+)
 def session_summarize_cmd(session_id: str, mode: str) -> None:
     """Roll a session buffer into pending page proposals. Never approves."""
     from . import session_split
