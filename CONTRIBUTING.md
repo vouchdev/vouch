@@ -68,8 +68,8 @@ touch behavior.
 ```bash
 git clone https://github.com/vouchdev/vouch
 cd vouch
-python -m venv .venv && source .venv/bin/activate
-pip install -e '.[dev]'
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e '.[dev,web]'
 ```
 
 ## The gate

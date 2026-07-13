@@ -70,6 +70,17 @@ docker run -i --rm -v "$PWD:/data" ghcr.io/vouchdev/vouch:latest          # stdi
 docker run --rm -v "$PWD:/data" ghcr.io/vouchdev/vouch:latest status      # any CLI command
 ```
 
+**For local development** — editable install from a clone:
+
+```bash
+git clone https://github.com/vouchdev/vouch
+cd vouch
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e '.[dev,web]'
+```
+
+`pip install -e` means edits to the source take effect without reinstalling. The `dev,web` extras are what CI installs — `make check` (lint + type + test) needs both. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full dev workflow.
+
 ## Reproduce the loop on your project
 
 After exploring the demo above, set up vouch in your own project:
