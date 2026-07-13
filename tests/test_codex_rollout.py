@@ -459,3 +459,17 @@ def test_fixtures_use_placeholder_data_only() -> None:
         text = fixture.read_text(encoding="utf-8")
         assert "alice-example" in text or "session_meta" not in text
         assert "/home/a/" not in text
+
+
+def test_parse_rejects_oversized_rollout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The parser streams line-by-line, but a rollout with no interior newlines
+    # (or a huge one) would still be read whole into memory. Guard on file size
+    # so an oversized/blob rollout is refused up front, mirroring the byte caps
+    # the codebase applies to other untrusted reads.
+    monkeypatch.setattr(cr, "_MAX_ROLLOUT_BYTES", 64, raising=False)
+    big = tmp_path / "rollout-2026-07-01T09-00-00-x.jsonl"
+    big.write_text("x" * 512, encoding="utf-8")
+    with pytest.raises(cr.CodexRolloutError, match="too large"):
+        cr.parse_rollout(big)

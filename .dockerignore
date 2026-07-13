@@ -15,5 +15,13 @@ tests
 benchmarks
 skills
 proposals
+# webapp/ is copied by demo/Dockerfile — ship only its source, never the
+# host's node_modules (breaks cross-arch: npm ci reinstalls in-image) or the
+# generated dist/. The root vouch image ignores webapp entirely.
+webapp/node_modules
+webapp/dist
+webapp/test-results
+webapp/playwright-report
+webapp/.superpowers
 **/__pycache__
 **/*.py[cod]

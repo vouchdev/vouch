@@ -26,6 +26,7 @@ from . import lifecycle as life
 from . import metrics as metrics_mod
 from . import salience as salience_mod
 from . import sessions as sess_mod
+from . import skills as skills_mod
 from . import trust as trust_mod
 from . import verify as verify_mod
 from .capabilities import capabilities as build_caps
@@ -39,6 +40,7 @@ from .proposals import (
     approve,
     expire_pending,
     propose_claim,
+    propose_delete,
     propose_entity,
     propose_page,
     propose_relation,
@@ -46,7 +48,7 @@ from .proposals import (
     reject_auto_extracted,
 )
 from .scoping import filter_hits, scoped_fetch_limit, viewer_from
-from .stats import collect_stats
+from .stats import collect_activity, collect_stats
 from .storage import (
     ArtifactNotFoundError,
     KBNotFoundError,
@@ -77,7 +79,11 @@ def _agent() -> str:
 @mcp.tool()
 def kb_capabilities() -> dict[str, Any]:
     """Return the protocol capabilities of this server."""
-    return build_caps().model_dump(mode="json")
+    try:
+        publish_skills = skills_mod.publish_skills_enabled(_store())
+    except Exception:
+        publish_skills = True
+    return build_caps(publish_skills=publish_skills).model_dump(mode="json")
 
 
 @mcp.tool()
@@ -94,6 +100,64 @@ def kb_stats(*, days: int = 30) -> dict[str, Any]:
     """
     since = None if days == 0 else days
     return collect_stats(_store(), since_days=since)
+
+
+@mcp.tool()
+def kb_list_skills() -> list[dict[str, Any]]:
+    """Enumerate every Claude Code skill / slash command visible to vouch.
+
+    Scans, in priority order:
+      1. ``<kb_root>/.claude/skills/<name>/SKILL.md`` — project-local skills
+      2. ``<kb_root>/.claude/commands/<name>.md``     — project-local commands
+      3. ``~/.claude/skills/<name>/SKILL.md``         — user-global skills
+      4. ``~/.claude/commands/<name>.md``             — user-global commands
+
+    Project entries override user ones with the same name. Returns
+    ``[{name, description, scope, kind, path}]``. Returns an empty list
+    when ``mcp.publish_skills`` is ``false`` in config.yaml.
+    """
+    return skills_mod.list_skills(_store())
+
+
+@mcp.tool()
+def kb_get_skill(name: str) -> dict[str, Any]:
+    """Return the full markdown body of a named skill / slash command.
+
+    Errors with ``permission_denied`` when ``mcp.publish_skills`` is
+    ``false``, and ``not_found`` when the name isn't in the catalogue.
+    """
+    try:
+        return skills_mod.get_skill(_store(), name)
+    except skills_mod.SkillsDisabledError as e:
+        raise PermissionError(str(e)) from e
+    except KeyError as e:
+        raise ValueError(str(e)) from e
+
+
+@mcp.tool()
+def kb_activity(
+    *,
+    days: int = 365,
+    tz_offset_minutes: int = 0,
+    tz: str | None = None,
+    project: str | None = None,
+    agent: str | None = None,
+) -> dict[str, Any]:
+    """Audit activity buckets for dashboards: per-day counts, hour-of-week
+    matrix, actor and event histograms. Scope-filtered like kb.audit.
+
+    days: window in local calendar days; 0 means all-time.
+    tz: IANA zone for local-time bucketing; falls back to tz_offset_minutes.
+    """
+    store = _store()
+    viewer = viewer_from(
+        config_path=store.config_path,
+        project=project,
+        agent=agent,
+    )
+    return collect_activity(
+        store, days=days, tz_offset_minutes=tz_offset_minutes, tz=tz, viewer=viewer,
+    )
 
 
 @mcp.tool()
@@ -207,6 +271,23 @@ def _load_cfg(store: KBStore) -> dict[str, Any]:
     except Exception:
         return {}
     return loaded if isinstance(loaded, dict) else {}
+
+
+@mcp.tool()
+def kb_experts(
+    topic: str,
+    limit: int = 10,
+    min_claims: int = 1,
+    weight: str = "count",
+) -> dict[str, Any]:
+    """Rank entities by evidence density on a topic (read-only)."""
+    from .experts import rank_experts
+
+    return {
+        "experts": rank_experts(
+            _store(), topic, limit=limit, min_claims=min_claims, weight=weight
+        )
+    }
 
 
 @mcp.tool()
@@ -528,6 +609,49 @@ def kb_compile(
 
 
 @mcp.tool()
+def kb_summarize_session(
+    session_id: str,
+    mode: str = "auto",
+) -> dict[str, Any]:
+    """Summarize a captured session into PENDING page proposals.
+
+    Reads the host-neutral observation buffer for `session_id` and files either
+    one mechanical rollup page (small sessions) or several LLM-drafted topical
+    `session` pages (large sessions). `mode` is "auto" | "split" | "mechanical".
+    Long-running when it splits (the LLM call is synchronous). Never approves.
+    """
+    from . import session_split
+    return session_split.summarize(_store(), session_id, mode=mode)
+
+
+@mcp.tool()
+def kb_list_sessions() -> dict[str, Any]:
+    """List captured sessions in the review pipeline: open buffers awaiting a
+    summary, and filed summary proposals awaiting review.
+
+    Read-only. Each row: session_id, stage ("buffer" | "pending"), proposal_id,
+    kind, title, summarized, observations, last_activity.
+    """
+    from . import session_split
+    return {"sessions": session_split.build_session_rows(_store())}
+
+
+@mcp.tool()
+def kb_session_transcript(session_id: str, agent: str | None = None) -> dict[str, Any]:
+    """Render a captured session's full transcript from its raw agent JSONL.
+
+    Read-only. Locates the raw Claude Code / Codex file on disk and normalizes
+    it into message blocks (text, thinking, tool_use with paired results).
+    ``agent`` restricts the search ("claude" | "codex"); omit to try both.
+    Degrades to compact capture observations when the raw file is unavailable.
+    """
+    from . import transcript
+    if agent is not None and agent not in ("claude", "codex"):
+        raise ValueError(f"unknown agent: {agent!r} (expected 'claude' or 'codex')")
+    return transcript.load_transcript(_store(), session_id, agent=agent)
+
+
+@mcp.tool()
 def kb_propose_entity(
     name: str,
     entity_type: str,
@@ -568,6 +692,27 @@ def kb_propose_relation(
             confidence=confidence, evidence=evidence,
             rationale=rationale, session_id=session_id,
             dry_run=dry_run, proposed_by=_agent(),
+        )
+    except (ProposalError, ArtifactNotFoundError, ValueError) as e:
+        raise ValueError(str(e)) from e
+    return _proposal_response(pr, dry_run)
+
+
+@mcp.tool()
+def kb_propose_delete(
+    target_kind: str, target_id: str, rationale: str | None = None,
+    session_id: str | None = None, dry_run: bool = False,
+) -> dict[str, Any]:
+    """Propose hard-deleting a durable artifact (claim/page/entity/relation).
+
+    Files a PENDING delete request that a *different* reviewer approves via
+    kb.approve. Refused if the target is still referenced by another artifact.
+    """
+    try:
+        pr = propose_delete(
+            _store(), target_kind=target_kind, target_id=target_id,
+            proposed_by=_agent(), rationale=rationale,
+            session_id=session_id, dry_run=dry_run,
         )
     except (ProposalError, ArtifactNotFoundError, ValueError) as e:
         raise ValueError(str(e)) from e
@@ -682,6 +827,42 @@ def kb_archive(claim_id: str) -> dict[str, Any]:
 def kb_confirm(claim_id: str) -> dict[str, Any]:
     c = life.confirm(_store(), claim_id=claim_id, actor=_agent())
     return {"id": c.id, "last_confirmed_at": c.last_confirmed_at}
+
+
+@mcp.tool()
+def kb_clear_claims(
+    auto_only: bool = True,
+    before: str | None = None,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Clear auto-approved claims, optionally filtered by date range.
+
+    Args:
+        auto_only: If True, only clear auto-approved claims.
+        before: If set, only clear claims created before this ISO 8601 date.
+        dry_run: If True, preview without making changes.
+
+    Returns:
+        Dictionary with count of cleared claims and their IDs.
+    """
+    from datetime import datetime
+
+    before_dt = None
+    if before:
+        before_dt = datetime.fromisoformat(before)
+
+    to_clear = life.clear_claims(
+        _store(),
+        auto_only=auto_only,
+        before=before_dt,
+        actor=_agent(),
+        dry_run=dry_run,
+    )
+    return {
+        "count": len(to_clear),
+        "claim_ids": [c.id for c in to_clear],
+        "dry_run": dry_run,
+    }
 
 
 @mcp.tool()

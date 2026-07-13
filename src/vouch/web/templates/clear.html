@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% set active = "clear" %}
+{% block title %}clear auto-claims · vouch review{% endblock %}
+
+{% block content %}
+<section class="clear">
+  <header class="section-head">
+    <h1>clear auto-claims</h1>
+    <span class="count">{{ count }} auto-approved {% if count == 1 %}claim{% else %}claims{% endif %}</span>
+  </header>
+
+  <p class="lede">bulk-archive claims that were auto-approved in trusted-agent mode.
+    human-reviewed claims are never touched, and archived claims stay in history —
+    this is the console mirror of <code>vouch claims-clear</code>.</p>
+
+  {% if cleared is not none %}
+    <p class="notice notice-ok">archived {{ cleared }} auto-approved claim(s).</p>
+  {% endif %}
+  {% if before_err %}
+    <p class="notice notice-err">{{ before_err }}</p>
+  {% endif %}
+
+  <form method="get" action="/clear-claims" class="clear-filter">
+    <label for="before">created before</label>
+    <input type="text" id="before" name="before" value="{{ before }}"
+           placeholder="YYYY-MM-DD (optional)" autocomplete="off">
+    <button type="submit" class="filter">preview</button>
+  </form>
+
+  {% if not candidates %}
+    <p class="empty">no auto-approved claims match — nothing to clear.</p>
+  {% else %}
+    <ul class="clear-list">
+      {% for c in candidates %}
+        <li class="clear-row">
+          <div class="clear-meta">
+            <a class="proposal-link" href="/sources/{{ c.id }}">{{ c.id }}</a>
+            <time datetime="{{ c.created_at }}">{{ c.created_at }}</time>
+          </div>
+          <p class="preview">{{ c.text }}</p>
+        </li>
+      {% endfor %}
+    </ul>
+
+    <form method="post" action="/clear-claims" class="clear-apply"
+          onsubmit="return confirm('Archive {{ count }} auto-approved claim(s)? Archived claims stay in history.');">
+      <input type="hidden" name="before" value="{{ before }}">
+      <button type="submit" class="reject">clear {{ count }} auto-claim{% if count != 1 %}s{% endif %}</button>
+    </form>
+  {% endif %}
+</section>
+{% endblock %}

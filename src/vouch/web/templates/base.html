@@ -16,6 +16,7 @@
     </div>
     <nav class="nav">
       <a href="/" {% if active == "queue" %}aria-current="page"{% endif %}>queue</a>
+      <a href="/clear-claims" {% if active == "clear" %}aria-current="page"{% endif %}>clear</a>
       <a href="/audit" {% if active == "audit" %}aria-current="page"{% endif %}>audit</a>
       {% if dual_solve_enabled %}<a href="/dual-solve" {% if active == "dual-solve" %}aria-current="page"{% endif %}>dual-solve</a>{% endif %}
       <span id="live" class="live live-off" title="realtime channel">●&nbsp;live</span>
