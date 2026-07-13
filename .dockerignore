@@ -1,0 +1,27 @@
+# Keep the build context to what the Dockerfile actually copies
+# (pyproject.toml, README.md, src/, adapters/) plus room for local
+# experiments. adapters/ must stay in: the wheel force-includes it and
+# pip fails the build when the forced include is missing.
+.git
+.venv
+.vouch
+.claude
+desktop
+docs
+eval
+examples
+web
+tests
+benchmarks
+skills
+proposals
+# webapp/ is copied by demo/Dockerfile — ship only its source, never the
+# host's node_modules (breaks cross-arch: npm ci reinstalls in-image) or the
+# generated dist/. The root vouch image ignores webapp entirely.
+webapp/node_modules
+webapp/dist
+webapp/test-results
+webapp/playwright-report
+webapp/.superpowers
+**/__pycache__
+**/*.py[cod]

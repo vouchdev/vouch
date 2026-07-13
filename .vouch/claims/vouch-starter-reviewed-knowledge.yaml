@@ -1,0 +1,23 @@
+id: vouch-starter-reviewed-knowledge
+text: Vouch stores reviewed, cited knowledge in the repository so future agent sessions
+  can retrieve agreed project context.
+type: workflow
+status: actionable
+confidence: 0.95
+evidence:
+- be7aec64b0fc803a33cb3d610f67ae95e636877db20231ef72440a7cbe6b69d2
+entities: []
+supersedes: []
+superseded_by: null
+contradicts: []
+scope:
+  visibility: project
+  project: null
+  agent: null
+tags:
+- vouch
+- onboarding
+created_at: '2026-07-07T09:17:56.750429Z'
+updated_at: '2026-07-07T09:17:56.750430Z'
+last_confirmed_at: null
+approved_by: a

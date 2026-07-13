@@ -66,7 +66,7 @@ class VolunteerOffer:
 def load_config(store: KBStore) -> VolunteerConfig:
     """Read ``volunteer:`` from config.yaml; fall back to defaults."""
     try:
-        loaded = yaml.safe_load(store.config_path.read_text())
+        loaded = yaml.safe_load(store.config_path.read_text(encoding="utf-8"))
     except (OSError, yaml.YAMLError):
         return VolunteerConfig()
     if not isinstance(loaded, dict):
@@ -99,7 +99,7 @@ def session_query(sess: Session) -> str | None:
 
 
 def normalize_relevance(raw: float, backend: str, *, batch_max: float) -> float:
-    if backend in ("embedding", "hybrid"):
+    if backend == "embedding":
         return max(0.0, min(1.0, raw))
     if batch_max <= 0.0:
         return 0.0

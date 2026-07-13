@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "vouch capture ingest-codex --hook",
+            "statusMessage": "vouch capture"
+          }
+        ]
+      }
+    ]
+  }
+}

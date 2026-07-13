@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="771" height="392" viewBox="0 0 771 392" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="14">
+<rect width="771" height="392" rx="8" fill="#0d1117"/>
+<rect width="771" height="36" rx="8" fill="#161b22"/>
+<rect y="28" width="771" height="8" fill="#161b22"/>
+<circle cx="16" cy="18" r="6" fill="#ff5f56"/>
+<circle cx="34" cy="18" r="6" fill="#ffbd2e"/>
+<circle cx="52" cy="18" r="6" fill="#27c93f"/>
+<text x="385.5" y="23" fill="#8b949e" text-anchor="middle" >tiny/ — vouch show prop-001</text>
+<text x="16" y="52" fill="#7ee787" xml:space="preserve">$ vouch show prop-001</text>
+<text x="16" y="72" fill="#c9d1d9" xml:space="preserve">id: prop-001</text>
+<text x="16" y="92" fill="#c9d1d9" xml:space="preserve">kind: claim</text>
+<text x="16" y="112" fill="#c9d1d9" xml:space="preserve">proposed_by: example-agent</text>
+<text x="16" y="132" fill="#c9d1d9" xml:space="preserve">session_id: null</text>
+<text x="16" y="152" fill="#c9d1d9" xml:space="preserve">proposed_at: '2026-04-12T09:13:40Z'</text>
+<text x="16" y="172" fill="#c9d1d9" xml:space="preserve">payload:</text>
+<text x="16" y="192" fill="#c9d1d9" xml:space="preserve">  text: The service authenticates requests with signed JWTs in the Authorization header.</text>
+<text x="16" y="212" fill="#c9d1d9" xml:space="preserve">  type: decision</text>
+<text x="16" y="232" fill="#c9d1d9" xml:space="preserve">  evidence:</text>
+<text x="16" y="252" fill="#c9d1d9" xml:space="preserve">  - 3e2f1b8e7a4c9f5e0b2d6c1a4f8e9d3b7c5a2e1f0d8b6c4a3e2f1b8e7a4c9f5e</text>
+<text x="16" y="272" fill="#c9d1d9" xml:space="preserve">  confidence: 0.95</text>
+<text x="16" y="292" fill="#c9d1d9" xml:space="preserve">rationale: Established in the Nov 2025 auth decision meeting (cited).</text>
+<text x="16" y="312" fill="#c9d1d9" xml:space="preserve">status: approved</text>
+<text x="16" y="332" fill="#c9d1d9" xml:space="preserve">decided_at: '2026-04-12T09:14:00Z'</text>
+<text x="16" y="352" fill="#c9d1d9" xml:space="preserve">decided_by: plind-junior</text>
+<text x="16" y="372" fill="#c9d1d9" xml:space="preserve">decision_reason: Matches the meeting notes verbatim; no changes needed.</text>
+</svg>

@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="670" height="152" viewBox="0 0 670 152" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="14">
+<rect width="670" height="152" rx="8" fill="#0d1117"/>
+<rect width="670" height="36" rx="8" fill="#161b22"/>
+<rect y="28" width="670" height="8" fill="#161b22"/>
+<circle cx="16" cy="18" r="6" fill="#ff5f56"/>
+<circle cx="34" cy="18" r="6" fill="#ffbd2e"/>
+<circle cx="52" cy="18" r="6" fill="#27c93f"/>
+<text x="335.0" y="23" fill="#8b949e" text-anchor="middle" >tiny/ — vouch status</text>
+<text x="16" y="52" fill="#7ee787" xml:space="preserve">$ vouch status</text>
+<text x="16" y="72" fill="#c9d1d9" xml:space="preserve">KB at /your/project/.vouch</text>
+<text x="16" y="92" fill="#c9d1d9" xml:space="preserve">  durable: 4 claims  •  1 pages  •  2 sources  •  0 entities  •  0 relations</text>
+<text x="16" y="112" fill="#c9d1d9" xml:space="preserve">  pending: 0 proposals</text>
+<text x="16" y="132" fill="#c9d1d9" xml:space="preserve">  audit:   13 events  •  index: missing</text>
+</svg>

@@ -1,0 +1,20 @@
+id: free-tier-gets-100-requests-per-day-as-baseline
+text: Free tier gets 100 requests per day as baseline.
+type: decision
+status: working
+confidence: 0.92
+evidence:
+- 3131367abbcefab105fa2fcaa36617bfdda15511cc8880145af113731e95ad6d
+entities: []
+supersedes: []
+superseded_by: null
+contradicts: []
+scope:
+  visibility: project
+  project: null
+  agent: null
+tags: []
+created_at: '2026-07-03T09:15:19.466592Z'
+updated_at: '2026-07-03T09:15:19.466594Z'
+last_confirmed_at: null
+approved_by: a

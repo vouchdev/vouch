@@ -40,6 +40,29 @@ vouch/
 4. [vouch/audit.log.jsonl](vouch/audit.log.jsonl) — the audit trail.
    Every mutation is one line. Open it in a text editor.
 
+## See it in action
+
+After `cp -r examples/tiny/vouch ./.vouch`, here's what the CLI shows against
+this fixture. (Images are rendered from the fixture by
+[`docs/img/examples/render.py`](../../docs/img/examples/render.py).)
+
+`vouch status` — artifact counts and the audit-event total:
+
+<img src="../../docs/img/examples/tiny-status.svg" alt="vouch status on the tiny example" width="560">
+
+`vouch search auth` — substring retrieval across claims and pages:
+
+<img src="../../docs/img/examples/tiny-search.svg" alt="vouch search auth on the tiny example" width="640">
+
+`vouch show prop-001` — the approved proposal behind `auth-uses-jwt`, with its
+rationale, cited evidence, and `decision_reason`:
+
+<img src="../../docs/img/examples/tiny-show.svg" alt="vouch show prop-001 on the tiny example" width="560">
+
+`vouch audit` — the authoritative gate sequence, every mutation attributed:
+
+<img src="../../docs/img/examples/tiny-audit.svg" alt="vouch audit on the tiny example" width="760">
+
 ## What this example is *not*
 
 - It's not a teaching example for the entire object model. It only

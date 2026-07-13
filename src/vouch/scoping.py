@@ -64,7 +64,7 @@ def viewer_from(
 
     if config_path is not None and (resolved_project is None or resolved_agent is None):
         try:
-            loaded = yaml.safe_load(config_path.read_text())
+            loaded = yaml.safe_load(config_path.read_text(encoding="utf-8"))
         except (OSError, yaml.YAMLError):
             loaded = None
         if isinstance(loaded, dict):

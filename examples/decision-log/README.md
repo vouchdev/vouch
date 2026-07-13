@@ -30,3 +30,18 @@ Compared to [tiny/](../tiny/), this example:
 (Files in this directory follow the same vouch/ layout as
 [../tiny/vouch/](../tiny/vouch/). For brevity the README points at
 patterns; browse the directory for the full set.)
+
+## See it in action
+
+After `cp -r examples/decision-log/vouch ./.vouch`, here's the fixture in
+use. (Images are rendered from the fixture by
+[`docs/img/examples/render.py`](../../docs/img/examples/render.py).)
+
+`vouch search postgresql` — both database decisions surface:
+
+<img src="../../docs/img/examples/decision-log-search.svg" alt="vouch search postgresql on the decision-log example" width="720">
+
+`vouch diff` across the two database claims — how the decision evolved,
+confidence and text side by side:
+
+<img src="../../docs/img/examples/decision-log-diff.svg" alt="vouch diff showing decision evolution on the decision-log example" width="760">

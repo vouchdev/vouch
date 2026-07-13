@@ -68,9 +68,16 @@ def _serialize(job: DualSolveJob) -> dict[str, Any]:
         "candidates": [
             {"engine": c.engine, "branch": c.branch, "ok": c.ok,
              "error": c.error, "changed_files": ds.changed_files(c.diff),
-             "diff": c.diff}
+             "log": c.log, "diff": c.diff}
             for c in job.candidates
         ],
+        # No candidates yet (still running) -> no recommendation. Computing it
+        # over [] returns the "neither engine produced a usable diff" hint,
+        # which the SPA would otherwise render as a false failure for the whole
+        # duration of a run that is still in progress.
+        "recommendation": (
+            ds.recommendation(job.candidates) if job.candidates else None
+        ),
         "proposed_ids": list(job.proposed_ids),
         "kept_branch": job.kept_branch,
         "changed_files": ds.changed_files(kept.diff) if kept is not None else [],
@@ -200,4 +207,5 @@ def register(
             "kept_branch": job.kept_branch,
             "proposed_ids": ids,
             "changed_files": ds.changed_files(chosen.diff) if chosen is not None else [],
+            "recommendation": ds.recommendation(job.candidates),
         }

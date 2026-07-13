@@ -18,9 +18,9 @@ Response envelope (failure):
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sys
-import traceback
 from collections.abc import Callable
 from contextvars import ContextVar
 from pathlib import Path
@@ -29,7 +29,10 @@ from typing import Any
 import yaml
 
 from . import audit, bundle, health, volunteer_context
+from . import compile as compile_mod
+from . import digest as digest_mod
 from . import lifecycle as life
+from . import metrics as metrics_mod
 from . import salience as salience_mod
 from . import sessions as sess_mod
 from . import skills as skills_mod
@@ -39,19 +42,21 @@ from .capabilities import capabilities as build_caps
 from .context import build_context_pack
 from .logging_config import configure_logging
 from .models import ProposalStatus
+from .page_filters import filter_pages
 from .proposals import (
     EXPIRE_ACTOR,
     ProposalError,
     approve,
     expire_pending,
     propose_claim,
+    propose_delete,
     propose_entity,
     propose_page,
     propose_relation,
     reject,
     reject_auto_extracted,
 )
-from .stats import collect_stats
+from .stats import collect_activity, collect_stats
 from .storage import (
     ArtifactNotFoundError,
     KBNotFoundError,
@@ -59,6 +64,8 @@ from .storage import (
     discover_root,
 )
 from .synthesize import synthesize
+
+_log = logging.getLogger("vouch.jsonl_server")
 
 # Per-request actor override. The HTTP transport sets this from the
 # X-Vouch-Agent header so audit attribution is correct without mutating
@@ -98,6 +105,30 @@ def _h_stats(p: dict) -> dict:
     days = int(p.get("days", 30))
     since = None if days == 0 else days
     return collect_stats(_store(), since_days=since)
+
+
+def _h_activity(p: dict) -> dict:
+    from .scoping import viewer_from_params
+
+    s = _store()
+    viewer = viewer_from_params(s, p)
+    return collect_activity(
+        s,
+        days=int(p.get("days", 365)),
+        tz_offset_minutes=int(p.get("tz_offset_minutes", 0)),
+        tz=p.get("tz"),
+        viewer=viewer,
+    )
+
+
+def _h_digest(p: dict) -> dict:
+    d = digest_mod.build(
+        _store(),
+        since=metrics_mod.parse_since(str(p.get("since", digest_mod.DEFAULT_SINCE_SPEC))),
+        stale_after_days=int(p.get("stale_days", metrics_mod.DEFAULT_STALE_DAYS)),
+        limit=int(p.get("limit", digest_mod.DEFAULT_LIMIT)),
+    )
+    return d.to_dict()
 
 
 def _h_search(p: dict) -> dict:
@@ -169,7 +200,7 @@ def _h_search(p: dict) -> dict:
 
 def _load_cfg(store: KBStore) -> dict:
     try:
-        loaded = yaml.safe_load((store.kb_dir / "config.yaml").read_text())
+        loaded = yaml.safe_load((store.kb_dir / "config.yaml").read_text(encoding="utf-8"))
     except Exception:
         return {}
     return loaded if isinstance(loaded, dict) else {}
@@ -240,8 +271,23 @@ def _h_read_relation(p: dict) -> dict:
     return _store().get_relation(p["relation_id"]).model_dump(mode="json")
 
 
-def _h_list_pages(_: dict) -> list[dict]:
-    return [p.model_dump(mode="json") for p in _store().list_pages()]
+def _h_diff(p: dict) -> dict:
+    from dataclasses import asdict
+
+    from .diff import diff_artifacts
+
+    return asdict(diff_artifacts(_store(), p["old_id"], p.get("new_id")))
+
+
+def _h_list_pages(p: dict) -> list[dict]:
+    pages = filter_pages(
+        _store().list_pages(),
+        kind=p.get("type"),
+        equals=p.get("meta"),
+        before=p.get("meta_before"),
+        after=p.get("meta_after"),
+    )
+    return [pg.model_dump(mode="json") for pg in pages]
 
 
 def _h_list_claims(p: dict) -> list[dict]:
@@ -276,6 +322,12 @@ def _h_list_pending(_: dict) -> list[dict]:
         p.model_dump(mode="json")
         for p in _store().list_proposals(ProposalStatus.PENDING)
     ]
+
+
+def _h_triage_pending(p: dict) -> list[dict]:
+    from . import triage as triage_mod
+
+    return triage_mod.triage_pending(_store(), proposal_ids=p.get("proposal_ids"))
 
 
 def _h_register_source(p: dict) -> dict:
@@ -351,6 +403,43 @@ def _h_propose_page(p: dict) -> dict:
     return {"proposal_id": pr.id, "status": pr.status.value, "kind": pr.kind.value}
 
 
+def _h_compile(p: dict) -> dict:
+    try:
+        report = compile_mod.compile_kb(
+            _store(), triggered_by=_agent(),
+            max_pages=p.get("max_pages"),
+            dry_run=bool(p.get("dry_run", False)),
+            session_id=p.get("session_id"),
+        )
+    except compile_mod.CompileError as e:
+        # config/LLM/output-shape failures are caller-visible conditions,
+        # not server faults — surface them on the ValueError path so the
+        # envelope carries a clean message instead of internal_error.
+        raise ValueError(str(e)) from e
+    return report.to_dict()
+
+
+def _h_summarize_session(p: dict) -> dict:
+    from . import session_split
+    return session_split.summarize(
+        _store(), p["session_id"], mode=p.get("mode", "auto"),
+    )
+
+
+def _h_list_sessions(p: dict) -> dict:
+    from . import session_split
+    return {"sessions": session_split.build_session_rows(_store())}
+
+
+def _h_session_transcript(p: dict) -> dict:
+    from . import transcript
+    session_id = p["session_id"]
+    agent = p.get("agent")
+    if agent is not None and agent not in ("claude", "codex"):
+        raise ValueError(f"unknown agent: {agent!r} (expected 'claude' or 'codex')")
+    return transcript.load_transcript(_store(), session_id, agent=agent)
+
+
 def _h_propose_entity(p: dict) -> dict:
     pr = propose_entity(
         _store(),
@@ -376,6 +465,24 @@ def _h_propose_relation(p: dict) -> dict:
         proposed_by=_agent(),
     )
     return {"proposal_id": pr.id, "status": pr.status.value, "kind": pr.kind.value}
+
+
+def _h_propose_delete(p: dict) -> dict:
+    pr = propose_delete(
+        _store(),
+        target_kind=p["target_kind"],
+        target_id=p["target_id"],
+        rationale=p.get("rationale"),
+        session_id=p.get("session_id"),
+        dry_run=bool(p.get("dry_run", False)),
+        proposed_by=_agent(),
+    )
+    return {
+        "proposal_id": pr.id,
+        "status": pr.status.value,
+        "kind": pr.kind.value,
+        "dry_run": bool(p.get("dry_run", False)),
+    }
 
 
 def _h_approve(p: dict) -> dict:
@@ -436,6 +543,25 @@ def _h_confirm(p: dict) -> dict:
     c = life.confirm(_store(), claim_id=p["claim_id"], actor=_agent())
     return {"id": c.id, "last_confirmed_at": c.last_confirmed_at.isoformat()
             if c.last_confirmed_at else None}
+
+
+def _h_clear_claims(p: dict) -> dict:
+    from datetime import datetime
+    before_dt = None
+    if p.get("before"):
+        before_dt = datetime.fromisoformat(p["before"])
+    to_clear = life.clear_claims(
+        _store(),
+        auto_only=p.get("auto_only", True),
+        before=before_dt,
+        actor=_agent(),
+        dry_run=p.get("dry_run", False),
+    )
+    return {
+        "count": len(to_clear),
+        "claim_ids": [c.id for c in to_clear],
+        "dry_run": p.get("dry_run", False),
+    }
 
 
 def _h_cite(p: dict) -> list:
@@ -651,10 +777,53 @@ def _h_provenance_rebuild(_: dict) -> dict:
     return {"edges": prov.rebuild_prov_edges(_store())}
 
 
+def _h_detect_themes(p: dict) -> dict:
+    from . import themes
+
+    result = themes.detect_themes(
+        _store(),
+        min_sessions=p.get("min_sessions"),
+        min_claims=p.get("min_claims"),
+        top_k=p.get("top_k"),
+    )
+    return {
+        "clusters": [
+            {
+                "entities": c.entities,
+                "claim_ids": c.claim_ids,
+                "session_ids": c.session_ids,
+                "score": c.score,
+                "session_count": c.session_count,
+                "claim_count": c.claim_count,
+            }
+            for c in result.clusters
+        ],
+        "config": result.config_used,
+    }
+
+
+def _h_propose_theme(p: dict) -> dict:
+    from . import themes
+
+    store = _store()
+    actor = p.get("agent") or os.environ.get("VOUCH_AGENT", "unknown-agent")
+    cluster = themes.ThemeCluster(
+        entities=p["entities"],
+        claim_ids=p["claim_ids"],
+        session_ids=p.get("session_ids", []),
+        score=float(p.get("score", 0.0)),
+        session_count=len(p.get("session_ids", [])),
+        claim_count=len(p["claim_ids"]),
+    )
+    return themes.propose_theme(store, cluster, proposed_by=actor)
+
+
 HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.capabilities": _h_capabilities,
     "kb.status": _h_status,
     "kb.stats": _h_stats,
+    "kb.activity": _h_activity,
+    "kb.digest": _h_digest,
     "kb.search": _h_search,
     "kb.neighbors": _h_neighbors,
     "kb.context": _h_context,
@@ -663,18 +832,25 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.read_claim": _h_read_claim,
     "kb.read_entity": _h_read_entity,
     "kb.read_relation": _h_read_relation,
+    "kb.diff": _h_diff,
     "kb.list_pages": _h_list_pages,
     "kb.list_claims": _h_list_claims,
     "kb.list_entities": _h_list_entities,
     "kb.list_relations": _h_list_relations,
     "kb.list_sources": _h_list_sources,
     "kb.list_pending": _h_list_pending,
+    "kb.triage_pending": _h_triage_pending,
     "kb.register_source": _h_register_source,
     "kb.register_source_from_path": _h_register_source_from_path,
     "kb.propose_claim": _h_propose_claim,
     "kb.propose_page": _h_propose_page,
+    "kb.compile": _h_compile,
+    "kb.summarize_session": _h_summarize_session,
+    "kb.list_sessions": _h_list_sessions,
+    "kb.session_transcript": _h_session_transcript,
     "kb.propose_entity": _h_propose_entity,
     "kb.propose_relation": _h_propose_relation,
+    "kb.propose_delete": _h_propose_delete,
     "kb.approve": _h_approve,
     "kb.reject": _h_reject,
     "kb.reject_extracted": _h_reject_extracted,
@@ -683,6 +859,7 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.contradict": _h_contradict,
     "kb.archive": _h_archive,
     "kb.confirm": _h_confirm,
+    "kb.clear_claims": _h_clear_claims,
     "kb.cite": _h_cite,
     "kb.source_verify": _h_source_verify,
     "kb.session_start": _h_session_start,
@@ -706,6 +883,8 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.impact": _h_impact,
     "kb.graph_export": _h_graph_export,
     "kb.provenance_rebuild": _h_provenance_rebuild,
+    "kb.detect_themes": _h_detect_themes,
+    "kb.propose_theme": _h_propose_theme,
     "kb.list_skills": _h_list_skills,
     "kb.get_skill": _h_get_skill,
 }
@@ -744,12 +923,12 @@ def handle_request(envelope: dict) -> dict:
             "error": {"code": "invalid_request", "message": str(e)},
         }
     except Exception as e:
+        _log.exception("internal error handling %s", method)
         return {
             "id": req_id, "ok": False,
             "error": {
                 "code": "internal_error",
                 "message": str(e),
-                "traceback": traceback.format_exc(),
             },
         }
 

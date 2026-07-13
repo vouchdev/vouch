@@ -40,6 +40,17 @@ def test_dual_solve_page_renders_when_enabled(git_kb):
     assert "dual-solve-app" in r.text  # the Vue mount point
 
 
+def test_dual_solve_serves_diff_view_module(git_kb):
+    # the file-changes view imports the pure diff/tree helpers as a separate
+    # module; a broken static path would fail only at runtime in the browser.
+    c = _client(git_kb)
+    r = c.get("/static/diff_view.js")
+    assert r.status_code == 200
+    assert "export function parseDiff" in r.text
+    assert "export function buildFileTree" in r.text
+    assert 'from "/static/diff_view.js"' in c.get("/static/dual_solve.js").text
+
+
 def test_dual_solve_routes_absent_when_disabled(git_kb):
     # the security gate: with --allow-dual-solve off, NOTHING mounts -- not just
     # the page, but the executing run/choose routes that spawn engines.
@@ -80,9 +91,11 @@ def test_dual_solve_sandbox_runner_can_be_enabled(git_kb, monkeypatch):
 def _fake_prepare(monkeypatch, *, calls):
     issue = ds.Issue("Fix bug", "body", number=4, url="u")
     cA = ds.Candidate("claude", "vouch-dual/4-fix-bug-claude", Path("/w/claude"),
-                      diff="diff --git a/x b/x\n+1\n", sha="s1", ok=True)
+                      diff="diff --git a/x b/x\n+1\n", sha="s1",
+                      log="claude fixed it", ok=True)
     cX = ds.Candidate("codex", "vouch-dual/4-fix-bug-codex", Path("/w/codex"),
-                      diff="diff --git a/y b/y\n+2\n", sha="s2", ok=True)
+                      diff="diff --git a/y b/y\n+2\n+3\n", sha="s2",
+                      log="codex fixed it too", ok=True)
 
     def fake(store, issue_ref, root, runner, *, claude_effort="high",
              codex_effort="high", autonomy="edit", dry_run=False,
@@ -117,6 +130,9 @@ def test_run_starts_job_and_reaches_ready(git_kb, monkeypatch):
     assert [x["engine"] for x in state["candidates"]] == ["claude", "codex"]
     assert state["candidates"][0]["changed_files"] == ["x"]
     assert state["candidates"][1]["changed_files"] == ["y"]
+    assert state["candidates"][0]["log"] == "claude fixed it"
+    assert state["candidates"][1]["log"] == "codex fixed it too"
+    assert state["recommendation"]["engine"] == "claude"
     # autonomy is forced to edit regardless of input
     assert calls[0]["autonomy"] == "edit"
 
@@ -200,6 +216,7 @@ def test_choose_winner_finalizes_and_returns_ids(git_kb, monkeypatch):
     assert r.json()["proposed_ids"] == ["prop-1", "prop-2"]
     assert r.json()["kept_branch"] == "vouch-dual/4-fix-bug-codex"
     assert r.json()["changed_files"] == ["y"]
+    assert r.json()["recommendation"]["engine"] == "claude"
     assert captured["winner"] == "codex"
     assert captured["record"] is True and captured["reason"] == "cleaner"
 
@@ -266,3 +283,37 @@ def test_spa_assets_are_served(git_kb):
         assert c.get(path).status_code == 200, path
     page = c.get("/dual-solve").text
     assert "/static/dual_solve.js" in page and "createApp" in page
+
+
+def _job(**kw):
+    from vouch.web.dual_solve_api import DualSolveJob
+
+    base = dict(id="j", issue_url="o/n#1", claude_effort="high",
+                codex_effort="high")
+    base.update(kw)
+    return DualSolveJob(**base)
+
+
+def test_serialize_omits_recommendation_while_running():
+    # While the job is still running there are no candidates yet, so
+    # recommendation([]) would say "neither engine produced a usable diff".
+    # That false negative must not be surfaced during a running job.
+    from vouch.web.dual_solve_api import _serialize
+
+    data = _serialize(_job())  # status defaults to "running", candidates=[]
+    assert data["status"] == "running"
+    assert data["recommendation"] is None
+
+
+def test_serialize_includes_recommendation_once_candidates_exist():
+    from vouch.dual_solve import Candidate
+    from vouch.web.dual_solve_api import _serialize
+
+    job = _job(status="ready")
+    job.candidates = [
+        Candidate(engine="claude", branch="ds/claude", worktree=Path("/tmp/x"),
+                  diff="+a\n+b\n", ok=True),
+    ]
+    data = _serialize(job)
+    assert data["recommendation"] is not None
+    assert data["recommendation"]["engine"] == "claude"

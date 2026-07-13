@@ -1,0 +1,392 @@
+name: Labeler
+
+"on":
+  pull_request_target:
+    # Maintainer-owned triage workflow: it reads base-branch config and PR
+    # metadata only. It never checks out or executes pull request code.
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      max_prs:
+        description: "Maximum number of open PRs to process (0 = all)"
+        required: false
+        default: "200"
+      per_page:
+        description: "PRs per page (1-100)"
+        required: false
+        default: "50"
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}
+
+permissions: {}
+
+jobs:
+  ensure-label-taxonomy:
+    name: ensure label taxonomy
+    runs-on: ubuntu-24.04
+    permissions:
+      issues: write
+    steps:
+      - name: Ensure label taxonomy exists
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const labels = {
+              "docs": ["0A3069", "documentation, specs, examples, and repo guidance"],
+              "ci": ["E5E7EB", "github actions and automation"],
+              "cli": ["0A3069", "command line interface"],
+              "auto-pr": ["6E7781", "auto-pr orchestration"],
+              "dual-solve": ["6E7781", "dual-solve orchestration"],
+              "review-ui": ["0969DA", "browser review ui"],
+              "website": ["0969DA", "static website"],
+              "adapters": ["6E7781", "agent host adapters and install manifests"],
+              "openclaw": ["6E7781", "openclaw integration"],
+              "mcp": ["7057FF", "mcp, jsonl, and http surfaces"],
+              "storage": ["D6E3DA", "kb storage, migrations, schemas, and proposals"],
+              "retrieval": ["2DA44E", "context, search, synthesis, and evaluation"],
+              "embeddings": ["2DA44E", "embedding-backed retrieval"],
+              "sync": ["57606A", "sync, vault mirror, and diff flows"],
+              "schemas": ["F9D65C", "json schemas and generated schema assets"],
+              "packaging": ["E5E7EB", "packaging, build metadata, and make targets"],
+              "tests": ["F9D65C", "tests and fixtures"],
+              "size: XS": ["8C959F", "less than 50 changed non-doc lines"],
+              "size: S": ["8C959F", "50-199 changed non-doc lines"],
+              "size: M": ["8C959F", "200-499 changed non-doc lines"],
+              "size: L": ["8C959F", "500-999 changed non-doc lines"],
+              "size: XL": ["8C959F", "1000 or more changed non-doc lines"],
+            };
+
+            for (const [name, [color, description]] of Object.entries(labels)) {
+              try {
+                const current = await github.rest.issues.getLabel({
+                  ...context.repo,
+                  name,
+                });
+                if (
+                  current.data.color?.toLowerCase() !== color.toLowerCase() ||
+                  current.data.description !== description
+                ) {
+                  await github.rest.issues.updateLabel({
+                    ...context.repo,
+                    name,
+                    color,
+                    description,
+                  });
+                }
+              } catch (error) {
+                if (error?.status !== 404) {
+                  throw error;
+                }
+                await github.rest.issues.createLabel({
+                  ...context.repo,
+                  name,
+                  color,
+                  description,
+                });
+              }
+            }
+
+  label:
+    name: label pull request
+    if: github.event_name == 'pull_request_target'
+    needs: ensure-label-taxonomy
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Apply path labels
+        uses: actions/labeler@f27b608878404679385c85cfa523b85ccb86e213 # v6
+        with:
+          configuration-path: .github/labeler.yml
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          sync-labels: true
+
+      - name: Apply PR size label
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const pullRequest = context.payload.pull_request;
+            if (!pullRequest) {
+              return;
+            }
+
+            const sizeLabels = ["size: XS", "size: S", "size: M", "size: L", "size: XL"];
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              ...context.repo,
+              pull_number: pullRequest.number,
+              per_page: 100,
+            });
+
+            const excludedLockfiles = new Set([
+              "bun.lockb",
+              "package-lock.json",
+              "npm-shrinkwrap.json",
+              "pnpm-lock.yaml",
+              "poetry.lock",
+              "uv.lock",
+              "yarn.lock",
+            ]);
+            const excludedDocFiles = new Set([
+              "AGENTS.md",
+              "CHANGELOG.md",
+              "CLAUDE.md",
+              "CODE_OF_CONDUCT.md",
+              "CONTRIBUTING.md",
+              "GOVERNANCE.md",
+              "README.md",
+              "ROADMAP.md",
+              "SECURITY.md",
+              "llms.txt",
+            ]);
+
+            function ignoredForSize(path) {
+              return (
+                path.startsWith("docs/") ||
+                path.startsWith("examples/") ||
+                path.startsWith("spec/") ||
+                excludedDocFiles.has(path) ||
+                excludedLockfiles.has(path) ||
+                path.endsWith("/package-lock.json") ||
+                path.endsWith("/npm-shrinkwrap.json")
+              );
+            }
+
+            const totalChangedLines = files.reduce((total, file) => {
+              const path = file.filename ?? "";
+              if (ignoredForSize(path)) {
+                return total;
+              }
+              return total + (file.additions ?? 0) + (file.deletions ?? 0);
+            }, 0);
+
+            let target = "size: XL";
+            if (totalChangedLines < 50) {
+              target = "size: XS";
+            } else if (totalChangedLines < 200) {
+              target = "size: S";
+            } else if (totalChangedLines < 500) {
+              target = "size: M";
+            } else if (totalChangedLines < 1000) {
+              target = "size: L";
+            }
+
+            const currentLabels = await github.paginate(
+              github.rest.issues.listLabelsOnIssue,
+              {
+                ...context.repo,
+                issue_number: pullRequest.number,
+                per_page: 100,
+              },
+            );
+            const currentNames = new Set(
+              currentLabels.map((label) => label.name).filter((name) => typeof name === "string"),
+            );
+
+            for (const label of currentLabels) {
+              const name = label.name ?? "";
+              if (!sizeLabels.includes(name) || name === target) {
+                continue;
+              }
+              await github.rest.issues.removeLabel({
+                ...context.repo,
+                issue_number: pullRequest.number,
+                name,
+              });
+              currentNames.delete(name);
+            }
+
+            if (!currentNames.has(target)) {
+              await github.rest.issues.addLabels({
+                ...context.repo,
+                issue_number: pullRequest.number,
+                labels: [target],
+              });
+            }
+
+  backfill-pr-labels:
+    name: backfill open PR labels
+    if: github.event_name == 'workflow_dispatch'
+    needs: ensure-label-taxonomy
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Collect open PR numbers
+        id: open-prs
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          result-encoding: string
+          script: |
+            const inputs = context.payload.inputs ?? {};
+            const maxPrsInput = inputs.max_prs ?? "200";
+            const perPageInput = inputs.per_page ?? "50";
+            const parsedMaxPrs = Number.parseInt(maxPrsInput, 10);
+            const parsedPerPage = Number.parseInt(perPageInput, 10);
+            const maxPrs = Number.isFinite(parsedMaxPrs) ? parsedMaxPrs : 200;
+            const perPage = Number.isFinite(parsedPerPage)
+              ? Math.min(100, Math.max(1, parsedPerPage))
+              : 50;
+            const processAll = maxPrs <= 0;
+            const maxCount = processAll ? Number.POSITIVE_INFINITY : Math.max(1, maxPrs);
+            const numbers = [];
+
+            let page = 1;
+            while (numbers.length < maxCount) {
+              const remaining = maxCount - numbers.length;
+              const pageSize = processAll ? perPage : Math.min(perPage, remaining);
+              const { data: pullRequests } = await github.rest.pulls.list({
+                ...context.repo,
+                state: "open",
+                per_page: pageSize,
+                page,
+              });
+
+              if (pullRequests.length === 0) {
+                break;
+              }
+
+              for (const pullRequest of pullRequests) {
+                if (!processAll && numbers.length >= maxCount) {
+                  break;
+                }
+                numbers.push(String(pullRequest.number));
+              }
+
+              if (pullRequests.length < pageSize) {
+                break;
+              }
+              page += 1;
+            }
+
+            core.info(`Collected ${numbers.length} open pull requests.`);
+            return numbers.join("\n");
+
+      - name: Backfill path labels
+        if: steps.open-prs.outputs.result != ''
+        uses: actions/labeler@f27b608878404679385c85cfa523b85ccb86e213 # v6
+        with:
+          configuration-path: .github/labeler.yml
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          sync-labels: true
+          pr-number: ${{ steps.open-prs.outputs.result }}
+
+      - name: Backfill PR size labels
+        if: steps.open-prs.outputs.result != ''
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          PR_NUMBERS: ${{ steps.open-prs.outputs.result }}
+        with:
+          script: |
+            const sizeLabels = ["size: XS", "size: S", "size: M", "size: L", "size: XL"];
+            const numbers = (process.env.PR_NUMBERS ?? "")
+              .split(/\s+/)
+              .map((raw) => Number.parseInt(raw, 10))
+              .filter((number) => Number.isFinite(number));
+
+            const excludedLockfiles = new Set([
+              "bun.lockb",
+              "package-lock.json",
+              "npm-shrinkwrap.json",
+              "pnpm-lock.yaml",
+              "poetry.lock",
+              "uv.lock",
+              "yarn.lock",
+            ]);
+            const excludedDocFiles = new Set([
+              "AGENTS.md",
+              "CHANGELOG.md",
+              "CLAUDE.md",
+              "CODE_OF_CONDUCT.md",
+              "CONTRIBUTING.md",
+              "GOVERNANCE.md",
+              "README.md",
+              "ROADMAP.md",
+              "SECURITY.md",
+              "llms.txt",
+            ]);
+
+            function ignoredForSize(path) {
+              return (
+                path.startsWith("docs/") ||
+                path.startsWith("examples/") ||
+                path.startsWith("spec/") ||
+                excludedDocFiles.has(path) ||
+                excludedLockfiles.has(path) ||
+                path.endsWith("/package-lock.json") ||
+                path.endsWith("/npm-shrinkwrap.json")
+              );
+            }
+
+            async function applySizeLabel(pullNumber) {
+              const files = await github.paginate(github.rest.pulls.listFiles, {
+                ...context.repo,
+                pull_number: pullNumber,
+                per_page: 100,
+              });
+
+              const totalChangedLines = files.reduce((total, file) => {
+                const path = file.filename ?? "";
+                if (ignoredForSize(path)) {
+                  return total;
+                }
+                return total + (file.additions ?? 0) + (file.deletions ?? 0);
+              }, 0);
+
+              let target = "size: XL";
+              if (totalChangedLines < 50) {
+                target = "size: XS";
+              } else if (totalChangedLines < 200) {
+                target = "size: S";
+              } else if (totalChangedLines < 500) {
+                target = "size: M";
+              } else if (totalChangedLines < 1000) {
+                target = "size: L";
+              }
+
+              const currentLabels = await github.paginate(
+                github.rest.issues.listLabelsOnIssue,
+                {
+                  ...context.repo,
+                  issue_number: pullNumber,
+                  per_page: 100,
+                },
+              );
+              const currentNames = new Set(
+                currentLabels.map((label) => label.name).filter((name) => typeof name === "string"),
+              );
+
+              for (const label of currentLabels) {
+                const name = label.name ?? "";
+                if (!sizeLabels.includes(name) || name === target) {
+                  continue;
+                }
+                await github.rest.issues.removeLabel({
+                  ...context.repo,
+                  issue_number: pullNumber,
+                  name,
+                });
+                currentNames.delete(name);
+              }
+
+              if (!currentNames.has(target)) {
+                await github.rest.issues.addLabels({
+                  ...context.repo,
+                  issue_number: pullNumber,
+                  labels: [target],
+                });
+              }
+            }
+
+            for (const number of numbers) {
+              await applySizeLabel(number);
+            }
+            core.info(`Backfilled size labels for ${numbers.length} open pull requests.`);

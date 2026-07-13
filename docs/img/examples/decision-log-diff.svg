@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1157" height="232" viewBox="0 0 1157 232" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="14">
+<rect width="1157" height="232" rx="8" fill="#0d1117"/>
+<rect width="1157" height="36" rx="8" fill="#161b22"/>
+<rect y="28" width="1157" height="8" fill="#161b22"/>
+<circle cx="16" cy="18" r="6" fill="#ff5f56"/>
+<circle cx="34" cy="18" r="6" fill="#ffbd2e"/>
+<circle cx="52" cy="18" r="6" fill="#27c93f"/>
+<text x="578.5" y="23" fill="#8b949e" text-anchor="middle" >decision-log/ — vouch diff (decision evolution)</text>
+<text x="16" y="52" fill="#7ee787" xml:space="preserve">$ vouch diff billing-data-requires-acid-guarantees-postgresql-is-the-prim use-postgresql-15-for-enhanced-replication-and-monitoring-fe</text>
+<text x="16" y="72" fill="#c9d1d9" xml:space="preserve">diff claim billing-data-requires-acid-guarantees-postgresql-is-the-prim → use-postgresql-15-for-enhanced-replication-and-monitoring-fe</text>
+<text x="16" y="92" fill="#c9d1d9" xml:space="preserve">  confidence: 0.95 → 0.98</text>
+<text x="16" y="112" fill="#c9d1d9" xml:space="preserve">  text:</text>
+<text x="16" y="132" fill="#c9d1d9" xml:space="preserve">    --- </text>
+<text x="16" y="152" fill="#c9d1d9" xml:space="preserve">    +++ </text>
+<text x="16" y="172" fill="#c9d1d9" xml:space="preserve">    @@ -1 +1 @@</text>
+<text x="16" y="192" fill="#c9d1d9" xml:space="preserve">    -Billing data requires ACID guarantees; PostgreSQL is the primary data store.</text>
+<text x="16" y="212" fill="#c9d1d9" xml:space="preserve">    +Use PostgreSQL 15 for enhanced replication and monitoring features.</text>
+</svg>

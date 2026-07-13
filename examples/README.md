@@ -21,6 +21,27 @@ the data.
 | [level-0-markdown-wiki/](level-0-markdown-wiki/) | Conformance level 0: pages only, no claims, no graph — a plain markdown wiki | 3 pages, 0 claims |
 | [level-3-graph/](level-3-graph/) | Conformance level 3: a full claim + entity + relation graph with provenance | 5 claims, 3 pages, 6 entities, 6 relations |
 
+## What the snapshots look like
+
+Rendered straight from the shipped fixtures by
+[`docs/img/examples/render.py`](../docs/img/examples/render.py) — no bespoke
+data, so they re-render byte-for-byte (`make examples-screenshots`).
+
+**[tiny/](tiny/)** — artifact counts, retrieval, a reviewed record, and the
+audit trail:
+
+<img src="../docs/img/examples/tiny-status.svg" alt="vouch status on the tiny example" width="560">
+<img src="../docs/img/examples/tiny-search.svg" alt="vouch search auth on the tiny example" width="640">
+<img src="../docs/img/examples/tiny-show.svg" alt="vouch show prop-001 on the tiny example" width="560">
+<img src="../docs/img/examples/tiny-audit.svg" alt="vouch audit on the tiny example" width="760">
+
+**[decision-log/](decision-log/)** — retrieval across the pricing claims and a
+supersession diff (the example's whole point — supersession with the trail
+intact):
+
+<img src="../docs/img/examples/decision-log-search.svg" alt="vouch search free-tier on the decision-log example" width="720">
+<img src="../docs/img/examples/decision-log-diff.svg" alt="vouch diff showing supersession on the decision-log example" width="760">
+
 ## Trying a snapshot
 
 ```bash

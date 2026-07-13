@@ -1,0 +1,152 @@
+"docs":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "*.md"
+          - "docs/**"
+          - "examples/**"
+          - "spec/**"
+          - "templates/README.md"
+
+"ci":
+  - changed-files:
+      - any-glob-to-any-file:
+          - ".github/**"
+
+"cli":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/vouch/cli.py"
+          - "tests/test_cli.py"
+
+"auto-pr":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/vouch/auto_pr.py"
+          - "skills/auto-pr/**"
+          - "tests/test_auto_pr.py"
+
+"dual-solve":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/vouch/dual_solve.py"
+          - "src/vouch/sandbox.py"
+          - "src/vouch/web/dual_solve_api.py"
+          - "src/vouch/web/static/dual_solve.*"
+          - "src/vouch/web/templates/dual_solve.html"
+          - "tests/test_dual_solve.py"
+          - "tests/test_sandbox.py"
+          - "tests/test_web_dual_solve.py"
+
+"review-ui":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/vouch/web/**"
+          - "docs/review-ui.md"
+          - "tests/test_web*.py"
+
+"website":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "web/**"
+
+"adapters":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "adapters/**"
+          - "src/vouch/install_adapter.py"
+          - "tests/test_install_adapter.py"
+
+"openclaw":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "adapters/openclaw/**"
+          - "openclaw.plugin.json"
+          - "src/vouch/openclaw/**"
+          - "tests/test_openclaw*.py"
+
+"mcp":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/vouch/capabilities.py"
+          - "src/vouch/http_server.py"
+          - "src/vouch/jsonl_server.py"
+          - "src/vouch/server.py"
+          - "tests/test_capabilities.py"
+          - "tests/test_http_server*.py"
+          - "tests/test_jsonl_server.py"
+
+"storage":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "migrations/**"
+          - "src/vouch/audit.py"
+          - "src/vouch/bundle.py"
+          - "src/vouch/lifecycle.py"
+          - "src/vouch/migrations/**"
+          - "src/vouch/models.py"
+          - "src/vouch/page_kinds.py"
+          - "src/vouch/proposals.py"
+          - "src/vouch/storage.py"
+          - "templates/**"
+          - "tests/fixtures/migrations/**"
+          - "tests/test_audit*.py"
+          - "tests/test_bundle.py"
+          - "tests/test_migrations.py"
+          - "tests/test_page_kinds.py"
+          - "tests/test_schema_migrations.py"
+          - "tests/test_storage.py"
+
+"retrieval":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "eval/**"
+          - "src/vouch/context.py"
+          - "src/vouch/eval/**"
+          - "src/vouch/graph.py"
+          - "src/vouch/hot_memory.py"
+          - "src/vouch/index_db.py"
+          - "src/vouch/salience.py"
+          - "src/vouch/synthesize.py"
+          - "src/vouch/volunteer_context.py"
+          - "tests/test_context.py"
+          - "tests/test_eval_recall.py"
+          - "tests/test_graph.py"
+          - "tests/test_index.py"
+          - "tests/test_retrieval_backend.py"
+          - "tests/test_salience.py"
+          - "tests/test_synthesize.py"
+          - "tests/test_volunteer_context.py"
+
+"embeddings":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/vouch/embeddings/**"
+          - "tests/embeddings/**"
+
+"sync":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/vouch/diff.py"
+          - "src/vouch/sync.py"
+          - "src/vouch/vault_sync.py"
+          - "tests/test_diff.py"
+          - "tests/test_sync.py"
+          - "tests/test_vault_sync.py"
+
+"schemas":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "schemas/**"
+          - "scripts/gen_schemas.py"
+
+"packaging":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "MANIFEST.in"
+          - "Makefile"
+          - "pyproject.toml"
+
+"tests":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "tests/**"

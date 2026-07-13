@@ -19,6 +19,7 @@ from typing import Any, Literal, cast
 import yaml
 
 from . import graph, index_db
+from .embeddings.fusion import rrf_fuse
 from .models import ClaimStatus, ContextItem, ContextPack, ContextQuality
 from .scoping import (
     ViewerContext,
@@ -42,7 +43,8 @@ _RETRACTED_CLAIM_STATUSES = frozenset({
 
 ContextItemKind = Literal["claim", "page", "entity", "relation", "source"]
 
-_VALID_BACKENDS = ("auto", "embedding", "fts5", "substring")
+_VALID_BACKENDS = ("auto", "hybrid", "embedding", "fts5", "substring")
+_RERANKER_CACHE: Any | None = None
 
 
 def _configured_backend(store: KBStore) -> str:
@@ -54,7 +56,7 @@ def _configured_backend(store: KBStore) -> str:
     falls back to "auto".
     """
     try:
-        loaded = yaml.safe_load(store.config_path.read_text())
+        loaded = yaml.safe_load(store.config_path.read_text(encoding="utf-8"))
     except (OSError, yaml.YAMLError):
         return "auto"
     if not isinstance(loaded, dict):
@@ -73,6 +75,90 @@ def _configured_backend(store: KBStore) -> str:
     return "auto"
 
 
+def _configured_rerank(store: KBStore, *, limit: int) -> tuple[bool, int]:
+    """Resolve the optional context rerank stage from config.yaml.
+
+    Defaults to disabled so existing KBs keep byte-identical ordering unless
+    they opt in with ``retrieval.rerank.enabled: true``. ``top_k`` is the
+    window to reorder; by default it is the caller's context limit.
+    """
+    try:
+        loaded = yaml.safe_load(store.config_path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        return False, limit
+    if not isinstance(loaded, dict):
+        return False, limit
+    retrieval = loaded.get("retrieval")
+    if not isinstance(retrieval, dict):
+        return False, limit
+    rerank = retrieval.get("rerank")
+    if not isinstance(rerank, dict):
+        return False, limit
+
+    enabled = rerank.get("enabled", False)
+    enabled = enabled if isinstance(enabled, bool) else False
+
+    top_k = rerank.get("top_k", limit)
+    top_k = (
+        top_k
+        if isinstance(top_k, int) and not isinstance(top_k, bool) and top_k > 0
+        else limit
+    )
+    return enabled, top_k
+
+
+def _default_reranker_cached() -> Any:
+    global _RERANKER_CACHE
+    if _RERANKER_CACHE is None:
+        from .embeddings.rerank import default_reranker
+
+        _RERANKER_CACHE = default_reranker()
+    return _RERANKER_CACHE
+
+
+def _maybe_rerank(
+    store: KBStore,
+    *,
+    query: str,
+    hits: list[tuple[str, str, str, float]],
+    limit: int,
+) -> list[tuple[str, str, str, float]]:
+    enabled, top_k = _configured_rerank(store, limit=limit)
+    if not enabled or not hits or top_k <= 0:
+        return hits
+
+    window_size = min(top_k, len(hits))
+    window = hits[:window_size]
+    try:
+        from .embeddings.rerank import rerank as do_rerank
+
+        reranked = do_rerank(
+            query=query,
+            hits=window,
+            reranker=_default_reranker_cached(),
+            top_k=window_size,
+        )
+    except ImportError:
+        return hits
+
+    # Keep reranking as an ordering-only stage: the configured window may move,
+    # but it must not add/drop artifacts from the already-scoped result set.
+    original_by_key = {(hit[0], hit[1]): hit for hit in window}
+    seen: set[tuple[str, str]] = set()
+    ordered: list[tuple[str, str, str, float]] = []
+    for hit in reranked:
+        key = (hit[0], hit[1])
+        if key in original_by_key and key not in seen:
+            ordered.append(original_by_key[key])
+            seen.add(key)
+    for hit in window:
+        key = (hit[0], hit[1])
+        if key not in seen:
+            ordered.append(hit)
+            seen.add(key)
+    return ordered + hits[window_size:]
+
+
 def _retrieve(
     store: KBStore,
     query: str,
@@ -82,7 +168,8 @@ def _retrieve(
     """Return list of (kind, id, summary, score, backend).
 
     The backend is chosen by `retrieval.backend` in config.yaml:
-      - "auto" (default): embedding -> FTS5 -> substring
+      - "auto" (default) / "hybrid": fuse embedding + FTS5 via RRF, falling
+        back to a substring scan only if both retrievers are empty
       - "embedding": semantic search only
       - "fts5": lexical FTS5 only
       - "substring": substring scan only
@@ -90,34 +177,39 @@ def _retrieve(
     backend = _configured_backend(store)
     fetch_limit = scoped_fetch_limit(limit, viewer)
 
-    if backend in ("auto", "embedding"):
+    if backend in ("auto", "hybrid"):
+        sem = index_db.search_semantic(store.kb_dir, query, limit=fetch_limit)
+        try:
+            lex = index_db.search(store.kb_dir, query, limit=fetch_limit)
+        except sqlite3.Error:
+            lex = []
+        fused = rrf_fuse(sem, lex, limit=fetch_limit)
+        if fused:
+            filtered = filter_hits(store, fused, viewer, limit=limit)
+            filtered = _maybe_rerank(store, query=query, hits=filtered, limit=limit)
+            return [(k, i, s, sc, "hybrid") for k, i, s, sc in filtered]
+        # both retrievers empty -> fall through to the substring scan below.
+
+    if backend == "embedding":
         raw = index_db.search_semantic(store.kb_dir, query, limit=fetch_limit)
         if raw:
             filtered = filter_hits(store, raw, viewer, limit=limit)
             return [(k, i, s, sc, "embedding") for k, i, s, sc in filtered]
-        if backend == "embedding":
-            return []
+        return []
 
-    if backend in ("auto", "fts5"):
+    if backend == "fts5":
         try:
             hits = index_db.search(store.kb_dir, query, limit=fetch_limit)
             if hits:
                 filtered = filter_hits(store, hits, viewer, limit=limit)
                 return [(k, i, s, sc, "fts5") for k, i, s, sc in filtered]
         except sqlite3.Error:
-            # FTS5 unavailable, db missing, or schema mismatch — fall through
-            # to substring scan (auto) or empty (explicit fts5). Other
-            # exceptions are real bugs and propagate.
             pass
-        if backend == "fts5":
-            return []
+        return []
 
     substring_hits = store.search_substring(query, limit=fetch_limit)
     filtered = filter_hits(store, substring_hits, viewer, limit=limit)
-    return [
-        (k, i, s, sc, "substring")
-        for k, i, s, sc in filtered
-    ]
+    return [(k, i, s, sc, "substring") for k, i, s, sc in filtered]
 
 
 def _enrich_summary(store: KBStore, kind: str, artifact_id: str, summary: str) -> str:
@@ -197,6 +289,36 @@ def _append_graph_neighbors(
     return warnings
 
 
+def _jaccard(a: set[str], b: set[str]) -> float:
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a | b)
+
+
+def _dedupe_near_duplicates(items: list[ContextItem]) -> list[ContextItem]:
+    """Drop items whose summary is near-identical to a higher-scored one.
+
+    The *keep* decision runs in descending-score order so the highest-scored
+    member of a near-duplicate cluster survives; survivors are returned in the
+    caller's original order. build_context_pack appends lower-priority items
+    (graph-expansion neighbours) after the ranked hits and relies on that tail
+    ordering for budget eviction, so this pass must not re-rank the pack.
+
+    Cheap greedy heuristic (token-set Jaccard >= 0.85 over the first 40 tokens);
+    it can over-merge long near-templated claims that differ by a single token.
+    """
+    dropped: set[int] = set()
+    kept_tokens: list[set[str]] = []
+    order = sorted(range(len(items)), key=lambda i: items[i].score, reverse=True)
+    for idx in order:
+        toks = set(items[idx].summary.lower().split()[:40])
+        if any(_jaccard(toks, seen) >= 0.85 for seen in kept_tokens):
+            dropped.add(idx)
+            continue
+        kept_tokens.append(toks)
+    return [it for i, it in enumerate(items) if i not in dropped]
+
+
 def build_context_pack(
     store: KBStore,
     *,
@@ -254,6 +376,9 @@ def build_context_pack(
                 rel_types=graph_rel_types,
             )
         )
+
+    items = _dedupe_near_duplicates(items)
+
     failed: list[str] = []
     uncited: list[str] = []
     budget_truncated = False
