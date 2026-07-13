@@ -44,6 +44,7 @@ _RETRACTED_CLAIM_STATUSES = frozenset({
 ContextItemKind = Literal["claim", "page", "entity", "relation", "source"]
 
 _VALID_BACKENDS = ("auto", "hybrid", "embedding", "fts5", "substring")
+_RERANKER_CACHE: Any | None = None
 
 
 def _configured_backend(store: KBStore) -> str:
@@ -74,6 +75,90 @@ def _configured_backend(store: KBStore) -> str:
     return "auto"
 
 
+def _configured_rerank(store: KBStore, *, limit: int) -> tuple[bool, int]:
+    """Resolve the optional context rerank stage from config.yaml.
+
+    Defaults to disabled so existing KBs keep byte-identical ordering unless
+    they opt in with ``retrieval.rerank.enabled: true``. ``top_k`` is the
+    window to reorder; by default it is the caller's context limit.
+    """
+    try:
+        loaded = yaml.safe_load(store.config_path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        return False, limit
+    if not isinstance(loaded, dict):
+        return False, limit
+    retrieval = loaded.get("retrieval")
+    if not isinstance(retrieval, dict):
+        return False, limit
+    rerank = retrieval.get("rerank")
+    if not isinstance(rerank, dict):
+        return False, limit
+
+    enabled = rerank.get("enabled", False)
+    enabled = enabled if isinstance(enabled, bool) else False
+
+    top_k = rerank.get("top_k", limit)
+    top_k = (
+        top_k
+        if isinstance(top_k, int) and not isinstance(top_k, bool) and top_k > 0
+        else limit
+    )
+    return enabled, top_k
+
+
+def _default_reranker_cached() -> Any:
+    global _RERANKER_CACHE
+    if _RERANKER_CACHE is None:
+        from .embeddings.rerank import default_reranker
+
+        _RERANKER_CACHE = default_reranker()
+    return _RERANKER_CACHE
+
+
+def _maybe_rerank(
+    store: KBStore,
+    *,
+    query: str,
+    hits: list[tuple[str, str, str, float]],
+    limit: int,
+) -> list[tuple[str, str, str, float]]:
+    enabled, top_k = _configured_rerank(store, limit=limit)
+    if not enabled or not hits or top_k <= 0:
+        return hits
+
+    window_size = min(top_k, len(hits))
+    window = hits[:window_size]
+    try:
+        from .embeddings.rerank import rerank as do_rerank
+
+        reranked = do_rerank(
+            query=query,
+            hits=window,
+            reranker=_default_reranker_cached(),
+            top_k=window_size,
+        )
+    except ImportError:
+        return hits
+
+    # Keep reranking as an ordering-only stage: the configured window may move,
+    # but it must not add/drop artifacts from the already-scoped result set.
+    original_by_key = {(hit[0], hit[1]): hit for hit in window}
+    seen: set[tuple[str, str]] = set()
+    ordered: list[tuple[str, str, str, float]] = []
+    for hit in reranked:
+        key = (hit[0], hit[1])
+        if key in original_by_key and key not in seen:
+            ordered.append(original_by_key[key])
+            seen.add(key)
+    for hit in window:
+        key = (hit[0], hit[1])
+        if key not in seen:
+            ordered.append(hit)
+            seen.add(key)
+    return ordered + hits[window_size:]
+
+
 def _retrieve(
     store: KBStore,
     query: str,
@@ -101,6 +186,7 @@ def _retrieve(
         fused = rrf_fuse(sem, lex, limit=fetch_limit)
         if fused:
             filtered = filter_hits(store, fused, viewer, limit=limit)
+            filtered = _maybe_rerank(store, query=query, hits=filtered, limit=limit)
             return [(k, i, s, sc, "hybrid") for k, i, s, sc in filtered]
         # both retrievers empty -> fall through to the substring scan below.
 
