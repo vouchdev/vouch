@@ -615,6 +615,30 @@ def test_check_approvable_clean_for_well_formed_proposal(
     assert check_approvable(store, pr.id, approved_by="reviewer") is None
 
 
+def test_check_approvable_catches_id_collision_with_existing_claim(
+    store: KBStore,
+) -> None:
+    """approve() refuses to overwrite an existing artifact; the batch
+    precheck must catch that too, or `vouch approve a b` can say "all
+    clear" and then partially apply before failing on the collision."""
+    src = store.put_source(b"e")
+    first = propose_claim(
+        store, text="first", evidence=[src.id],
+        slug_hint="foo-bar", proposed_by="agent",
+    )
+    approve(store, first.id, approved_by="reviewer")
+
+    second = propose_claim(
+        store, text="second", evidence=[src.id],
+        slug_hint="foo-bar", proposed_by="agent",
+    )
+    reason = check_approvable(store, second.id, approved_by="reviewer")
+    assert reason is not None
+    assert "already exists" in reason
+    with pytest.raises(ProposalError, match="already exists"):
+        approve(store, second.id, approved_by="reviewer")
+
+
 # --- evidence -------------------------------------------------------------
 
 
