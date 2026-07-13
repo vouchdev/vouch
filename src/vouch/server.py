@@ -22,6 +22,7 @@ from mcp.server.fastmcp import FastMCP
 from . import audit, bundle, health, mcp_profiles, volunteer_context
 from . import compile as compile_mod
 from . import digest as digest_mod
+from . import hot_memory as hot_mod
 from . import lifecycle as life
 from . import metrics as metrics_mod
 from . import salience as salience_mod
@@ -213,14 +214,19 @@ def kb_search(
 
     def _to_dicts(h: list[tuple[str, str, str, float]], used: str) -> dict[str, Any]:
         scoped = filter_hits(store, h, viewer, limit=limit)
-        return {
+        hits_list: list[dict[str, Any]] = [
+            {"kind": k, "id": i, "snippet": sn, "score": sc, "backend": used}
+            for k, i, sn, sc in scoped
+        ]
+        result: dict[str, Any] = {
             "backend": used,
             "viewer": {"project": viewer.project, "agent": viewer.agent},
-            "hits": [
-                {"kind": k, "id": i, "snippet": sn, "score": sc, "backend": used}
-                for k, i, sn, sc in scoped
-            ],
+            "hits": hits_list,
         }
+        return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+            result, store, query=query,
+            exclude_ids=[str(hit["id"]) for hit in hits_list],
+        )
 
     if backend in ("auto", "embedding"):
         hits = index_db.search_semantic(
@@ -338,7 +344,12 @@ def kb_context(
         project=project, agent=agent,
         expand_graph=expand_graph, graph_depth=graph_depth, graph_limit=graph_limit,
     )
-    return salience_mod.attach_salience(result, store, session_id, cfg)
+    result = salience_mod.attach_salience(result, store, session_id, cfg)
+    pack_items = result.get("items") if isinstance(result, dict) else None
+    exclude = [it.get("id") for it in pack_items] if isinstance(pack_items, list) else []
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        result, store, query=task, exclude_ids=[i for i in exclude if i],
+    )
 
 
 @mcp.tool()
@@ -365,35 +376,55 @@ def kb_synthesize(
 @mcp.tool()
 def kb_read_page(page_id: str) -> dict[str, Any]:
     """Return a page (title, body, claim ids)."""
+    store = _store()
     try:
-        return _store().get_page(page_id).model_dump(mode="json")
+        page = store.get_page(page_id)
     except ArtifactNotFoundError as e:
         raise ValueError(str(e)) from e
+    result = page.model_dump(mode="json")
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        result, store, query=hot_mod.query_bias_for_page(page),
+    )
 
 
 @mcp.tool()
 def kb_read_claim(claim_id: str) -> dict[str, Any]:
     """Return a claim with its citation list."""
+    store = _store()
     try:
-        return _store().get_claim(claim_id).model_dump(mode="json")
+        claim = store.get_claim(claim_id)
     except ArtifactNotFoundError as e:
         raise ValueError(str(e)) from e
+    result = claim.model_dump(mode="json")
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        result, store, query=claim.text, exclude_ids=[claim.id],
+    )
 
 
 @mcp.tool()
 def kb_read_entity(entity_id: str) -> dict[str, Any]:
+    store = _store()
     try:
-        return _store().get_entity(entity_id).model_dump(mode="json")
+        entity = store.get_entity(entity_id)
     except ArtifactNotFoundError as e:
         raise ValueError(str(e)) from e
+    result = entity.model_dump(mode="json")
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        result, store, query=hot_mod.query_bias_for_entity(entity),
+    )
 
 
 @mcp.tool()
 def kb_read_relation(relation_id: str) -> dict[str, Any]:
+    store = _store()
     try:
-        return _store().get_relation(relation_id).model_dump(mode="json")
+        relation = store.get_relation(relation_id)
     except ArtifactNotFoundError as e:
         raise ValueError(str(e)) from e
+    result = relation.model_dump(mode="json")
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        result, store, query=None,
+    )
 
 
 @mcp.tool()
@@ -415,7 +446,7 @@ def kb_list_pages(
     meta: dict[str, str] | None = None,
     meta_before: dict[str, str] | None = None,
     meta_after: dict[str, str] | None = None,
-) -> list[dict[str, Any]]:
+) -> dict[str, Any]:
     """List pages, optionally filtered by kind and frontmatter.
 
     type: page kind (built-in or config-declared, e.g. "followup").
@@ -423,62 +454,85 @@ def kb_list_pages(
     meta_before / meta_after: inclusive bounds — numbers or ISO dates,
     e.g. meta_before={"due_at": "2026-07-10"} for followups due by then.
     """
+    store = _store()
     pages = filter_pages(
-        _store().list_pages(),
+        store.list_pages(),
         kind=type,
         equals=meta,
         before=meta_before,
         after=meta_after,
     )
-    return [
+    items = [
         {"id": p.id, "title": p.title, "type": p.type, "tags": p.tags, "metadata": p.metadata}
         for p in pages
     ]
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        items, store, query=None, list_envelope=True,
+    )
 
 
 @mcp.tool()
-def kb_list_claims(status: str | None = None) -> list[dict[str, Any]]:
+def kb_list_claims(status: str | None = None) -> dict[str, Any]:
     """List all claims, optionally filtered by status."""
-    claims = _store().list_claims()
+    store = _store()
+    claims = store.list_claims()
     if status:
         claims = [c for c in claims if c.status.value == status]
-    return [c.model_dump(mode="json") for c in claims]
+    items = [c.model_dump(mode="json") for c in claims]
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        items, store, query=None, list_envelope=True,
+    )
 
 
 @mcp.tool()
-def kb_list_entities(entity_type: str | None = None) -> list[dict[str, Any]]:
-    entities = _store().list_entities()
+def kb_list_entities(entity_type: str | None = None) -> dict[str, Any]:
+    store = _store()
+    entities = store.list_entities()
     if entity_type:
         entities = [e for e in entities if e.type.value == entity_type]
-    return [e.model_dump(mode="json") for e in entities]
+    items = [e.model_dump(mode="json") for e in entities]
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        items, store, query=None, list_envelope=True,
+    )
 
 
 @mcp.tool()
-def kb_list_relations(node_id: str | None = None) -> list[dict[str, Any]]:
+def kb_list_relations(node_id: str | None = None) -> dict[str, Any]:
     """List all relations; if node_id is given, only edges touching it."""
     store = _store()
     rels = store.list_relations()
     if node_id:
         rels = [r for r in rels if r.source == node_id or r.target == node_id]
-    return [r.model_dump(mode="json") for r in rels]
+    items = [r.model_dump(mode="json") for r in rels]
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        items, store, query=None, list_envelope=True,
+    )
 
 
 @mcp.tool()
-def kb_list_sources() -> list[dict[str, Any]]:
-    return [
+def kb_list_sources() -> dict[str, Any]:
+    store = _store()
+    items = [
         {"id": s.id, "title": s.title, "type": s.type.value,
          "locator": s.locator, "byte_size": s.byte_size}
-        for s in _store().list_sources()
+        for s in store.list_sources()
     ]
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        items, store, query=None, list_envelope=True,
+    )
 
 
 @mcp.tool()
-def kb_list_pending() -> list[dict[str, Any]]:
+def kb_list_pending() -> dict[str, Any]:
     """List proposals awaiting human review."""
-    return [
+    store = _store()
+    items = [
         p.model_dump(mode="json")
-        for p in _store().list_proposals(ProposalStatus.PENDING)
+        for p in store.list_proposals(ProposalStatus.PENDING)
     ]
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        items, store, query=None, list_envelope=True,
+    )
 
 
 @mcp.tool()

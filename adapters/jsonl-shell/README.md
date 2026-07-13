@@ -32,7 +32,7 @@ cat my-rfc.md | jq -Rs '{
 ```bash
 echo '{"id":"r1","method":"kb.list_pending"}' \
   | vouch serve --transport jsonl \
-  | jq -r '.result[] | [.id, .kind, .proposed_by, .proposed_at] | @tsv' \
+  | jq -r '.result.items[] | [.id, .kind, .proposed_by, .proposed_at] | @tsv' \
   | column -t
 ```
 
@@ -50,7 +50,7 @@ set -euo pipefail
 
 pending=$(echo '{"id":"r1","method":"kb.list_pending"}' \
   | vouch serve --transport jsonl \
-  | jq -r '.result[] | select(.proposed_by == "release-notes-bot") | .id')
+  | jq -r '.result.items[] | select(.proposed_by == "release-notes-bot") | .id')
 
 for id in $pending; do
   echo "{\"id\":\"r1\",\"method\":\"kb.approve\",\"params\":{\"proposal_id\":\"$id\",\"reason\":\"auto: release-notes-bot\"}}" \

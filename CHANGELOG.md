@@ -59,23 +59,34 @@ All notable changes to vouch are documented here. Format follows
   changed-files list and the stacked all-files diff. selection is
   per-candidate, so inspecting claude's diff never moves the codex pane.
   (#294)
-- `kb.synthesize` llm backend: `llm=true` drafts the answer with the
-  deployment-configured `compile.llm_cmd`, grounded in retrieved kb pages
-  and approved claims. code still verifies every `[id]` citation against
-  the offered sources — invented ids are stripped, and a draft left with no
-  verifiable citation returns an empty answer rather than a guess. the wire
-  shape is unchanged plus additive `pages` and `_meta.synthesis_backend`
-  fields. cli mirror: `vouch synthesize --llm`; the jsonl/http surface
-  already forwarded the flag.
-- console Chat: llm answers activated — the chat asks `kb.synthesize` with
-  `llm: true` and falls back to deterministic claim synthesis when no
-  `compile.llm_cmd` is configured. page citations open the page drawer, and
-  llm answers carry an `llm` badge next to the confidence grade.
+- ``_meta.vouch_hot_memory`` on every primary read-side ``kb.*`` response
+  (``kb.search``, ``kb.context``, ``kb.read_*``, ``kb.list_*``): a TTL-cached
+  sidebar of recently approved claims, query-biased where the tool has a
+  natural anchor (entity name/aliases, page title/tags, claim text, search
+  query). ``kb.list_pending`` uses recency only. Meta-tools, write paths, and
+  lifecycle ops are excluded by design (#225).
+
+### Changed
+- ``kb.list_*`` JSONL/MCP responses now use a dict envelope
+  ``{"items": [...], "_meta": {...}}`` instead of a bare list. A one-release
+  deprecation note lives at ``_meta.deprecation``; read ``result.items`` instead
+  of treating ``result`` as the list. When the KB has recent approved claims,
+  ``_meta.vouch_hot_memory`` carries the same recency sidebar as other read
+  tools (#225).
+- ``kb.capabilities`` advertises the hot-memory contract under ``hot_memory``
+  (sidebar key, list-envelope flag, covered method list).
 
 ### Fixed
 - `vouch digest --limit` now caps the followups-due section like the
   pending, decisions, and stale sections — it previously returned every
   due followup regardless of the limit, contradicting the `--limit` help.
+- `kb.capabilities.host_compat` always reported `{}`: `_load_host_compat`
+  (#237) read `openclaw.compat` from `openclaw.plugin.json`, but that
+  manifest may not carry a top-level `openclaw` key at all (enforced by
+  `test_manifest_carries_no_dead_dialect_fields`) — `openclaw.compat.pluginApi`
+  has only ever lived in `package.json`. Repointed `_load_host_compat` (now
+  reading `_PACKAGE_JSON_PATH`) at `package.json`, where the value has been
+  present all along.
 
 - the dual-solve diff renderer dropped added/removed lines whose content
   starts with `++`/`--` (e.g. an added `++counter` line) by treating them as
