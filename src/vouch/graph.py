@@ -176,6 +176,23 @@ def find_neighbors(
         for current in frontier:
             for edge in _edges_from_node(store, current, rel_types=rel_filter):
                 other = edge.target if edge.source == current else edge.source
+                if other not in visited:
+                    try:
+                        kind = _node_kind(store, other)
+                    except ArtifactNotFoundError:
+                        continue
+                    if not _neighbor_ok(store, other, kind):
+                        continue
+                    visited.add(other)
+                    next_frontier.append(other)
+                    nodes.append({
+                        "id": other,
+                        "kind": kind,
+                        "distance": dist,
+                        "via": current,
+                        "relation": edge.relation,
+                        "summary": _summary_for(store, kind, other),
+                    })
                 ekey = (edge.source, edge.target, edge.relation)
                 if ekey not in seen_edges:
                     seen_edges.add(ekey)
@@ -185,24 +202,6 @@ def find_neighbors(
                         "relation": edge.relation,
                         "relation_id": edge.relation_id,
                     })
-                if other in visited:
-                    continue
-                try:
-                    kind = _node_kind(store, other)
-                except ArtifactNotFoundError:
-                    continue
-                if not _neighbor_ok(store, other, kind):
-                    continue
-                visited.add(other)
-                next_frontier.append(other)
-                nodes.append({
-                    "id": other,
-                    "kind": kind,
-                    "distance": dist,
-                    "via": current,
-                    "relation": edge.relation,
-                    "summary": _summary_for(store, kind, other),
-                })
                 if len(nodes) >= max_nodes:
                     break
             if len(nodes) >= max_nodes:
