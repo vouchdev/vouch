@@ -59,6 +59,18 @@ All notable changes to vouch are documented here. Format follows
   changed-files list and the stacked all-files diff. selection is
   per-candidate, so inspecting claude's diff never moves the codex pane.
   (#294)
+- `kb.synthesize` llm backend: `llm=true` drafts the answer with the
+  deployment-configured `compile.llm_cmd`, grounded in retrieved kb pages
+  and approved claims. code still verifies every `[id]` citation against
+  the offered sources — invented ids are stripped, and a draft left with no
+  verifiable citation returns an empty answer rather than a guess. the wire
+  shape is unchanged plus additive `pages` and `_meta.synthesis_backend`
+  fields. cli mirror: `vouch synthesize --llm`; the jsonl/http surface
+  already forwarded the flag.
+- console Chat: llm answers activated — the chat asks `kb.synthesize` with
+  `llm: true` and falls back to deterministic claim synthesis when no
+  `compile.llm_cmd` is configured. page citations open the page drawer, and
+  llm answers carry an `llm` badge next to the confidence grade.
 
 ### Fixed
 - `vouch digest --limit` now caps the followups-due section like the
