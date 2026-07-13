@@ -1,0 +1,6 @@
+node_modules/
+dist/
+playwright-report/
+test-results/
+e2e/.kb-state.json
+.superpowers/

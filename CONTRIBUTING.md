@@ -68,9 +68,14 @@ touch behavior.
 ```bash
 git clone https://github.com/vouchdev/vouch
 cd vouch
-python -m venv .venv && source .venv/bin/activate
-pip install -e '.[dev]'
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e '.[dev,web]'
 ```
+
+The web console isn't prebuilt in a source checkout: `make webapp-build`
+(needs node) builds it into `webapp/dist` so `vouch console` can serve
+it, or `make console` runs the backend and the console dev server
+together.
 
 ## The gate
 
@@ -125,6 +130,9 @@ strict:
 - A `CHANGELOG.md` entry under `## [Unreleased]` for user-visible changes.
 - Lowercase prose in the PR body, matching the repo voice. No
   `Co-Authored-By` or AI-attribution trailers in commits.
+- For changes that affect the webapp, CLI output, or user-facing behavior:
+  screenshots or screenrecording from the vouch-ui webapp showing the
+  behavior working as intended.
 
 ## Commit and PR titles
 
