@@ -21,6 +21,25 @@
 
 The destination is the one [Andrej Karpathy's llm-wiki idea file](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) sketches: stop using LLMs as search engines that rediscover your documents on every question — use them as tireless knowledge engineers that compile, cross-reference, and maintain a living wiki, while humans curate and think. vouch is that idea with the write path made trustworthy. `vouch compile` has an LLM draft the topic pages, but every page cites approved claims, every `[claim: …]` citation is machine-verified before the draft is filed, and the drafts pass through the same review gate as every other write. The LLM compiles; the human approves; the wiki compounds.
 
+## "I can do this with one prompt"
+
+Often true — and worth being honest about. If you want your agent to remember things, a paragraph in `CLAUDE.md`, a memory file, or your host's built-in auto-memory gets you most of the way, costs nothing, and needs no install. Reach for that first. Recall is not a hard problem.
+
+What is hard is *trust in the write path*, and that's a different problem than memory. Single-writer memory needs no trust model: you're the only author, and a bad line costs you a shrug. The moment writes come from **more than one author** — several agents, a teammate, a future you who forgot the context — the question stops being "what did we say?" and becomes "**who decided this was true, on what evidence, and can I audit it later?**" A prompt cannot answer that, no matter how good the prompt is.
+
+That's the whole of vouch:
+
+| | one prompt / memory file | vouch |
+|---|---|---|
+| **Who can write** | whatever the agent decides to save | agents *propose*; a human approves — nothing else lands |
+| **Why believe a line** | vibes | every claim cites a content-hashed source; uncited is a validation error |
+| **When it's wrong** | edit and hope | supersede / contradict / archive, with the old version still in history |
+| **Who changed it** | file mtime | append-only audit log: who proposed, who approved, citing what, when |
+| **At n ≥ 2 writers** | last write wins, silently | one gate, one reviewed history, shared by `git clone` |
+| **What you read** | a growing pile of notes | compiled topic pages with verified citations — a wiki, not a log |
+
+So the honest pitch: **vouch is not a better place to put memory — it's a review gate in front of one, and a wiki on the other side of it.** If you're solo and happy, one prompt is genuinely fine; vouch's session capture runs passively alongside whatever your host already remembers, rather than replacing it. But once a fleet of agents writes to shared knowledge — or a team does — that pile of notes needs an editor, and an editor is not something you can prompt your way to. The case in full: [docs/review-gate.md](docs/review-gate.md).
+
 ## Watch it work (110 seconds)
 
 [![vouch demo — capture, summarize, approve, compile, recall](docs/img/how-it-works-preview.gif)](docs/vouch-how-it-works.mp4)
