@@ -38,6 +38,13 @@ That's the whole of vouch:
 | **At n ≥ 2 writers** | last write wins, silently | one gate, one reviewed history, shared by `git clone` |
 | **What you read** | a growing pile of notes | compiled topic pages with verified citations — a wiki, not a log |
 
+The same argument as a picture — at one writer the two are the same thing; the gap opens at the second writer and only widens:
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/trust-vs-writers-dark.svg">
+  <img src="docs/img/trust-vs-writers-light.svg" width="760" alt="Illustrative line chart of trust in what you read as writers are added. At one writer, a memory file and vouch are identical. From two writers on, the memory file's line decays toward low (last write wins, silently) while vouch's line stays high (every landed write reviewed).">
+</picture>
+
 So the honest pitch: **vouch is not a better place to put memory — it's a review gate in front of one, and a wiki on the other side of it.** If you're solo and happy, one prompt is genuinely fine; vouch's session capture runs passively alongside whatever your host already remembers, rather than replacing it. But once a fleet of agents writes to shared knowledge — or a team does — that pile of notes needs an editor, and an editor is not something you can prompt your way to. The case in full: [docs/review-gate.md](docs/review-gate.md).
 
 ## Watch it work (110 seconds)

@@ -1,0 +1,56 @@
+<svg viewBox="0 0 760 400" width="760" height="400" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="t">
+  <title id="t">Trust in what you read, as writers are added — identical at one writer; a memory file decays past two writers, a review gate holds.</title>
+  <g font-family="system-ui, -apple-system, 'Segoe UI', sans-serif">
+
+  <!-- header -->
+  <text x="8" y="26" font-size="15" font-weight="600" fill="#0b0b0b">Trust in what you read, as writers are added</text>
+  <text x="8" y="46" font-size="12" fill="#898781">illustrative — the shape of the argument, not a benchmark</text>
+
+  <!-- legend -->
+  <circle cx="14" cy="66" r="4" fill="#2a78d6"/>
+  <text x="24" y="70" font-size="12" fill="#52514e">vouch (review gate)</text>
+  <circle cx="166" cy="66" r="4" fill="#1baf7a"/>
+  <text x="176" y="70" font-size="12" fill="#52514e">one prompt / memory file</text>
+
+  <!-- axes: solid hairlines -->
+  <line x1="64" y1="100" x2="64" y2="320" stroke="#c3c2b7" stroke-width="1"/>
+  <line x1="64" y1="320" x2="560" y2="320" stroke="#c3c2b7" stroke-width="1"/>
+  <text x="56" y="112" font-size="11" fill="#898781" text-anchor="end">high</text>
+  <text x="56" y="318" font-size="11" fill="#898781" text-anchor="end">low</text>
+
+  <!-- x ticks + axis title -->
+  <text x="64"  y="340" font-size="12" fill="#898781" text-anchor="middle">1</text>
+  <text x="188" y="340" font-size="12" fill="#898781" text-anchor="middle">2</text>
+  <text x="312" y="340" font-size="12" fill="#898781" text-anchor="middle">3</text>
+  <text x="436" y="340" font-size="12" fill="#898781" text-anchor="middle">4</text>
+  <text x="560" y="340" font-size="12" fill="#898781" text-anchor="middle">5+</text>
+  <text x="312" y="364" font-size="12" fill="#52514e" text-anchor="middle">writers sharing the knowledge (agents, teammates, future you)</text>
+
+  <!-- series: memory file first, vouch drawn over it -->
+  <polyline points="64,139.6 188,199.0 312,232.0 436,254.0 560,267.2" fill="none" stroke="#1baf7a" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+  <polyline points="64,139.6 188,139.6 312,139.6 436,139.6 560,139.6" fill="none" stroke="#2a78d6" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+  <circle cx="188" cy="199.0" r="4.5" fill="#1baf7a" stroke="#ffffff" stroke-width="2"/>
+  <circle cx="312" cy="232.0" r="4.5" fill="#1baf7a" stroke="#ffffff" stroke-width="2"/>
+  <circle cx="436" cy="254.0" r="4.5" fill="#1baf7a" stroke="#ffffff" stroke-width="2"/>
+  <circle cx="560" cy="267.2" r="4.5" fill="#1baf7a" stroke="#ffffff" stroke-width="2"/>
+  <circle cx="188" cy="139.6" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="2"/>
+  <circle cx="312" cy="139.6" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="2"/>
+  <circle cx="436" cy="139.6" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="2"/>
+  <circle cx="560" cy="139.6" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="2"/>
+  <!-- shared start: both series begin at the same point -->
+  <circle cx="64" cy="139.6" r="6.5" fill="#1baf7a" stroke="#ffffff" stroke-width="2"/>
+  <circle cx="64" cy="139.6" r="4"   fill="#2a78d6"   stroke="#ffffff" stroke-width="1.5"/>
+
+  <!-- annotations -->
+  <text x="78" y="126" font-size="11.5" fill="#52514e">one writer: the two are identical</text>
+  <line x1="196" y1="184" x2="189" y2="193" stroke="#c3c2b7" stroke-width="1"/>
+  <text x="200" y="181" font-size="11.5" fill="#52514e">n ≥ 2: writes now need a trust model</text>
+
+  <!-- direct end labels (identity never color-alone) -->
+  <text x="576" y="137" font-size="12.5" font-weight="600" fill="#0b0b0b">vouch (review gate)</text>
+  <text x="576" y="153" font-size="11.5" fill="#898781">every landed write reviewed</text>
+  <text x="576" y="264" font-size="12.5" font-weight="600" fill="#0b0b0b">one prompt / memory file</text>
+  <text x="576" y="280" font-size="11.5" fill="#898781">last write wins, silently</text>
+
+  </g>
+</svg>
