@@ -6,8 +6,11 @@ proposal lifecycle, and writes audit events for every mutation.
 
 from __future__ import annotations
 
+import logging
+import sqlite3
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -20,6 +23,7 @@ from .models import (
     Claim,
     Entity,
     Page,
+    PageStatus,
     Proposal,
     ProposalKind,
     ProposalStatus,
@@ -27,6 +31,8 @@ from .models import (
 )
 from .page_kinds import PageKindError, load_page_kind_registry, validate_page
 from .storage import ArtifactNotFoundError, KBStore
+
+_log = logging.getLogger("vouch.proposals")
 
 
 class ProposalError(RuntimeError):
@@ -497,6 +503,34 @@ def check_approvable(
     return _payload_block_reason(store, proposal)
 
 
+def _index_or_degrade(
+    store: KBStore,
+    kind: str,
+    artifact_id: str,
+    index_fn: Callable[[sqlite3.Connection], None],
+) -> None:
+    """Write an approved artifact's FTS row, degrading instead of raising.
+
+    state.db is derived, so a locked or broken index must not brick the
+    durable approve: put_<kind>() has already written the artifact, and the
+    caller still has to record the decision and log the approve event. Letting
+    the index error escape would abort between the artifact write and
+    move_proposal_to_decided(), leaving the file on disk with the proposal
+    still pending -- and the retry would hit _ensure_no_existing_artifact and
+    brick the approve for good. Rebuild the missing row later with
+    `vouch index`.
+    """
+    try:
+        with index_db.open_db(store.kb_dir) as conn:
+            index_fn(conn)
+    except sqlite3.Error as e:
+        _log.warning(
+            "%s %s: FTS5 index skipped on approve (%s); state.db is derived, "
+            "rebuild with `vouch index`",
+            kind, artifact_id, e,
+        )
+
+
 def approve(
     store: KBStore,
     proposal_id: str,
@@ -508,7 +542,23 @@ def approve(
 
     Raises ProposalError if the proposal is not pending or if
     approved_by matches proposed_by (forbidden_self_approval).
+
+    The whole read-check-write runs under the per-KB decision lock so a
+    concurrent reject or approve of the same proposal cannot both proceed.
     """
+    with audit.decision_lock(store.kb_dir):
+        return _approve_locked(
+            store, proposal_id, approved_by=approved_by, reason=reason
+        )
+
+
+def _approve_locked(
+    store: KBStore,
+    proposal_id: str,
+    *,
+    approved_by: str,
+    reason: str | None = None,
+) -> Claim | Page | Entity | Relation:
     proposal = store.get_proposal(proposal_id)
     block = _approval_block_reason(store, proposal, approved_by)
     if block:
@@ -532,14 +582,21 @@ def approve(
             **payload
         )
         store.put_claim(claim)
-        with index_db.open_db(store.kb_dir) as conn:
-            index_db.index_claim(
+        _index_or_degrade(
+            store, "claim", claim.id,
+            lambda conn: index_db.index_claim(
                 conn, id=claim.id, text=claim.text,
-                type=claim.type.value, status=claim.status.value, tags=claim.tags,
-            )
+                type=claim.type.value, status=claim.status.value,
+                tags=claim.tags,
+            ),
+        )
         result = claim
     elif proposal.kind == ProposalKind.PAGE:
         page = Page(**payload)
+        # Approval is what makes a page live. Page defaults to DRAFT and nothing
+        # promoted it, so reviewed pages read as draft forever; stamp ACTIVE at
+        # the gate.
+        page.status = PageStatus.ACTIVE
         # Re-validate the kind at the gate: config may have tightened (or a
         # kind been removed) between propose and approve. Built-in kinds pass
         # trivially, so this is a no-op for the common path.
@@ -562,11 +619,13 @@ def approve(
             store.update_page(page)
         except ArtifactNotFoundError:
             store.put_page(page)
-        with index_db.open_db(store.kb_dir) as conn:
-            index_db.index_page(
+        _index_or_degrade(
+            store, "page", page.id,
+            lambda conn: index_db.index_page(
                 conn, id=page.id, title=page.title, body=page.body,
                 type=page.type, tags=page.tags,
-            )
+            ),
+        )
         result = page
         # Lazy import: extractors.edges calls back into propose_relation,
         # so importing it at module scope would be circular.
@@ -576,11 +635,14 @@ def approve(
     elif proposal.kind == ProposalKind.ENTITY:
         entity = Entity(**payload)
         store.put_entity(entity)
-        with index_db.open_db(store.kb_dir) as conn:
-            index_db.index_entity(
-                conn, id=entity.id, name=entity.name, description=entity.description,
+        _index_or_degrade(
+            store, "entity", entity.id,
+            lambda conn: index_db.index_entity(
+                conn, id=entity.id, name=entity.name,
+                description=entity.description,
                 type=entity.type.value, aliases=entity.aliases,
-            )
+            ),
+        )
         result = entity
     elif proposal.kind == ProposalKind.DELETE:
         result = _approve_delete(store, proposal, approved_by=approved_by)
@@ -611,22 +673,25 @@ def reject(
 ) -> Proposal:
     if not reason.strip():
         raise ProposalError("rejection must include a reason (future agent context)")
-    proposal = store.get_proposal(proposal_id)
-    if proposal.status != ProposalStatus.PENDING:
-        raise ProposalError(
-            f"proposal {proposal_id} is {proposal.status.value}, not pending"
+    # Serialise with approve()/expire_one() so a concurrent approve of this same
+    # proposal cannot land a durable claim under this REJECTED record.
+    with audit.decision_lock(store.kb_dir):
+        proposal = store.get_proposal(proposal_id)
+        if proposal.status != ProposalStatus.PENDING:
+            raise ProposalError(
+                f"proposal {proposal_id} is {proposal.status.value}, not pending"
+            )
+        proposal.status = ProposalStatus.REJECTED
+        proposal.decided_at = datetime.now(UTC)
+        proposal.decided_by = rejected_by
+        proposal.decision_reason = reason
+        store.move_proposal_to_decided(proposal)
+        audit.log_event(
+            store.kb_dir, event=f"proposal.{proposal.kind.value}.reject",
+            actor=rejected_by, object_ids=[proposal.id],
+            data={"reason": reason},
         )
-    proposal.status = ProposalStatus.REJECTED
-    proposal.decided_at = datetime.now(UTC)
-    proposal.decided_by = rejected_by
-    proposal.decision_reason = reason
-    store.move_proposal_to_decided(proposal)
-    audit.log_event(
-        store.kb_dir, event=f"proposal.{proposal.kind.value}.reject",
-        actor=rejected_by, object_ids=[proposal.id],
-        data={"reason": reason},
-    )
-    return proposal
+        return proposal
 
 
 def reject_auto_extracted(
@@ -698,29 +763,32 @@ def expire_one(
     expired_by: str = EXPIRE_ACTOR,
 ) -> Proposal:
     """Expire a single pending proposal (terminal reject + audit)."""
-    proposal = store.get_proposal(proposal_id)
-    if proposal.status != ProposalStatus.PENDING:
-        if (
-            proposal.status == ProposalStatus.REJECTED
-            and proposal.decision_reason == EXPIRE_REASON
-        ):
-            return proposal
-        raise ProposalError(
-            f"proposal {proposal_id} is {proposal.status.value}, not pending"
+    # Same decision lock as approve()/reject(): expiry is a reject, so it must
+    # not race a concurrent approve of the same proposal.
+    with audit.decision_lock(store.kb_dir):
+        proposal = store.get_proposal(proposal_id)
+        if proposal.status != ProposalStatus.PENDING:
+            if (
+                proposal.status == ProposalStatus.REJECTED
+                and proposal.decision_reason == EXPIRE_REASON
+            ):
+                return proposal
+            raise ProposalError(
+                f"proposal {proposal_id} is {proposal.status.value}, not pending"
+            )
+        proposal.status = ProposalStatus.REJECTED
+        proposal.decided_at = datetime.now(UTC)
+        proposal.decided_by = expired_by
+        proposal.decision_reason = EXPIRE_REASON
+        store.move_proposal_to_decided(proposal)
+        audit.log_event(
+            store.kb_dir,
+            event="proposal.expire",
+            actor=expired_by,
+            object_ids=[proposal.id],
+            data={"kind": proposal.kind.value},
         )
-    proposal.status = ProposalStatus.REJECTED
-    proposal.decided_at = datetime.now(UTC)
-    proposal.decided_by = expired_by
-    proposal.decision_reason = EXPIRE_REASON
-    store.move_proposal_to_decided(proposal)
-    audit.log_event(
-        store.kb_dir,
-        event="proposal.expire",
-        actor=expired_by,
-        object_ids=[proposal.id],
-        data={"kind": proposal.kind.value},
-    )
-    return proposal
+        return proposal
 
 
 def expire_pending(
