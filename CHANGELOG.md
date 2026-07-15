@@ -12,6 +12,13 @@ All notable changes to vouch are documented here. Format follows
   `contradicts` reference and flipped the claim to `contested` with no
   actual counterparty; it now raises `LifecycleError`, mirroring the
   existing guard in `supersede()`.
+- `check_approvable()` now catches an id collision with an existing
+  artifact, mirroring the guard `approve()` already applies. previously
+  the batch precheck could report a claim/entity/relation proposal as
+  approvable when its id matched an artifact that already existed, so
+  `vouch approve a b` could pass the precheck for the whole batch and
+  then fail partway through on the collision, breaking the documented
+  all-or-nothing guarantee.
 
 ### Added
 - `kb.list_skills` / `kb.get_skill` — agents can enumerate the Claude Code

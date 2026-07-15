@@ -494,6 +494,14 @@ def check_approvable(
     block = _approval_block_reason(store, proposal, approved_by)
     if block:
         return block
+    # Mirror approve()'s existing-artifact guard so the batch precheck can't
+    # say "approvable" for a proposal that approve() will then reject.
+    if proposal.kind not in (ProposalKind.PAGE, ProposalKind.DELETE):
+        existing = _existing_artifact_block_reason(
+            store, proposal.kind, proposal.payload["id"]
+        )
+        if existing:
+            return existing
     return _payload_block_reason(store, proposal)
 
 
@@ -878,19 +886,27 @@ def _approve_delete(
     return artifact
 
 
-def _ensure_no_existing_artifact(
+def _existing_artifact_block_reason(
     store: KBStore, kind: ProposalKind, artifact_id: str
-) -> None:
+) -> str | None:
     getter = getattr(store, _ARTIFACT_GETTERS[kind])
     try:
         getter(artifact_id)
     except ArtifactNotFoundError:
-        return
-    raise ProposalError(
+        return None
+    return (
         f"cannot approve: {kind.value} {artifact_id} already exists "
         f"(a prior approve may have been interrupted; reconcile manually "
         f"by removing the artifact or rejecting this proposal)"
     )
+
+
+def _ensure_no_existing_artifact(
+    store: KBStore, kind: ProposalKind, artifact_id: str
+) -> None:
+    reason = _existing_artifact_block_reason(store, kind, artifact_id)
+    if reason:
+        raise ProposalError(reason)
 
 
 def _node_exists(store: KBStore, node_id: str) -> bool:
