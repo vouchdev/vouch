@@ -389,6 +389,17 @@ def _approval_block_reason(
                     f"forbidden_self_approval: page kind '{page_type}' is protected — "
                     "it always requires a reviewer other than the proposer"
                 )
+        # The same invariant covers DELETE proposals that target a page:
+        # removing a policy-bearing page is at least as sensitive as editing
+        # it, so the trusted-agent opt-out must not widen to protected kinds
+        # through the delete path either.
+        if proposal.kind == ProposalKind.DELETE:
+            page_type = _delete_target_page_type(store, proposal.payload)
+            if page_type and load_page_kind_registry(store).is_protected(page_type):
+                return (
+                    f"forbidden_self_approval: page kind '{page_type}' is protected — "
+                    "deleting it always requires a reviewer other than the proposer"
+                )
         cfg: dict[str, Any] = {}
         try:
             loaded = yaml.safe_load((store.kb_dir / "config.yaml").read_text(encoding="utf-8"))
@@ -406,6 +417,24 @@ def _approval_block_reason(
                 "proposal (set review.approver_role: trusted-agent in config.yaml to opt out)"
             )
     return None
+
+
+def _delete_target_page_type(store: KBStore, payload: dict[str, Any]) -> str:
+    """Page kind a DELETE proposal targets, or '' when it is not a page.
+
+    Prefers the live page (that is what approve would remove); falls back to
+    the propose-time snapshot so the protected-kind gate still holds on the
+    idempotent already-gone path.
+    """
+    if payload.get("target_kind") != "page":
+        return ""
+    try:
+        return store.get_page(str(payload.get("id", ""))).type
+    except ArtifactNotFoundError:
+        snapshot = payload.get("snapshot")
+        if isinstance(snapshot, dict):
+            return str(snapshot.get("type", ""))
+        return ""
 
 
 def _payload_block_reason(store: KBStore, proposal: Proposal) -> str | None:
