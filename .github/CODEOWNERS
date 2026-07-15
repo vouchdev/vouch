@@ -1,0 +1,56 @@
+# Code owners for vouch — the human-readable map is GOVERNANCE.md.
+#
+# Only the load-bearing "core" paths are listed here. A PR that changes any of
+# them requires review from a code owner before it can merge, once the branch
+# protection rule "Require review from Code Owners" is enabled (see GOVERNANCE.md
+# → "Turning this on"). Everything NOT listed is contributor-friendly: any
+# maintainer can approve it, and the prose-only paths that
+# .github/workflows/auto-merge.yml recognises merge automatically on green CI.
+#
+# There is deliberately NO default (`*`) owner: a catch-all would force owner
+# review on every PR and defeat the point. Replace @plind-junior below with your
+# maintainer team (e.g. @vouchdev/core) if you prefer team-based ownership.
+
+# --- the review gate + claim lifecycle — writes must stay gated ---
+/src/vouch/proposals.py        @plind-junior
+/src/vouch/lifecycle.py        @plind-junior
+
+# --- verification: the byte-offset receipt (the differentiator) ---
+/src/vouch/receipts.py         @plind-junior
+
+# --- the append-only, authoritative history ---
+/src/vouch/audit.py            @plind-junior
+
+# --- durable storage + the derived index ---
+/src/vouch/storage.py          @plind-junior
+/src/vouch/index_db.py         @plind-junior
+
+# --- the object model / on-disk schema contract ---
+/src/vouch/models.py           @plind-junior
+/src/vouch/migrations/         @plind-junior
+
+# --- the kb.* method surface + transports — parity is load-bearing ---
+/src/vouch/capabilities.py     @plind-junior
+/src/vouch/server.py           @plind-junior
+/src/vouch/jsonl_server.py     @plind-junior
+
+# --- the protocol contract ---
+/SPEC.md                       @plind-junior
+/spec/                         @plind-junior
+
+# --- packaging + the four-site version invariant ---
+/pyproject.toml                @plind-junior
+/openclaw.plugin.json          @plind-junior
+/package.json                  @plind-junior
+/src/vouch/__init__.py         @plind-junior
+
+# --- build / release / supply-chain — a workflow edit can exfiltrate secrets ---
+/.github/workflows/            @plind-junior
+/.github/dependabot.yml        @plind-junior
+/Dockerfile                    @plind-junior
+/install.sh                    @plind-junior
+
+# --- governance itself ---
+/.github/CODEOWNERS            @plind-junior
+/GOVERNANCE.md                 @plind-junior
+/CONTRIBUTING.md               @plind-junior
