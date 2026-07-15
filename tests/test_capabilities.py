@@ -11,6 +11,25 @@ from vouch import capabilities
 from vouch.jsonl_server import HANDLERS
 
 
+def test_import_apply_is_not_on_agent_surfaces() -> None:
+    """kb.import_apply writes past the review gate, so agents must not reach it.
+
+    It stays a human-only CLI command; the read-only kb.import_check survives
+    on every surface. (The real fix is gated import — roadmap 8.2.)
+    """
+    from vouch.jsonl_server import HANDLERS
+
+    assert "kb.import_apply" not in HANDLERS
+    assert "kb.import_apply" not in set(capabilities.capabilities().methods)
+    # read-only diff stays available to agents
+    assert "kb.import_check" in HANDLERS
+
+    from vouch.server import mcp
+
+    assert mcp._tool_manager.get_tool("kb_import_apply") is None
+    assert mcp._tool_manager.get_tool("kb_import_check") is not None
+
+
 def test_capabilities_matches_jsonl_handlers() -> None:
     caps = capabilities.capabilities()
     declared = set(caps.methods)

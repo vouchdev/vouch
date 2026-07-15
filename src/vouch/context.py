@@ -19,7 +19,7 @@ from typing import Any, Literal, cast
 
 import yaml
 
-from . import graph, index_db
+from . import graph, hot_memory, index_db
 from .embeddings.fusion import rrf_fuse
 from .models import ClaimStatus, ContextItem, ContextPack, ContextQuality
 from .scoping import (
@@ -368,7 +368,11 @@ def search_kb(
 
     semantic_ok = index_db.semantic_search_available()
     scoped = filter_hits(store, hits, viewer, limit=limit)
-    return {
+    hits_list = [
+        {"kind": k, "id": i, "snippet": sn, "score": sc, "backend": used}
+        for k, i, sn, sc in scoped
+    ]
+    result: dict[str, Any] = {
         "backend": used,
         "retrieval": {
             "configured": backend_arg,
@@ -380,11 +384,15 @@ def search_kb(
             ),
         },
         "viewer": {"project": viewer.project, "agent": viewer.agent},
-        "hits": [
-            {"kind": k, "id": i, "snippet": sn, "score": sc, "backend": used}
-            for k, i, sn, sc in scoped
-        ],
+        "hits": hits_list,
     }
+    # The single search path serves both agent-facing surfaces (MCP + JSONL),
+    # so the hot-memory sidebar (#261) is attached here rather than duplicated
+    # at each call site.
+    return hot_memory.attach_hot_memory(  # type: ignore[no-any-return]
+        result, store, query=query,
+        exclude_ids=[str(hit["id"]) for hit in hits_list],
+    )
 
 
 def _enrich_summary(store: KBStore, kind: str, artifact_id: str, summary: str) -> str:

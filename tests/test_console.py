@@ -169,6 +169,37 @@ def test_proxy_rejects_non_loopback_client_by_default(console_dir: Path, upstrea
     assert res.json()["error"]["code"] == "forbidden"
 
 
+def test_proxy_rejects_non_loopback_target_by_default(console_dir: Path) -> None:
+    """Without a configured allowlist the bridge only reaches loopback, so it
+    can't be turned into a token-forwarding SSRF relay to an arbitrary host."""
+    res = _loopback_client(build_console_app(console_dir)).get(
+        "/proxy/health", headers={"X-Vouch-Target": "http://evil.example/steal"}
+    )
+    assert res.status_code == 403
+    assert res.json()["error"]["code"] == "forbidden_target"
+
+
+def test_target_allowed_defaults_to_loopback_only() -> None:
+    from urllib.parse import urlparse
+
+    from vouch.web.console import _target_allowed
+
+    assert _target_allowed(urlparse("http://127.0.0.1:8790/x"), frozenset())
+    assert _target_allowed(urlparse("http://localhost:9/x"), frozenset())
+    assert not _target_allowed(urlparse("http://evil.example/x"), frozenset())
+    assert not _target_allowed(urlparse("http://169.254.169.254/x"), frozenset())
+
+
+def test_target_allowed_honours_configured_origins() -> None:
+    from urllib.parse import urlparse
+
+    from vouch.web.console import _target_allowed
+
+    allowed = frozenset({"http://backend.internal:9000"})
+    assert _target_allowed(urlparse("http://backend.internal:9000/rpc"), allowed)
+    assert not _target_allowed(urlparse("http://other.example:9000/rpc"), allowed)
+
+
 def test_proxy_allows_remote_when_opted_in(console_dir: Path, upstream: str) -> None:
     app = build_console_app(console_dir, allow_remote=True)
     remote = TestClient(app, client=("10.0.0.9", 1234))

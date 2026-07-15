@@ -73,14 +73,49 @@ def _err(status: int, code: str, message: str) -> JSONResponse:
     )
 
 
-def build_console_app(console_dir: Path, *, allow_remote: bool = False) -> Starlette:
+# Target hosts the bridge may forward to when no allowlist is configured. The
+# bridge copies the caller's Authorization header onto the forwarded request,
+# so an unrestricted target turns the console into a token-forwarding SSRF
+# relay to any host the server can reach (including cloud metadata endpoints).
+_LOOPBACK_TARGET_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
+
+
+def _normalize_origin(raw: str) -> str:
+    p = urllib.parse.urlparse(raw)
+    return f"{p.scheme}://{p.netloc}".lower()
+
+
+def _target_allowed(
+    parsed: urllib.parse.ParseResult, allowed_origins: frozenset[str]
+) -> bool:
+    """Whether the bridge may forward to ``parsed``.
+
+    With a configured allowlist the target's origin (scheme://host:port) must
+    be one of the configured serve origins. With no allowlist the target must
+    be loopback — the safe default for the local console, and never an
+    arbitrary host the auth header could be leaked to.
+    """
+    if allowed_origins:
+        return f"{parsed.scheme}://{parsed.netloc}".lower() in allowed_origins
+    return (parsed.hostname or "").lower() in _LOOPBACK_TARGET_HOSTS
+
+
+def build_console_app(
+    console_dir: Path,
+    *,
+    allow_remote: bool = False,
+    allowed_targets: tuple[str, ...] = (),
+) -> Starlette:
     """Build the ASGI app: the ``/proxy/*`` bridge + the static SPA.
 
     ``allow_remote`` drops the loopback guard on the bridge — only for
-    deliberately-exposed deployments behind their own auth.
+    deliberately-exposed deployments behind their own auth. ``allowed_targets``
+    is the set of serve origins (scheme://host:port) the bridge may forward to;
+    empty means loopback-only.
     """
     root = console_dir.resolve()
     index = root / "index.html"
+    allowed_origins = frozenset(_normalize_origin(t) for t in allowed_targets if t)
 
     async def _proxy(request: Request) -> Response:
         client_host = request.client.host if request.client else None
@@ -93,6 +128,12 @@ def build_console_app(console_dir: Path, *, allow_remote: bool = False) -> Starl
         parsed = urllib.parse.urlparse(target_raw)
         if parsed.scheme not in ("http", "https") or not parsed.netloc:
             return _err(400, "bad_target", f"not a valid http(s) target: {target_raw}")
+        if not _target_allowed(parsed, allowed_origins):
+            return _err(
+                403, "forbidden_target",
+                f"target host not allowed: {target_raw} — the bridge forwards "
+                "only to the configured serve origin(s), or loopback by default",
+            )
 
         # The path after /proxy is appended to the target's host:port; any path
         # on the target itself is dropped, matching vouch-proxy.ts exactly.
@@ -157,10 +198,15 @@ def serve_console(
     host: str = "127.0.0.1",
     port: int = 5173,
     allow_remote: bool = False,
+    allowed_targets: tuple[str, ...] = (),
     console_dir: Path | None = None,
 ) -> None:
     """Serve the console with uvicorn (blocks). Raises ``ConsoleError`` early
-    if no built SPA can be found, before uvicorn is ever started."""
+    if no built SPA can be found, before uvicorn is ever started.
+
+    ``allowed_targets`` restricts the ``/proxy`` bridge to those serve origins;
+    empty means loopback-only.
+    """
     resolved = console_dir if console_dir is not None else resolve_console_dir()
     if resolved is None:
         raise ConsoleError(
@@ -170,5 +216,7 @@ def serve_console(
         )
     import uvicorn
 
-    app = build_console_app(resolved, allow_remote=allow_remote)
+    app = build_console_app(
+        resolved, allow_remote=allow_remote, allowed_targets=allowed_targets
+    )
     uvicorn.run(app, host=host, port=port, log_level="info")

@@ -21,6 +21,7 @@ from typing import Any
 import yaml
 
 from .models import ProposalStatus
+from .secrets import mask_secrets
 from .storage import KBStore
 
 DEFAULT_ENABLED = True
@@ -108,6 +109,12 @@ def observe(
     cfg = config or load_config(store)
     if not cfg.enabled:
         return False
+    # Mask credentials before anything is persisted: the buffer rolls into a
+    # committed session page and the append-only audit log, so a secret that
+    # reaches it is permanent. Masked first, so dedup compares masked text too.
+    summary = mask_secrets(summary)
+    if cmd is not None:
+        cmd = mask_secrets(cmd)
     ts = time.time() if now is None else now
     path = buffer_path(store, session_id)
     key = _dedup_key(tool, summary)

@@ -108,17 +108,18 @@ assert p["result"]["dry_run"] is True, p
 assert p["result"]["status"] == "pending", p
 print("ok  dry_run:true returned a preview (status=pending, dry_run=true)")
 
-# 2. the preview left the queue empty.
+# 2. the preview left the queue empty. kb.list_pending returns the
+# {"items": [...], "_meta": {...}} envelope, not a bare list.
 empty = preview["pending-after-preview"]
 assert empty["ok"], empty
-assert empty["result"] == [], empty
+assert empty["result"]["items"] == [], empty
 print("ok  list_pending empty after the dry-run preview")
 
 # 3. a real propose files exactly one pending proposal.
 f = filed["file"]
 assert f["ok"] and f["result"]["dry_run"] is False, f
 after = filed["pending-after-file"]
-assert len(after["result"]) == 1, after
+assert len(after["result"]["items"]) == 1, after
 print(f"ok  propose_claim filed 1 pending proposal: {f['result']['proposal_id']}")
 
 # 4. approve produces a durable claim.

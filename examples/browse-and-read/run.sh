@@ -46,6 +46,7 @@ print(out)
 }
 
 # pull a field from the first element of a list-typed result
+# (kb.list_* responses are the {"items": [...], "_meta": {...}} envelope)
 first_field() {
   python3 -c '
 import json, sys
@@ -57,7 +58,7 @@ for line in sys.stdin:
         continue
     row = json.loads(line)
     if row.get("id") == want_id:
-        out = row["result"][0][key]
+        out = row["result"]["items"][0][key]
 print(out)
 ' "$1" "$2"
 }

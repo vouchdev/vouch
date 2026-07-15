@@ -31,6 +31,7 @@ import yaml
 from . import audit, bundle, health, volunteer_context
 from . import compile as compile_mod
 from . import digest as digest_mod
+from . import hot_memory as hot_mod
 from . import lifecycle as life
 from . import metrics as metrics_mod
 from . import salience as salience_mod
@@ -83,6 +84,14 @@ def _store() -> KBStore:
 
 
 def _agent() -> str:
+    # An authenticated bearer subject is the principal's real identity; it must
+    # win over the client-supplied X-Vouch-Agent header (and VOUCH_AGENT env),
+    # or one token could propose as one actor and approve as another to defeat
+    # the self-approval gate. Only fall back to the header/env when the request
+    # is unauthenticated (tokenless loopback/dev), which is trusted by design.
+    subject = trust_mod.current().auth_subject
+    if subject is not None:
+        return f"token:{subject}"
     return _actor.get() or os.environ.get("VOUCH_AGENT", "unknown-agent")
 
 
@@ -206,7 +215,12 @@ def _h_context(p: dict) -> dict:
         graph_limit=int(p.get("graph_limit", 20)),
         graph_rel_types=p.get("graph_rel_types"),
     )
-    return salience_mod.attach_salience(result, store, session_id, cfg)
+    result = salience_mod.attach_salience(result, store, session_id, cfg)
+    pack_items = result.get("items") if isinstance(result, dict) else None
+    exclude = [it.get("id") for it in pack_items] if isinstance(pack_items, list) else []
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        result, store, query=query, exclude_ids=[i for i in exclude if i],
+    )
 
 
 def _h_synthesize(p: dict) -> dict:
@@ -220,19 +234,39 @@ def _h_synthesize(p: dict) -> dict:
 
 
 def _h_read_page(p: dict) -> dict:
-    return _store().get_page(p["page_id"]).model_dump(mode="json")
+    store = _store()
+    page = store.get_page(p["page_id"])
+    result = page.model_dump(mode="json")
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        result, store, query=hot_mod.query_bias_for_page(page),
+    )
 
 
 def _h_read_claim(p: dict) -> dict:
-    return _store().get_claim(p["claim_id"]).model_dump(mode="json")
+    store = _store()
+    claim = store.get_claim(p["claim_id"])
+    result = claim.model_dump(mode="json")
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        result, store, query=claim.text, exclude_ids=[claim.id],
+    )
 
 
 def _h_read_entity(p: dict) -> dict:
-    return _store().get_entity(p["entity_id"]).model_dump(mode="json")
+    store = _store()
+    entity = store.get_entity(p["entity_id"])
+    result = entity.model_dump(mode="json")
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        result, store, query=hot_mod.query_bias_for_entity(entity),
+    )
 
 
 def _h_read_relation(p: dict) -> dict:
-    return _store().get_relation(p["relation_id"]).model_dump(mode="json")
+    store = _store()
+    relation = store.get_relation(p["relation_id"])
+    result = relation.model_dump(mode="json")
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        result, store, query=None,
+    )
 
 
 def _h_diff(p: dict) -> dict:
@@ -243,49 +277,72 @@ def _h_diff(p: dict) -> dict:
     return asdict(diff_artifacts(_store(), p["old_id"], p.get("new_id")))
 
 
-def _h_list_pages(p: dict) -> list[dict]:
+def _h_list_pages(p: dict) -> dict:
+    store = _store()
     pages = filter_pages(
-        _store().list_pages(),
+        store.list_pages(),
         kind=p.get("type"),
         equals=p.get("meta"),
         before=p.get("meta_before"),
         after=p.get("meta_after"),
     )
-    return [pg.model_dump(mode="json") for pg in pages]
+    items = [pg.model_dump(mode="json") for pg in pages]
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        items, store, query=None, list_envelope=True,
+    )
 
 
-def _h_list_claims(p: dict) -> list[dict]:
-    cs = _store().list_claims()
+def _h_list_claims(p: dict) -> dict:
+    store = _store()
+    cs = store.list_claims()
     if p.get("status"):
         cs = [c for c in cs if c.status.value == p["status"]]
-    return [c.model_dump(mode="json") for c in cs]
+    items = [c.model_dump(mode="json") for c in cs]
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        items, store, query=None, list_envelope=True,
+    )
 
 
-def _h_list_entities(p: dict) -> list[dict]:
-    es = _store().list_entities()
+def _h_list_entities(p: dict) -> dict:
+    store = _store()
+    es = store.list_entities()
     if p.get("entity_type"):
         es = [e for e in es if e.type.value == p["entity_type"]]
-    return [e.model_dump(mode="json") for e in es]
+    items = [e.model_dump(mode="json") for e in es]
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        items, store, query=None, list_envelope=True,
+    )
 
 
-def _h_list_relations(p: dict) -> list[dict]:
-    s = _store()
-    rels = s.list_relations()
+def _h_list_relations(p: dict) -> dict:
+    store = _store()
+    rels = store.list_relations()
     node = p.get("node_id")
     if node:
         rels = [r for r in rels if r.source == node or r.target == node]
-    return [r.model_dump(mode="json") for r in rels]
+    items = [r.model_dump(mode="json") for r in rels]
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        items, store, query=None, list_envelope=True,
+    )
 
 
-def _h_list_sources(_: dict) -> list[dict]:
-    return [s.model_dump(mode="json") for s in _store().list_sources()]
+def _h_list_sources(_: dict) -> dict:
+    store = _store()
+    items = [s.model_dump(mode="json") for s in store.list_sources()]
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        items, store, query=None, list_envelope=True,
+    )
 
 
-def _h_list_pending(_: dict) -> list[dict]:
-    return [
+def _h_list_pending(_: dict) -> dict:
+    store = _store()
+    items = [
         p.model_dump(mode="json")
-        for p in _store().list_proposals(ProposalStatus.PENDING)
+        for p in store.list_proposals(ProposalStatus.PENDING)
     ]
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        items, store, query=None, list_envelope=True,
+    )
 
 
 def _h_triage_pending(p: dict) -> list[dict]:
@@ -603,32 +660,33 @@ def _h_doctor(_: dict) -> dict:
 
 
 def _h_export(p: dict) -> dict:
-    manifest = bundle.export(_store().kb_dir, dest=Path(p["out_path"]),
-                             actor=_agent())
+    s = _store()
+    dest = bundle.fenced_bundle_path(s, p["out_path"])
+    manifest = bundle.export(s.kb_dir, dest=dest, actor=_agent())
     return {"bundle_id": manifest["bundle_id"],
             "files": len(manifest["files"]), "out": p["out_path"]}
 
 
 def _h_export_check(p: dict) -> dict:
-    r = bundle.export_check(Path(p["bundle_path"]))
+    s = _store()
+    r = bundle.export_check(bundle.fenced_bundle_path(s, p["bundle_path"]))
     return {"ok": r.ok, "bundle_id": r.bundle_id,
             "files_checked": r.files_checked, "issues": r.issues}
 
 
 def _h_import_check(p: dict) -> dict:
-    r = bundle.import_check(_store().kb_dir, Path(p["bundle_path"]))
+    s = _store()
+    r = bundle.import_check(s.kb_dir, bundle.fenced_bundle_path(s, p["bundle_path"]))
     return {"ok": r.ok, "bundle_id": r.bundle_id,
             "new_files": r.new_files, "conflicts": r.conflicts,
             "identical_files": len(r.identical), "issues": r.issues}
 
 
-def _h_import_apply(p: dict) -> dict:
-    r = bundle.import_apply(
-        _store().kb_dir, Path(p["bundle_path"]),
-        on_conflict=p.get("on_conflict", "skip"), actor=_agent(),
-    )
-    health.rebuild_index(_store())
-    return r
+# kb.import_apply is deliberately NOT an agent-facing handler: it writes bundle
+# members (claims/pages/decided) straight to disk, a parallel path past
+# proposals.approve(). It survives only as the human `vouch import apply` CLI
+# command until gated import lands (roadmap 8.2). kb.import_check (read-only)
+# stays available to agents.
 
 
 def _h_audit(p: dict) -> dict:
@@ -662,7 +720,6 @@ def _h_dedup_scan(p: dict) -> dict:
 
 
 def _h_eval_embeddings(p: dict) -> dict:
-    from pathlib import Path
 
     from .embeddings.scorer import evaluate
     return evaluate(
@@ -837,7 +894,6 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.export": _h_export,
     "kb.export_check": _h_export_check,
     "kb.import_check": _h_import_check,
-    "kb.import_apply": _h_import_apply,
     "kb.audit": _h_audit,
     "kb.reindex_embeddings": _h_reindex_embeddings,
     "kb.dedup_scan": _h_dedup_scan,

@@ -21,6 +21,15 @@ from .models import Claim, ClaimStatus, Entity, Page, ProposalKind, ProposalStat
 from .storage import KBStore, _yaml_load, sha256_hex
 from .verify import verify_all
 
+# Retired claim statuses — terminal, not expected to be refreshed.
+# Mirrors the exemption in metrics.py and digest.py so lint doesn't
+# flag stale_claim on retired claims (issue #478).
+_RETIRED_CLAIM_STATUSES = frozenset({
+    ClaimStatus.SUPERSEDED,
+    ClaimStatus.ARCHIVED,
+    ClaimStatus.REDACTED,
+})
+
 
 @dataclass
 class Finding:
@@ -177,19 +186,23 @@ def lint(store: KBStore, *, stale_after_days: int = 180) -> HealthReport:
                         [c.id, ref],
                     )
                 )
-        # Stale: not confirmed in N days.
-        anchor = c.last_confirmed_at or c.updated_at or c.created_at
-        if anchor and anchor.tzinfo is None:
-            anchor = anchor.replace(tzinfo=UTC)
-        if anchor and (datetime.now(UTC) - anchor) > timedelta(days=stale_after_days):
-            findings.append(
-                Finding(
-                    "warning",
-                    "stale_claim",
-                    f"claim {c.id} not confirmed in >{stale_after_days}d",
-                    [c.id],
+        # Stale: not confirmed in N days — but only for active (non-retired)
+        # claims. Retired claims (superseded/archived/redacted) are terminal
+        # and not expected to be refreshed; metrics and digest already
+        # exempt them (issue #478).
+        if c.status not in _RETIRED_CLAIM_STATUSES:
+            anchor = c.last_confirmed_at or c.updated_at or c.created_at
+            if anchor and anchor.tzinfo is None:
+                anchor = anchor.replace(tzinfo=UTC)
+            if anchor and (datetime.now(UTC) - anchor) > timedelta(days=stale_after_days):
+                findings.append(
+                    Finding(
+                        "warning",
+                        "stale_claim",
+                        f"claim {c.id} not confirmed in >{stale_after_days}d",
+                        [c.id],
+                    )
                 )
-            )
         # Active claims should not be marked contested at the same time.
         if c.status == ClaimStatus.CONTESTED and not c.contradicts:
             findings.append(
