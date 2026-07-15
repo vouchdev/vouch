@@ -29,7 +29,7 @@ import yaml
 
 from . import audit
 from .models import Claim, Entity, Evidence, Proposal, Relation, Session, Source
-from .storage import _deserialize_page, sha256_hex
+from .storage import KBStore, _deserialize_page, sha256_hex
 
 MANIFEST_NAME = "manifest.json"
 SPEC_VERSION = "vouch-bundle-0.1"
@@ -113,6 +113,23 @@ def build_manifest(kb_dir: Path) -> dict[str, Any]:
             "has_audit_log": False,
         },
     }
+
+
+def fenced_bundle_path(store: KBStore, raw: str) -> Path:
+    """A client-supplied bundle/export path, confined to the project root on
+    remote surfaces.
+
+    Export writes to the path and import reads from it, so an unfenced path on
+    /rpc or /mcp is a remote arbitrary-file clobber (export) or read (import).
+    On remote trust the path is resolved and contained to the project root;
+    local CLI and stdio are unfenced by design, since a human choosing where to
+    write a backup is not a threat.
+    """
+    from . import trust
+
+    if trust.current().remote:
+        return store.resolve_under_root(raw)
+    return Path(raw)
 
 
 def export(kb_dir: Path, *, dest: Path, actor: str = "vouch-export") -> dict[str, Any]:
@@ -519,6 +536,18 @@ def import_check(kb_dir: Path, bundle_path: Path) -> ImportCheckResult:
         issues.extend(_manifest_safety_issues(manifest))
         recorded = {f["path"]: f for f in manifest["files"]}
         manifest_paths = set(recorded)
+        # decided/ holds approved decisions; import writes members straight to
+        # disk, so a bundle carrying decided/ would land approved claims/pages
+        # without a receiving-side proposal — a write past the review gate.
+        # Refuse until gated import exists (roadmap 8.2). Scanned directly from
+        # the manifest rather than via a self-reported safety flag, which a
+        # hand-crafted bundle could lie about.
+        decided_members = sorted(p for p in manifest_paths if p.startswith("decided/"))
+        if decided_members:
+            issues.append(
+                "bundle carries decided/ members that cannot be imported past "
+                f"the review gate: {decided_members[0]}"
+            )
         for f in manifest["files"]:
             try:
                 dest = _safe_member_path(kb_dir, f["path"])

@@ -104,8 +104,9 @@ print(f"volunteer_context -> {len(offers)} offer(s)")
 for o in offers:
     print(f"    claim={o['claim_id']} relevance={o['relevance']:.2f}")
 
-# Pending count before the batch approve.
-before = call("lp", "kb.list_pending", {})
+# Pending count before the batch approve. kb.list_pending returns the
+# {"items": [...], "_meta": {...}} envelope, not a bare list.
+before = call("lp", "kb.list_pending", {})["items"]
 print(f"list_pending (before crystallize) -> {len(before)} pending")
 
 # session_end closes the run and backfills its proposal ids.
@@ -119,7 +120,7 @@ print(f"crystallize    -> approved={cr['approved']}")
 print(f"               -> summary_page_id={cr['summary_page_id']}")
 
 # Pending count after: the session's proposals are gone.
-after = call("lp2", "kb.list_pending", {})
+after = call("lp2", "kb.list_pending", {})["items"]
 print(f"list_pending (after crystallize)  -> {len(after)} pending")
 
 proc.stdin.close()

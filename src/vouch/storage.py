@@ -81,9 +81,19 @@ def _starter_config() -> dict[str, Any]:
             "expire_pending_after_days": 90,
         },
         "capture": {
-            # auto-capture claude code sessions into pending summaries.
+            # auto-capture agent sessions into pending summaries.
             "enabled": True,
             "min_observations": 3,
+            "split": {
+                # llm topical split for large sessions; llm_cmd falls back to
+                # compile.llm_cmd when null. see session_split.py.
+                "enabled": True,
+                "llm_cmd": None,
+                "threshold_observations": 40,
+                "max_pages": 6,
+                "timeout_seconds": 180,
+                "max_input_chars": 60000,
+            },
         },
         "recall": {
             # inject a digest of all approved knowledge at session start.
@@ -102,6 +112,12 @@ def _starter_config() -> dict[str, Any]:
                 "kb.propose_* with citations",
                 "human review via vouch pending/show/approve",
             ],
+        },
+        "mcp": {
+            # Publish the slash-command / SKILL.md catalogue over MCP via
+            # kb.list_skills / kb.get_skill. Flip to false for "company-brain"
+            # mode where the catalogue itself is sensitive.
+            "publish_skills": True,
         },
         # Extra page kinds beyond the built-in PageType enum. Each maps a kind
         # name to {required_fields, frontmatter_schema, required_citations,
@@ -193,6 +209,15 @@ def _deserialize_page(text: str) -> Page:
     return Page(body=body, **meta)
 
 
+def _load_page_or_skip(path: Path) -> Page | None:
+    """Parse one page file; skip corrupt/unreadable files like ``_load_or_skip``."""
+    try:
+        return _deserialize_page(path.read_text(encoding="utf-8"))
+    except (yaml.YAMLError, ValidationError, UnicodeDecodeError, OSError, ValueError) as e:
+        _log.warning("skipping unreadable page %s: %s", path.name, e)
+        return None
+
+
 class KBStore:
     """File-backed CRUD layer. Pure I/O — no business logic."""
 
@@ -236,6 +261,23 @@ class KBStore:
             raise
         with os.fdopen(fd, "rb") as f:
             return resolved, f.read()
+
+    def resolve_under_root(self, path: str | Path) -> Path:
+        """Resolve ``path`` and confirm it is inside the project root, or raise.
+
+        The containment half of :meth:`read_under_root`, without opening — for
+        a client-supplied path that will be written (a bundle export
+        destination) or read as a whole file. Pre-existing symlinks are
+        resolved first, then the result is checked for containment; a read that
+        needs the stronger O_NOFOLLOW / regular-file guarantees should use
+        :meth:`read_under_root`.
+        """
+        resolved = Path(path).resolve()
+        if not resolved.is_relative_to(self.root):
+            raise ValueError(
+                f"path must be inside project root ({self.root}): {resolved}"
+            )
+        return resolved
 
     # --- bootstrap ---------------------------------------------------------
 
@@ -550,8 +592,9 @@ class KBStore:
         if not pdir.is_dir():
             return []
         return [
-            _deserialize_page(p.read_text(encoding="utf-8"))
+            pg
             for p in sorted(pdir.glob("*.md"))
+            if (pg := _load_page_or_skip(p)) is not None
         ]
 
     # --- entities ----------------------------------------------------------
@@ -653,6 +696,34 @@ class KBStore:
             text=f"{rel.source} {rel.relation.value} {rel.target}",
         )
         return rel
+
+    def delete_claim(self, claim_id: str) -> None:
+        """Remove a claim file. Pure I/O; ref checks live in `proposals`."""
+        path = self._claim_path(claim_id)
+        if not path.exists():
+            raise ArtifactNotFoundError(f"claim {claim_id}")
+        path.unlink()
+
+    def delete_page(self, page_id: str) -> None:
+        """Remove a page file. Pure I/O; ref checks live in `proposals`."""
+        path = self._page_path(page_id)
+        if not path.exists():
+            raise ArtifactNotFoundError(f"page {page_id}")
+        path.unlink()
+
+    def delete_entity(self, entity_id: str) -> None:
+        """Remove an entity file. Pure I/O; ref checks live in `proposals`."""
+        path = self._entity_path(entity_id)
+        if not path.exists():
+            raise ArtifactNotFoundError(f"entity {entity_id}")
+        path.unlink()
+
+    def delete_relation(self, relation_id: str) -> None:
+        """Remove a relation file. Pure I/O; ref checks live in `proposals`."""
+        path = self._relation_path(relation_id)
+        if not path.exists():
+            raise ArtifactNotFoundError(f"relation {relation_id}")
+        path.unlink()
 
     def get_relation(self, rid: str) -> Relation:
         p = self._relation_path(rid)

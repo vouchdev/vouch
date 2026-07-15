@@ -339,3 +339,45 @@ def test_legacy_capabilities_unchanged(base_url: str) -> None:
     code, body = _get(base_url, "/capabilities")
     assert code == 200
     assert "http" in body["transports"]
+
+
+def test_mcp_agent_binds_to_auth_subject(monkeypatch) -> None:
+    """On /mcp the tool actor must bind to the authenticated bearer subject.
+
+    server._agent read only VOUCH_AGENT, so every authenticated caller
+    collapsed to one env-set identity and the token was never the attribution.
+    """
+    from vouch import server as vouch_server
+    from vouch import trust as trust_mod
+
+    monkeypatch.setenv("VOUCH_AGENT", "env-agent")
+    trust = trust_mod.with_auth_subject(trust_mod.MCP_HTTP, "mcp-token")
+    with trust_mod.trust_context(trust):
+        actor = vouch_server._agent()
+    assert actor != "env-agent"
+    assert trust_mod.auth_subject_for_token("mcp-token") in actor
+
+
+def test_mcp_agent_falls_back_to_env_when_unauthenticated(monkeypatch) -> None:
+    from vouch import server as vouch_server
+    from vouch import trust as trust_mod
+
+    monkeypatch.setenv("VOUCH_AGENT", "env-agent")
+    with trust_mod.trust_context(trust_mod.MCP_STDIO):  # no auth_subject
+        assert vouch_server._agent() == "env-agent"
+
+
+def test_mcp_export_fenced_to_root_on_remote(tmp_path, monkeypatch) -> None:
+    """The /mcp export tool cannot clobber a file outside the project root."""
+    from vouch import server as vouch_server
+    from vouch import trust as trust_mod
+
+    store = KBStore.init(tmp_path)
+    monkeypatch.chdir(store.root)
+    tool = vouch_server.mcp._tool_manager.get_tool("kb_export")
+    assert tool is not None
+    with trust_mod.trust_context(trust_mod.MCP_HTTP), pytest.raises(
+        ValueError, match="project root"
+    ):
+        tool.fn(out_path="../escaped.tar.gz")
+    assert not (store.root.parent / "escaped.tar.gz").exists()

@@ -267,6 +267,8 @@ class Claim(BaseModel):
     updated_at: datetime = Field(default_factory=utcnow)
     last_confirmed_at: datetime | None = None
     approved_by: str | None = None  # vouch: review-gate audit
+    proposed_by: str | None = None  # vouch: tracks who proposed this claim
+    auto_approved: bool = False  # vouch: true if approved by proposer (trusted-agent mode)
 
     @field_validator("scope", mode="before")
     @classmethod
@@ -394,6 +396,7 @@ class ProposalKind(StrEnum):
     PAGE = "page"
     ENTITY = "entity"
     RELATION = "relation"
+    DELETE = "delete"
 
 
 class ProposalStatus(StrEnum):
@@ -493,12 +496,23 @@ class Capabilities(BaseModel):
         default_factory=list,
         description="OpenClaw context engines exposed (see openclaw.plugin.json)",
     )
+    mcp: dict[str, Any] = Field(
+        default_factory=lambda: {"publish_skills": True},
+        description=(
+            "mcp surface flags mirrored from config.yaml `mcp:` block. "
+            "`publish_skills` gates kb.list_skills / kb.get_skill."
+        ),
+    )
     host_compat: dict[str, Any] = Field(
         default_factory=dict,
         description=(
             "Per-host compatibility ranges (#237). Mirrors the "
-            "`openclaw.compat` block in openclaw.plugin.json so non-OpenClaw "
+            "`openclaw.compat` block in package.json so non-OpenClaw "
             "clients can detect compat without parsing the manifest, e.g. "
             '{"openclaw": {"pluginApi": ">=2026.4.0"}}.'
         ),
+    )
+    hot_memory: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Hot-memory sidebar contract on read-side kb.* responses",
     )

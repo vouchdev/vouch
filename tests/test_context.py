@@ -38,6 +38,79 @@ def test_context_pack_has_quality_metadata(store: KBStore) -> None:
     assert pack["quality"]["ok"] is True
 
 
+def test_require_citations_only_considers_returned_items(
+    store: KBStore, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for #174: uncited_items and the require_citations gate must
+    reference only claims still present after max_chars trimming."""
+    src = store.put_source(b"e")
+    for i in range(20):
+        store.put_claim(Claim(
+            id=f"c{i}",
+            text=f"padding claim number {i} with extra padding text",
+            evidence=[src.id],
+        ))
+    health.rebuild_index(store)
+
+    real_get_claim = store.get_claim
+
+    def get_claim_as_uncited(cid: str) -> Claim:
+        return real_get_claim(cid).model_copy(update={"evidence": []})
+
+    monkeypatch.setattr(store, "get_claim", get_claim_as_uncited)
+
+    pack = context.build_context_pack(
+        store, query="padding", max_chars=80, require_citations=True,
+    )
+    returned = {it["id"] for it in pack["items"]}
+    assert pack["quality"]["uncited_items"], "expected uncited claims to be flagged"
+    assert all(uid in returned for uid in pack["quality"]["uncited_items"])
+
+
+def test_require_citations_ok_when_budget_drops_all_uncited(
+    store: KBStore, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for #174: require_citations must not fail on uncited claims
+    the max_chars budget already removed from the returned pack."""
+    src = store.put_source(b"e")
+    for i in range(10):
+        store.put_claim(Claim(
+            id=f"cited{i}",
+            text=f"alpha cited claim {i}",
+            evidence=[src.id],
+        ))
+        store.put_claim(Claim(
+            id=f"uncited{i}",
+            text=f"beta uncited padding claim {i} with extra text",
+            evidence=[src.id],
+        ))
+    health.rebuild_index(store)
+
+    real_get_claim = store.get_claim
+    cited_ids = {f"cited{i}" for i in range(10)}
+
+    def get_claim_with_citation_state(cid: str) -> Claim:
+        claim = real_get_claim(cid)
+        if cid in cited_ids:
+            return claim
+        return claim.model_copy(update={"evidence": []})
+
+    monkeypatch.setattr(store, "get_claim", get_claim_with_citation_state)
+
+    pack = context.build_context_pack(
+        store,
+        query="alpha",
+        limit=10,
+        max_chars=120,
+        require_citations=True,
+    )
+    returned = {it["id"] for it in pack["items"]}
+    assert returned, pack
+    assert all(cid.startswith("cited") for cid in returned), pack
+    assert pack["quality"]["uncited_items"] == []
+    assert pack["quality"]["ok"] is True
+
+
 def test_context_pack_max_chars_omits_items(store: KBStore) -> None:
     src = store.put_source(b"e")
     # Many short claims — total summary length > 100 chars.

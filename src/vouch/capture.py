@@ -21,7 +21,7 @@ from typing import Any
 import yaml
 
 from .models import ProposalStatus
-from .proposals import propose_page
+from .secrets import mask_secrets
 from .storage import KBStore
 
 DEFAULT_ENABLED = True
@@ -109,6 +109,12 @@ def observe(
     cfg = config or load_config(store)
     if not cfg.enabled:
         return False
+    # Mask credentials before anything is persisted: the buffer rolls into a
+    # committed session page and the append-only audit log, so a secret that
+    # reaches it is permanent. Masked first, so dedup compares masked text too.
+    summary = mask_secrets(summary)
+    if cmd is not None:
+        cmd = mask_secrets(cmd)
     ts = time.time() if now is None else now
     path = buffer_path(store, session_id)
     key = _dedup_key(tool, summary)
@@ -320,53 +326,26 @@ def finalize(
     project: str | None = None,
     generated_at: str | None = None,
     transcript_path: Path | None = None,
+    mode: str = "auto",
     config: CaptureConfig | None = None,
 ) -> dict[str, Any]:
-    """Roll a session buffer into one PENDING summary proposal. No approve().
+    """Roll a session buffer into PENDING summary proposal(s). No approve().
 
-    If cwd is None (e.g., when finalizing orphaned buffers with unknown origin),
-    git changes are not included. Otherwise, git changes from cwd are included.
-    transcript_path (from the SessionEnd hook payload) supplies the human's
-    first prompt for the proposal title; absent, the title falls back to the
-    files the session touched.
+    Claude-Code-facing wrapper: resolves the transcript's first user prompt
+    (its one host-specific enricher) and delegates to the host-blind
+    `session_split.summarize`. `mode` forwards "auto" | "split" | "mechanical".
+    If cwd is None (e.g., finalizing orphaned buffers of unknown origin), git
+    changes are not included; transcript_path (from the SessionEnd hook payload)
+    supplies the human's first prompt for the summary title when present.
     """
-    cfg = config or load_config(store)
-    path = buffer_path(store, session_id)
-    observations = _read_observations(path)
-    if not cfg.enabled:
-        return {"captured": len(observations), "summary_proposal_id": None,
-                "skipped": "disabled"}
-    # Only include git context if cwd is explicitly provided (known origin)
-    # For cleanup of orphaned buffers, cwd=None, so skip git context
-    if cwd is not None:
-        changed_files, git_stat = _git_changes(cwd)
-    else:
-        changed_files, git_stat = [], ""
-    total = len(observations) + len(changed_files)
-    if total < cfg.min_observations:
-        if path.exists():
-            path.unlink()
-        return {"captured": total, "summary_proposal_id": None,
-                "skipped": "below-min"}
-    first_prompt = (
+    from . import session_split  # deferred: breaks the capture<->session_split cycle
+    intent = (
         first_user_prompt(transcript_path) if transcript_path is not None else None
     )
-    title, body = build_summary_body(
-        session_id, observations, changed_files, git_stat,
-        project=project, generated_at=generated_at, first_prompt=first_prompt,
+    return session_split.summarize(
+        store, session_id, intent=intent, cwd=cwd, project=project,
+        generated_at=generated_at, mode=mode, config=config,
     )
-    proposal = propose_page(
-        store,
-        title=title,
-        body=body,
-        page_type=CAPTURE_PAGE_TYPE,
-        proposed_by=CAPTURE_ACTOR,
-        session_id=session_id,
-        rationale="auto-captured session summary",
-    )
-    if path.exists():
-        path.unlink()
-    return {"captured": total, "summary_proposal_id": proposal.id}
 
 
 def pending_count(store: KBStore) -> int:

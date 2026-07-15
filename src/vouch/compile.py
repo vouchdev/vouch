@@ -20,16 +20,14 @@ trail cares who *approved* it.
 
 from __future__ import annotations
 
-import json
 import re
-import subprocess
-import tempfile
 from dataclasses import dataclass, field
 from typing import Any
 
 import yaml
 
 from . import audit as audit_mod
+from . import llm_draft
 from .context import _RETRACTED_CLAIM_STATUSES
 from .models import ProposalStatus
 from .proposals import ProposalError, _slugify, propose_page
@@ -50,7 +48,6 @@ _FORBIDDEN_TYPES = frozenset({"session", "log"})
 
 _WIKILINK_RE = re.compile(r"\[\[([^\]|#]+)")
 _CLAIM_MARKER_RE = re.compile(r"\[claim:\s*([^\]]+)\]")
-_FENCE_RE = re.compile(r"^```[a-zA-Z]*\n|\n```$")
 
 
 class CompileError(Exception):
@@ -182,52 +179,24 @@ def build_prompt(store: KBStore, *, max_pages: int) -> str:
 def run_llm(llm_cmd: str, prompt: str, *, timeout_seconds: float) -> str:
     """Run the configured LLM command with the prompt on stdin.
 
-    Runs in a throwaway temp directory: an LLM CLI that discovers per-project
-    hooks or MCP servers from its cwd (claude -p does) must not fire this
-    project's capture pipeline or connect back to this KB while compiling it.
-
-    Explicit UTF-8 on both pipe directions — the default follows the locale
-    (Latin-1 on some hosts, see storage.py), which would crash on the first
-    em-dash in a claim or silently mojibake the drafted bodies. ``replace``
-    on decode so a stray invalid byte from the LLM surfaces as a visible
-    replacement char in review rather than an exception.
+    Thin wrapper over ``llm_draft.run_llm``, translating its error into the
+    ``CompileError`` compile callers already handle and keeping the
+    "compile.llm_cmd …" wording in messages.
     """
-    with tempfile.TemporaryDirectory(prefix="vouch-compile-") as tmp:
-        try:
-            proc = subprocess.run(
-                llm_cmd, shell=True, cwd=tmp,
-                input=prompt, capture_output=True, text=True,
-                encoding="utf-8", errors="replace",
-                timeout=timeout_seconds,
-            )
-        except subprocess.TimeoutExpired as e:
-            raise CompileError(
-                f"compile.llm_cmd timed out after {timeout_seconds:.0f}s"
-            ) from e
-    if proc.returncode != 0:
-        detail = (proc.stderr or proc.stdout or "").strip()[:400]
-        raise CompileError(f"compile.llm_cmd failed ({proc.returncode}): {detail}")
-    return proc.stdout
+    try:
+        return llm_draft.run_llm(
+            llm_cmd, prompt, timeout_seconds=timeout_seconds,
+            label="compile.llm_cmd",
+        )
+    except llm_draft.LLMDraftError as e:
+        raise CompileError(str(e)) from e
 
 
 def parse_drafts(raw: str) -> list[dict[str, Any]]:
-    text = raw.strip()
-    text = _FENCE_RE.sub("", text).strip()
     try:
-        data = json.loads(text)
-    except json.JSONDecodeError as e:
-        raise CompileError(f"compiler output is not valid JSON: {e}") from e
-    if not isinstance(data, list):
-        raise CompileError("compiler output must be a JSON array of pages")
-    for item in data:
-        if not isinstance(item, dict):
-            # a list of strings is a common LLM shape failure; surfacing it
-            # beats reporting an empty-but-successful compile.
-            raise CompileError(
-                "compiler output must be a JSON array of page objects, "
-                f"got element of type {type(item).__name__}"
-            )
-    return list(data)
+        return llm_draft.parse_drafts(raw, noun="page")
+    except llm_draft.LLMDraftError as e:
+        raise CompileError(str(e)) from e
 
 
 def _draft_problem(
@@ -343,6 +312,12 @@ def compile_kb(
             report.dropped.append({"title": title, "reason": problem})
             continue
         survivors.append((draft, title))
+        # Fix #439: fold accepted title/slug into taken_names immediately so
+        # a later draft in the same batch cannot collide with a just-accepted
+        # one. Without this, two drafts with the same title both pass
+        # _draft_problem's collision guard and land as duplicate proposals.
+        taken_names.add(title.lower())
+        taken_names.add(_slugify(title))
 
     # phase 2: wikilinks resolve against existing pages + the *surviving*
     # batch, to a fixpoint — dropping a draft may dangle a link in another,

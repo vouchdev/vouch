@@ -31,10 +31,12 @@ import yaml
 from . import audit, bundle, health, volunteer_context
 from . import compile as compile_mod
 from . import digest as digest_mod
+from . import hot_memory as hot_mod
 from . import lifecycle as life
 from . import metrics as metrics_mod
 from . import salience as salience_mod
 from . import sessions as sess_mod
+from . import skills as skills_mod
 from . import trust as trust_mod
 from . import verify as verify_mod
 from .capabilities import capabilities as build_caps
@@ -48,13 +50,14 @@ from .proposals import (
     approve,
     expire_pending,
     propose_claim,
+    propose_delete,
     propose_entity,
     propose_page,
     propose_relation,
     reject,
     reject_auto_extracted,
 )
-from .stats import collect_stats
+from .stats import collect_activity, collect_stats
 from .storage import (
     ArtifactNotFoundError,
     KBNotFoundError,
@@ -81,6 +84,14 @@ def _store() -> KBStore:
 
 
 def _agent() -> str:
+    # An authenticated bearer subject is the principal's real identity; it must
+    # win over the client-supplied X-Vouch-Agent header (and VOUCH_AGENT env),
+    # or one token could propose as one actor and approve as another to defeat
+    # the self-approval gate. Only fall back to the header/env when the request
+    # is unauthenticated (tokenless loopback/dev), which is trusted by design.
+    subject = trust_mod.current().auth_subject
+    if subject is not None:
+        return f"token:{subject}"
     return _actor.get() or os.environ.get("VOUCH_AGENT", "unknown-agent")
 
 
@@ -88,7 +99,11 @@ def _agent() -> str:
 
 
 def _h_capabilities(_: dict) -> dict:
-    return build_caps().model_dump(mode="json")
+    try:
+        publish_skills = skills_mod.publish_skills_enabled(_store())
+    except Exception:
+        publish_skills = True
+    return build_caps(publish_skills=publish_skills).model_dump(mode="json")
 
 
 def _h_status(_: dict) -> dict:
@@ -99,6 +114,20 @@ def _h_stats(p: dict) -> dict:
     days = int(p.get("days", 30))
     since = None if days == 0 else days
     return collect_stats(_store(), since_days=since)
+
+
+def _h_activity(p: dict) -> dict:
+    from .scoping import viewer_from_params
+
+    s = _store()
+    viewer = viewer_from_params(s, p)
+    return collect_activity(
+        s,
+        days=int(p.get("days", 365)),
+        tz_offset_minutes=int(p.get("tz_offset_minutes", 0)),
+        tz=p.get("tz"),
+        viewer=viewer,
+    )
 
 
 def _h_digest(p: dict) -> dict:
@@ -168,14 +197,18 @@ def _h_search(p: dict) -> dict:
         used = "hybrid"
 
     scoped = filter_hits(s, hits, viewer, limit=limit)
-    return {
+    hits_list = [
+        {"kind": k, "id": i, "snippet": sn, "score": sc, "backend": used}
+        for k, i, sn, sc in scoped
+    ]
+    result: dict[str, Any] = {
         "backend": used,
         "viewer": {"project": viewer.project, "agent": viewer.agent},
-        "hits": [
-            {"kind": k, "id": i, "snippet": sn, "score": sc, "backend": used}
-            for k, i, sn, sc in scoped
-        ],
+        "hits": hits_list,
     }
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        result, s, query=q, exclude_ids=[str(hit["id"]) for hit in hits_list],
+    )
 
 
 def _load_cfg(store: KBStore) -> dict:
@@ -184,6 +217,20 @@ def _load_cfg(store: KBStore) -> dict:
     except Exception:
         return {}
     return loaded if isinstance(loaded, dict) else {}
+
+
+def _h_experts(p: dict) -> dict:
+    from .experts import rank_experts
+
+    return {
+        "experts": rank_experts(
+            _store(),
+            p["topic"],
+            limit=int(p.get("limit", 10)),
+            min_claims=int(p.get("min_claims", 1)),
+            weight=p.get("weight", "count"),
+        )
+    }
 
 
 def _h_neighbors(p: dict) -> dict:
@@ -222,7 +269,12 @@ def _h_context(p: dict) -> dict:
         graph_limit=int(p.get("graph_limit", 20)),
         graph_rel_types=p.get("graph_rel_types"),
     )
-    return salience_mod.attach_salience(result, store, session_id, cfg)
+    result = salience_mod.attach_salience(result, store, session_id, cfg)
+    pack_items = result.get("items") if isinstance(result, dict) else None
+    exclude = [it.get("id") for it in pack_items] if isinstance(pack_items, list) else []
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        result, store, query=query, exclude_ids=[i for i in exclude if i],
+    )
 
 
 def _h_synthesize(p: dict) -> dict:
@@ -236,19 +288,39 @@ def _h_synthesize(p: dict) -> dict:
 
 
 def _h_read_page(p: dict) -> dict:
-    return _store().get_page(p["page_id"]).model_dump(mode="json")
+    store = _store()
+    page = store.get_page(p["page_id"])
+    result = page.model_dump(mode="json")
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        result, store, query=hot_mod.query_bias_for_page(page),
+    )
 
 
 def _h_read_claim(p: dict) -> dict:
-    return _store().get_claim(p["claim_id"]).model_dump(mode="json")
+    store = _store()
+    claim = store.get_claim(p["claim_id"])
+    result = claim.model_dump(mode="json")
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        result, store, query=claim.text, exclude_ids=[claim.id],
+    )
 
 
 def _h_read_entity(p: dict) -> dict:
-    return _store().get_entity(p["entity_id"]).model_dump(mode="json")
+    store = _store()
+    entity = store.get_entity(p["entity_id"])
+    result = entity.model_dump(mode="json")
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        result, store, query=hot_mod.query_bias_for_entity(entity),
+    )
 
 
 def _h_read_relation(p: dict) -> dict:
-    return _store().get_relation(p["relation_id"]).model_dump(mode="json")
+    store = _store()
+    relation = store.get_relation(p["relation_id"])
+    result = relation.model_dump(mode="json")
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        result, store, query=None,
+    )
 
 
 def _h_diff(p: dict) -> dict:
@@ -259,49 +331,72 @@ def _h_diff(p: dict) -> dict:
     return asdict(diff_artifacts(_store(), p["old_id"], p.get("new_id")))
 
 
-def _h_list_pages(p: dict) -> list[dict]:
+def _h_list_pages(p: dict) -> dict:
+    store = _store()
     pages = filter_pages(
-        _store().list_pages(),
+        store.list_pages(),
         kind=p.get("type"),
         equals=p.get("meta"),
         before=p.get("meta_before"),
         after=p.get("meta_after"),
     )
-    return [pg.model_dump(mode="json") for pg in pages]
+    items = [pg.model_dump(mode="json") for pg in pages]
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        items, store, query=None, list_envelope=True,
+    )
 
 
-def _h_list_claims(p: dict) -> list[dict]:
-    cs = _store().list_claims()
+def _h_list_claims(p: dict) -> dict:
+    store = _store()
+    cs = store.list_claims()
     if p.get("status"):
         cs = [c for c in cs if c.status.value == p["status"]]
-    return [c.model_dump(mode="json") for c in cs]
+    items = [c.model_dump(mode="json") for c in cs]
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        items, store, query=None, list_envelope=True,
+    )
 
 
-def _h_list_entities(p: dict) -> list[dict]:
-    es = _store().list_entities()
+def _h_list_entities(p: dict) -> dict:
+    store = _store()
+    es = store.list_entities()
     if p.get("entity_type"):
         es = [e for e in es if e.type.value == p["entity_type"]]
-    return [e.model_dump(mode="json") for e in es]
+    items = [e.model_dump(mode="json") for e in es]
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        items, store, query=None, list_envelope=True,
+    )
 
 
-def _h_list_relations(p: dict) -> list[dict]:
-    s = _store()
-    rels = s.list_relations()
+def _h_list_relations(p: dict) -> dict:
+    store = _store()
+    rels = store.list_relations()
     node = p.get("node_id")
     if node:
         rels = [r for r in rels if r.source == node or r.target == node]
-    return [r.model_dump(mode="json") for r in rels]
+    items = [r.model_dump(mode="json") for r in rels]
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        items, store, query=None, list_envelope=True,
+    )
 
 
-def _h_list_sources(_: dict) -> list[dict]:
-    return [s.model_dump(mode="json") for s in _store().list_sources()]
+def _h_list_sources(_: dict) -> dict:
+    store = _store()
+    items = [s.model_dump(mode="json") for s in store.list_sources()]
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        items, store, query=None, list_envelope=True,
+    )
 
 
-def _h_list_pending(_: dict) -> list[dict]:
-    return [
+def _h_list_pending(_: dict) -> dict:
+    store = _store()
+    items = [
         p.model_dump(mode="json")
-        for p in _store().list_proposals(ProposalStatus.PENDING)
+        for p in store.list_proposals(ProposalStatus.PENDING)
     ]
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        items, store, query=None, list_envelope=True,
+    )
 
 
 def _h_triage_pending(p: dict) -> list[dict]:
@@ -399,6 +494,27 @@ def _h_compile(p: dict) -> dict:
     return report.to_dict()
 
 
+def _h_summarize_session(p: dict) -> dict:
+    from . import session_split
+    return session_split.summarize(
+        _store(), p["session_id"], mode=p.get("mode", "auto"),
+    )
+
+
+def _h_list_sessions(p: dict) -> dict:
+    from . import session_split
+    return {"sessions": session_split.build_session_rows(_store())}
+
+
+def _h_session_transcript(p: dict) -> dict:
+    from . import transcript
+    session_id = p["session_id"]
+    agent = p.get("agent")
+    if agent is not None and agent not in ("claude", "codex"):
+        raise ValueError(f"unknown agent: {agent!r} (expected 'claude' or 'codex')")
+    return transcript.load_transcript(_store(), session_id, agent=agent)
+
+
 def _h_propose_entity(p: dict) -> dict:
     pr = propose_entity(
         _store(),
@@ -424,6 +540,24 @@ def _h_propose_relation(p: dict) -> dict:
         proposed_by=_agent(),
     )
     return {"proposal_id": pr.id, "status": pr.status.value, "kind": pr.kind.value}
+
+
+def _h_propose_delete(p: dict) -> dict:
+    pr = propose_delete(
+        _store(),
+        target_kind=p["target_kind"],
+        target_id=p["target_id"],
+        rationale=p.get("rationale"),
+        session_id=p.get("session_id"),
+        dry_run=bool(p.get("dry_run", False)),
+        proposed_by=_agent(),
+    )
+    return {
+        "proposal_id": pr.id,
+        "status": pr.status.value,
+        "kind": pr.kind.value,
+        "dry_run": bool(p.get("dry_run", False)),
+    }
 
 
 def _h_approve(p: dict) -> dict:
@@ -484,6 +618,25 @@ def _h_confirm(p: dict) -> dict:
     c = life.confirm(_store(), claim_id=p["claim_id"], actor=_agent())
     return {"id": c.id, "last_confirmed_at": c.last_confirmed_at.isoformat()
             if c.last_confirmed_at else None}
+
+
+def _h_clear_claims(p: dict) -> dict:
+    from datetime import datetime
+    before_dt = None
+    if p.get("before"):
+        before_dt = datetime.fromisoformat(p["before"])
+    to_clear = life.clear_claims(
+        _store(),
+        auto_only=p.get("auto_only", True),
+        before=before_dt,
+        actor=_agent(),
+        dry_run=p.get("dry_run", False),
+    )
+    return {
+        "count": len(to_clear),
+        "claim_ids": [c.id for c in to_clear],
+        "dry_run": p.get("dry_run", False),
+    }
 
 
 def _h_cite(p: dict) -> list:
@@ -561,32 +714,33 @@ def _h_doctor(_: dict) -> dict:
 
 
 def _h_export(p: dict) -> dict:
-    manifest = bundle.export(_store().kb_dir, dest=Path(p["out_path"]),
-                             actor=_agent())
+    s = _store()
+    dest = bundle.fenced_bundle_path(s, p["out_path"])
+    manifest = bundle.export(s.kb_dir, dest=dest, actor=_agent())
     return {"bundle_id": manifest["bundle_id"],
             "files": len(manifest["files"]), "out": p["out_path"]}
 
 
 def _h_export_check(p: dict) -> dict:
-    r = bundle.export_check(Path(p["bundle_path"]))
+    s = _store()
+    r = bundle.export_check(bundle.fenced_bundle_path(s, p["bundle_path"]))
     return {"ok": r.ok, "bundle_id": r.bundle_id,
             "files_checked": r.files_checked, "issues": r.issues}
 
 
 def _h_import_check(p: dict) -> dict:
-    r = bundle.import_check(_store().kb_dir, Path(p["bundle_path"]))
+    s = _store()
+    r = bundle.import_check(s.kb_dir, bundle.fenced_bundle_path(s, p["bundle_path"]))
     return {"ok": r.ok, "bundle_id": r.bundle_id,
             "new_files": r.new_files, "conflicts": r.conflicts,
             "identical_files": len(r.identical), "issues": r.issues}
 
 
-def _h_import_apply(p: dict) -> dict:
-    r = bundle.import_apply(
-        _store().kb_dir, Path(p["bundle_path"]),
-        on_conflict=p.get("on_conflict", "skip"), actor=_agent(),
-    )
-    health.rebuild_index(_store())
-    return r
+# kb.import_apply is deliberately NOT an agent-facing handler: it writes bundle
+# members (claims/pages/decided) straight to disk, a parallel path past
+# proposals.approve(). It survives only as the human `vouch import apply` CLI
+# command until gated import lands (roadmap 8.2). kb.import_check (read-only)
+# stays available to agents.
 
 
 def _h_audit(p: dict) -> dict:
@@ -620,7 +774,6 @@ def _h_dedup_scan(p: dict) -> dict:
 
 
 def _h_eval_embeddings(p: dict) -> dict:
-    from pathlib import Path
 
     from .embeddings.scorer import evaluate
     return evaluate(
@@ -646,6 +799,20 @@ def _h_embeddings_stats(_: dict) -> dict:
         "counts": counts,
         "query_cache": query_cache_stats(store.kb_dir),
     }
+
+
+def _h_list_skills(_: dict) -> list[dict]:
+    return skills_mod.list_skills(_store())
+
+
+def _h_get_skill(p: dict) -> dict:
+    name = p.get("name")
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError("`name` is required")
+    try:
+        return skills_mod.get_skill(_store(), name)
+    except KeyError as e:
+        raise ValueError(str(e)) from e
 
 
 def _h_why(p: dict) -> dict:
@@ -730,9 +897,11 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.capabilities": _h_capabilities,
     "kb.status": _h_status,
     "kb.stats": _h_stats,
+    "kb.activity": _h_activity,
     "kb.digest": _h_digest,
     "kb.search": _h_search,
     "kb.neighbors": _h_neighbors,
+    "kb.experts": _h_experts,
     "kb.context": _h_context,
     "kb.synthesize": _h_synthesize,
     "kb.read_page": _h_read_page,
@@ -752,8 +921,12 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.propose_claim": _h_propose_claim,
     "kb.propose_page": _h_propose_page,
     "kb.compile": _h_compile,
+    "kb.summarize_session": _h_summarize_session,
+    "kb.list_sessions": _h_list_sessions,
+    "kb.session_transcript": _h_session_transcript,
     "kb.propose_entity": _h_propose_entity,
     "kb.propose_relation": _h_propose_relation,
+    "kb.propose_delete": _h_propose_delete,
     "kb.approve": _h_approve,
     "kb.reject": _h_reject,
     "kb.reject_extracted": _h_reject_extracted,
@@ -762,6 +935,7 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.contradict": _h_contradict,
     "kb.archive": _h_archive,
     "kb.confirm": _h_confirm,
+    "kb.clear_claims": _h_clear_claims,
     "kb.cite": _h_cite,
     "kb.source_verify": _h_source_verify,
     "kb.session_start": _h_session_start,
@@ -774,7 +948,6 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.export": _h_export,
     "kb.export_check": _h_export_check,
     "kb.import_check": _h_import_check,
-    "kb.import_apply": _h_import_apply,
     "kb.audit": _h_audit,
     "kb.reindex_embeddings": _h_reindex_embeddings,
     "kb.dedup_scan": _h_dedup_scan,
@@ -787,6 +960,8 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.provenance_rebuild": _h_provenance_rebuild,
     "kb.detect_themes": _h_detect_themes,
     "kb.propose_theme": _h_propose_theme,
+    "kb.list_skills": _h_list_skills,
+    "kb.get_skill": _h_get_skill,
 }
 
 
@@ -806,6 +981,11 @@ def handle_request(envelope: dict) -> dict:
             "id": req_id,
             "ok": True,
             "result": trust_mod.finish_kb_result(result),
+        }
+    except skills_mod.SkillsDisabledError as e:
+        return {
+            "id": req_id, "ok": False,
+            "error": {"code": "permission_denied", "message": str(e)},
         }
     except KeyError as e:
         return {

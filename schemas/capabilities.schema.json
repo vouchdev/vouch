@@ -14,8 +14,14 @@
     },
     "host_compat": {
       "additionalProperties": true,
-      "description": "Per-host compatibility ranges (#237). Mirrors the `openclaw.compat` block in openclaw.plugin.json so non-OpenClaw clients can detect compat without parsing the manifest, e.g. {\"openclaw\": {\"pluginApi\": \">=2026.4.0\"}}.",
+      "description": "Per-host compatibility ranges (#237). Mirrors the `openclaw.compat` block in package.json so non-OpenClaw clients can detect compat without parsing the manifest, e.g. {\"openclaw\": {\"pluginApi\": \">=2026.4.0\"}}.",
       "title": "Host Compat",
+      "type": "object"
+    },
+    "hot_memory": {
+      "additionalProperties": true,
+      "description": "Hot-memory sidebar contract on read-side kb.* responses",
+      "title": "Hot Memory",
       "type": "object"
     },
     "knowledge_capability": {
@@ -28,6 +34,12 @@
       "description": "compliance level \u2014 see AKBP \u00a711",
       "title": "Level",
       "type": "integer"
+    },
+    "mcp": {
+      "additionalProperties": true,
+      "description": "mcp surface flags mirrored from config.yaml `mcp:` block. `publish_skills` gates kb.list_skills / kb.get_skill.",
+      "title": "Mcp",
+      "type": "object"
     },
     "methods": {
       "items": {

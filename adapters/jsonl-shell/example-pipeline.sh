@@ -33,4 +33,4 @@ echo "$prop" | jq
 # 3. List what's pending.
 echo '{"id":"r3","method":"kb.list_pending"}' \
   | vouch serve --transport jsonl \
-  | jq '.result[] | {id, kind, proposed_by}'
+  | jq '.result.items[] | {id, kind, proposed_by}'
