@@ -79,6 +79,11 @@ def _starter_config() -> dict[str, Any]:
         "review": {
             "require_human_approval": True,
             "expire_pending_after_days": 90,
+            # phase d — the receipt is the reviewer. When true, a claim whose
+            # byte-offset receipts all verify is auto-approved with no human;
+            # a claim that cannot quote its source is left pending. Opt-in:
+            # the human-review gate stays on by default.
+            "auto_approve_on_receipt": False,
         },
         "capture": {
             # auto-capture agent sessions into pending summaries.

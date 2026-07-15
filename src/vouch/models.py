@@ -209,6 +209,14 @@ class Evidence(BaseModel):
     locator: str = Field(description="span ref: 'L10-L20', 't=00:14:23', '#section-3'")
     quote: str | None = None
     hash: str | None = None
+    # The byte-offset receipt: the half-open range [byte_start, byte_end) into
+    # the cited source's raw bytes that `quote` was taken from. When both are
+    # set alongside `quote`, the citation is mechanically verifiable — the
+    # quoted span is in the source at those offsets or it is not, checked by
+    # string comparison with no judge (see receipts.verify_receipt). Absent on
+    # legacy/free-text citations, which carry no receipt.
+    byte_start: int | None = Field(default=None, ge=0)
+    byte_end: int | None = Field(default=None, ge=0)
     created_at: datetime = Field(default_factory=utcnow)
 
 
