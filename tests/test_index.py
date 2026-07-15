@@ -47,3 +47,14 @@ def test_index_via_approve(store: KBStore) -> None:
     approve(store, pr.id, approved_by="u")
     hits = index_db.search(store.kb_dir, "indexed")
     assert any(k == "claim" for k, *_ in hits)
+
+
+def test_open_db_enables_wal_and_busy_timeout(store: KBStore) -> None:
+    """Fleet-safe sqlite: WAL keeps readers from blocking the single writer,
+    and a busy_timeout makes a contended writer wait instead of erroring at
+    once -- five concurrent agents on one KB is the dogfood config."""
+    with index_db.open_db(store.kb_dir) as conn:
+        mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+        busy = conn.execute("PRAGMA busy_timeout").fetchone()[0]
+    assert mode.lower() == "wal"
+    assert busy >= 1000

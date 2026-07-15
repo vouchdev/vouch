@@ -29,17 +29,31 @@ running Cursor".
 
 ## Concurrency
 
-vouch is single-writer per file. Two agents proposing simultaneously
-each get their own proposal id; no lock contention. Two agents
-approving simultaneously can race — the second one through sees
-`already_decided`.
+Five agents against one `.vouch/` is the configuration vouch is built
+for, so concurrent access is handled in the storage layer rather than
+left to you.
 
-State.db (the FTS5 index) is updated under SQLite's normal locking.
-Reads do not block reads; writes briefly block other writes.
+**Proposing is lock-free.** Two agents proposing at the same time each
+get their own proposal id; there's nothing to contend over.
 
-Bottom line: don't worry about concurrent agents writing. *Do* worry
-about concurrent approvals if you have a script approving in bulk —
-serialise them.
+**Durable writes are atomic.** Every artifact is written to a temp
+file, fsynced, then renamed into place, so a crash leaves either the
+old bytes or the complete new bytes — never a half-written file, and
+never an audit event attesting to yaml that power loss erased.
+
+**Approvals are serialised.** `approve`, `reject`, and expiry take a
+per-KB decision lock (`decisions.lock`) across the whole
+read-check-write, so two agents deciding the same proposal at once
+can't both proceed: one wins, the other finds it already decided. You
+don't need to serialise a bulk-approval script yourself — vouch does it.
+
+**The search index never blocks a write.** `state.db` (the FTS5 +
+embedding index) runs in WAL mode with a busy timeout, so readers and
+the single writer don't block each other and a contended writer waits
+briefly instead of failing with "database is locked". The index is
+derived and best-effort: if an index write fails during an approval,
+the approval still lands durably — rebuild the missing row with
+`vouch index`.
 
 ## Approval policies
 

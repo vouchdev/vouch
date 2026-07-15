@@ -99,6 +99,14 @@ def open_db(kb_dir: Path):
     path = _db_path(kb_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(path))
+    # Fleet-safe defaults: five concurrent agents on one KB is the dogfood
+    # configuration. WAL lets readers proceed while a single writer commits
+    # (instead of a whole-file lock), and busy_timeout makes a contended writer
+    # wait for the lock rather than failing immediately with "database is
+    # locked". state.db is derived, so the -wal/-shm sidecars are gitignored
+    # (state.db-*). Set before any statement opens a transaction.
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
     try:
         conn.executescript(SCHEMA)
         yield conn

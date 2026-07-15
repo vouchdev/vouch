@@ -6,8 +6,11 @@ proposal lifecycle, and writes audit events for every mutation.
 
 from __future__ import annotations
 
+import logging
+import sqlite3
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -28,6 +31,8 @@ from .models import (
 )
 from .page_kinds import PageKindError, load_page_kind_registry, validate_page
 from .storage import ArtifactNotFoundError, KBStore
+
+_log = logging.getLogger("vouch.proposals")
 
 
 class ProposalError(RuntimeError):
@@ -498,6 +503,34 @@ def check_approvable(
     return _payload_block_reason(store, proposal)
 
 
+def _index_or_degrade(
+    store: KBStore,
+    kind: str,
+    artifact_id: str,
+    index_fn: Callable[[sqlite3.Connection], None],
+) -> None:
+    """Write an approved artifact's FTS row, degrading instead of raising.
+
+    state.db is derived, so a locked or broken index must not brick the
+    durable approve: put_<kind>() has already written the artifact, and the
+    caller still has to record the decision and log the approve event. Letting
+    the index error escape would abort between the artifact write and
+    move_proposal_to_decided(), leaving the file on disk with the proposal
+    still pending -- and the retry would hit _ensure_no_existing_artifact and
+    brick the approve for good. Rebuild the missing row later with
+    `vouch index`.
+    """
+    try:
+        with index_db.open_db(store.kb_dir) as conn:
+            index_fn(conn)
+    except sqlite3.Error as e:
+        _log.warning(
+            "%s %s: FTS5 index skipped on approve (%s); state.db is derived, "
+            "rebuild with `vouch index`",
+            kind, artifact_id, e,
+        )
+
+
 def approve(
     store: KBStore,
     proposal_id: str,
@@ -549,11 +582,14 @@ def _approve_locked(
             **payload
         )
         store.put_claim(claim)
-        with index_db.open_db(store.kb_dir) as conn:
-            index_db.index_claim(
+        _index_or_degrade(
+            store, "claim", claim.id,
+            lambda conn: index_db.index_claim(
                 conn, id=claim.id, text=claim.text,
-                type=claim.type.value, status=claim.status.value, tags=claim.tags,
-            )
+                type=claim.type.value, status=claim.status.value,
+                tags=claim.tags,
+            ),
+        )
         result = claim
     elif proposal.kind == ProposalKind.PAGE:
         page = Page(**payload)
@@ -583,11 +619,13 @@ def _approve_locked(
             store.update_page(page)
         except ArtifactNotFoundError:
             store.put_page(page)
-        with index_db.open_db(store.kb_dir) as conn:
-            index_db.index_page(
+        _index_or_degrade(
+            store, "page", page.id,
+            lambda conn: index_db.index_page(
                 conn, id=page.id, title=page.title, body=page.body,
                 type=page.type, tags=page.tags,
-            )
+            ),
+        )
         result = page
         # Lazy import: extractors.edges calls back into propose_relation,
         # so importing it at module scope would be circular.
@@ -597,11 +635,14 @@ def _approve_locked(
     elif proposal.kind == ProposalKind.ENTITY:
         entity = Entity(**payload)
         store.put_entity(entity)
-        with index_db.open_db(store.kb_dir) as conn:
-            index_db.index_entity(
-                conn, id=entity.id, name=entity.name, description=entity.description,
+        _index_or_degrade(
+            store, "entity", entity.id,
+            lambda conn: index_db.index_entity(
+                conn, id=entity.id, name=entity.name,
+                description=entity.description,
                 type=entity.type.value, aliases=entity.aliases,
-            )
+            ),
+        )
         result = entity
     elif proposal.kind == ProposalKind.DELETE:
         result = _approve_delete(store, proposal, approved_by=approved_by)

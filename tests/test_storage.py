@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
-from vouch import audit, lifecycle, storage
+from vouch import audit, index_db, lifecycle, storage
 from vouch.models import (
     Claim,
     ClaimStatus,
@@ -708,6 +709,29 @@ def test_double_approve_rejected(store: KBStore) -> None:
     approve(store, pr.id, approved_by="u")
     with pytest.raises(ProposalError, match="not pending"):
         approve(store, pr.id, approved_by="u")
+
+
+def test_approve_survives_index_write_failure(
+    store: KBStore, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """state.db is derived, so a locked or broken FTS index must not brick the
+    durable approve. The claim lands, the decision is recorded, and the approve
+    event is logged. Without catch-and-degrade the claim file would exist while
+    the proposal stayed pending -- and a retry would hit the 'already exists'
+    guard, bricking the approve for good."""
+    src = store.put_source(b"e")
+    pid = propose_claim(store, text="jwt", evidence=[src.id], proposed_by="a").id
+
+    def _locked(*_a: object, **_k: object) -> None:
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(index_db, "index_claim", _locked)
+    result = approve(store, pid, approved_by="b")  # must not raise
+
+    assert store.get_claim(result.id).text == "jwt"
+    assert store.get_proposal(pid).status is ProposalStatus.APPROVED
+    audit_log = (store.kb_dir / "audit.log.jsonl").read_text(encoding="utf-8")
+    assert "proposal.claim.approve" in audit_log
 
 
 def test_approve_refuses_to_overwrite_existing_artifact(store: KBStore) -> None:
