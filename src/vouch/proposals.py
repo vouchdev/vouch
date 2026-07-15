@@ -20,6 +20,7 @@ from .models import (
     Claim,
     Entity,
     Page,
+    PageStatus,
     Proposal,
     ProposalKind,
     ProposalStatus,
@@ -540,6 +541,10 @@ def approve(
         result = claim
     elif proposal.kind == ProposalKind.PAGE:
         page = Page(**payload)
+        # Approval is what makes a page live. Page defaults to DRAFT and nothing
+        # promoted it, so reviewed pages read as draft forever; stamp ACTIVE at
+        # the gate.
+        page.status = PageStatus.ACTIVE
         # Re-validate the kind at the gate: config may have tightened (or a
         # kind been removed) between propose and approve. Built-in kinds pass
         # trivially, so this is a no-op for the common path.

@@ -10,7 +10,7 @@ import yaml
 from click.testing import CliRunner
 
 from vouch.cli import cli
-from vouch.models import Page
+from vouch.models import Page, PageStatus
 from vouch.page_kinds import PageKindError, load_page_kind_registry, validate_page
 from vouch.proposals import ProposalError, approve, propose_page
 from vouch.storage import KBStore
@@ -49,6 +49,16 @@ def test_declared_kind_is_accepted(store: KBStore) -> None:
     assert page.metadata["attendees"] == ["alice-example", "bob-example"]
     # survives a round-trip to disk
     assert store.get_page(page.id).metadata["attendees"] == ["alice-example", "bob-example"]
+
+
+def test_approved_page_is_active_not_draft(store: KBStore) -> None:
+    """An approved page must be ACTIVE. Page defaults to DRAFT and the approve
+    path never stamped it, so reviewed pages read as draft forever — the wiki
+    served approved knowledge with a draft badge and STALE had no writer."""
+    pr = propose_page(store, title="A page", body="b", proposed_by="agent")
+    page = approve(store, pr.id, approved_by="reviewer")
+    assert page.status is PageStatus.ACTIVE
+    assert store.get_page(page.id).status is PageStatus.ACTIVE
 
 
 def test_undeclared_kind_is_rejected(store: KBStore) -> None:
