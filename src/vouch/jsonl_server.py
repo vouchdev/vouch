@@ -84,6 +84,14 @@ def _store() -> KBStore:
 
 
 def _agent() -> str:
+    # An authenticated bearer subject is the principal's real identity; it must
+    # win over the client-supplied X-Vouch-Agent header (and VOUCH_AGENT env),
+    # or one token could propose as one actor and approve as another to defeat
+    # the self-approval gate. Only fall back to the header/env when the request
+    # is unauthenticated (tokenless loopback/dev), which is trusted by design.
+    subject = trust_mod.current().auth_subject
+    if subject is not None:
+        return f"token:{subject}"
     return _actor.get() or os.environ.get("VOUCH_AGENT", "unknown-agent")
 
 

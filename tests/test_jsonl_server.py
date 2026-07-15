@@ -248,3 +248,72 @@ def test_jsonl_internal_error_omits_traceback(monkeypatch) -> None:
     assert resp["ok"] is False
     assert resp["error"]["code"] == "internal_error"
     assert "traceback" not in resp["error"]
+
+
+# --- gate integrity: the actor binds to the authenticated principal --------
+
+
+def test_jsonl_agent_binds_to_auth_subject_over_header() -> None:
+    """An authenticated request's actor is the token subject, not the header.
+
+    X-Vouch-Agent is client-supplied; it must never override an authenticated
+    identity, or one token could masquerade as any actor it likes.
+    """
+    from vouch import jsonl_server
+    from vouch import trust as trust_mod
+
+    trust = trust_mod.with_auth_subject(trust_mod.JSONL_HTTP, "one-token")
+    with trust_mod.trust_context(trust):
+        reset = jsonl_server._actor.set("spoofed-header")
+        try:
+            actor = jsonl_server._agent()
+        finally:
+            jsonl_server._actor.reset(reset)
+    assert "spoofed-header" not in actor
+    assert trust_mod.auth_subject_for_token("one-token") in actor
+
+
+def test_jsonl_agent_uses_header_when_unauthenticated() -> None:
+    """Tokenless (dev/loopback) requests keep the existing header attribution."""
+    from vouch import jsonl_server
+    from vouch import trust as trust_mod
+
+    with trust_mod.trust_context(trust_mod.JSONL_HTTP):  # no auth_subject
+        reset = jsonl_server._actor.set("named-agent")
+        try:
+            actor = jsonl_server._agent()
+        finally:
+            jsonl_server._actor.reset(reset)
+    assert actor == "named-agent"
+
+
+def test_one_token_cannot_self_approve_by_swapping_header(
+    store: KBStore, monkeypatch
+) -> None:
+    """The core exploit is closed: propose-as-alice, approve-as-bob, one token.
+
+    Because the actor binds to the authenticated subject, both operations
+    resolve to the same actor and the self-approval gate blocks the approval.
+    """
+    from vouch import jsonl_server
+    from vouch import trust as trust_mod
+
+    src = store.put_source(b"evidence")
+    monkeypatch.chdir(store.root)
+    trust = trust_mod.with_auth_subject(trust_mod.JSONL_HTTP, "one-token")
+    with trust_mod.trust_context(trust):
+        reset = jsonl_server._actor.set("alice")
+        try:
+            pr = handle_request({"id": "1", "method": "kb.propose_claim",
+                                 "params": {"text": "c", "evidence": [src.id]}})
+        finally:
+            jsonl_server._actor.reset(reset)
+        pid = pr["result"]["proposal_id"]
+        reset = jsonl_server._actor.set("bob")
+        try:
+            resp = handle_request({"id": "2", "method": "kb.approve",
+                                   "params": {"proposal_id": pid}})
+        finally:
+            jsonl_server._actor.reset(reset)
+    assert not resp["ok"]
+    assert "forbidden_self_approval" in resp["error"]["message"]

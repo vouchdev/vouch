@@ -71,6 +71,13 @@ def _store() -> KBStore:
 
 
 def _agent() -> str:
+    # An authenticated bearer subject (set by the /mcp transport) is the
+    # principal's real identity and must be what proposals/audit attribute to,
+    # so a token cannot be spoofed and distinct tokens are distinct actors.
+    # VOUCH_AGENT is only the tokenless (stdio/dev) fallback.
+    subject = trust_mod.current().auth_subject
+    if subject is not None:
+        return f"token:{subject}"
     return os.environ.get("VOUCH_AGENT", "unknown-agent")
 
 
