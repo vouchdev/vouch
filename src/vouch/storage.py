@@ -130,6 +130,17 @@ def sha256_hex(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _fsync_file(path: Path) -> None:
+    """Flush a file's data to disk. Used before a dependent step (unlinking the
+    pending copy, appending an audit event) makes the write authoritative, so a
+    crash cannot leave the tree attesting to bytes power loss erased."""
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 def discover_root(start: Path | None = None) -> Path:
     """Walk up from `start` looking for a `.vouch` directory.
 
@@ -884,26 +895,40 @@ class KBStore:
         return proposal
 
     def get_proposal(self, proposal_id: str) -> Proposal:
-        for path in (self._proposal_path(proposal_id), self._decided_path(proposal_id)):
+        # decided/ wins over proposed/. move_proposal_to_decided writes decided/
+        # then unlinks proposed/, so a crash between the two leaves both copies.
+        # The recorded decision is authoritative — returning the stale pending
+        # copy would let a recorded "no" resurface as pending and later flip to
+        # a durable "yes".
+        for path in (self._decided_path(proposal_id), self._proposal_path(proposal_id)):
             if path.exists():
                 return Proposal.model_validate(_yaml_load(path.read_text(encoding="utf-8")))
         raise ArtifactNotFoundError(f"proposal {proposal_id}")
 
     def list_proposals(self, status: ProposalStatus | None = None) -> list[Proposal]:
-        out: list[Proposal] = []
-        for sub in ("proposed", "decided"):
+        # decided/ wins over proposed/ (see get_proposal): a proposal present in
+        # both — the move_proposal_to_decided crash window — appears once, as its
+        # recorded decision, never twice.
+        by_id: dict[str, Proposal] = {}
+        for sub in ("decided", "proposed"):
             for p in sorted((self.kb_dir / sub).glob("*.yaml")):
                 pr = _load_or_skip(p, Proposal, "proposal")
-                if pr is None:
+                if pr is None or pr.id in by_id:
                     continue
-                if status is None or pr.status == status:
-                    out.append(pr)
-        return out
+                by_id[pr.id] = pr
+        return sorted(
+            (pr for pr in by_id.values() if status is None or pr.status == status),
+            key=lambda pr: pr.id,
+        )
 
     def move_proposal_to_decided(self, proposal: Proposal) -> None:
         src = self._proposal_path(proposal.id)
         dst = self._decided_path(proposal.id)
         dst.write_text(_yaml_dump(proposal.model_dump(mode="json")), encoding="utf-8")
+        # fsync the decision before removing the pending copy: a crash may leave
+        # both files (readers prefer decided) but must never leave neither, so
+        # the recorded decision has to be durable before proposed/ is unlinked.
+        _fsync_file(dst)
         if src.exists():
             src.unlink()
 

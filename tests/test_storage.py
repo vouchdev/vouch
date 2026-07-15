@@ -946,3 +946,40 @@ def test_list_pages_skips_unreadable_file(store: KBStore) -> None:
 
     pages = store.list_pages()
     assert [p.id for p in pages] == ["p-ok"]
+
+
+# --- crash window: a recorded decision must win over a stale pending copy ---
+
+
+def _simulate_decided_and_stale_proposed(store: KBStore, pid: str) -> None:
+    """Leave both a decided (APPROVED) copy and the pre-decision pending copy,
+    the exact state move_proposal_to_decided leaves if it crashes after writing
+    decided/ but before unlinking proposed/."""
+    import yaml
+
+    pending = store.get_proposal(pid)
+    approved = pending.model_copy(
+        update={"status": ProposalStatus.APPROVED, "decided_by": "b"}
+    )
+    store.move_proposal_to_decided(approved)  # decided/ = APPROVED, proposed/ gone
+    # re-create the stale pending copy that a crash would have left behind
+    store._proposal_path(pid).write_text(
+        yaml.safe_dump(pending.model_dump(mode="json")), encoding="utf-8"
+    )
+
+
+def test_get_proposal_prefers_decided_over_stale_proposed(store: KBStore) -> None:
+    src = store.put_source(b"e")
+    pid = propose_claim(store, text="x", evidence=[src.id], proposed_by="a").id
+    _simulate_decided_and_stale_proposed(store, pid)
+    # a recorded "no"/"yes" must not be masked by the leftover pending copy
+    assert store.get_proposal(pid).status is ProposalStatus.APPROVED
+
+
+def test_list_proposals_dedups_preferring_decided(store: KBStore) -> None:
+    src = store.put_source(b"e")
+    pid = propose_claim(store, text="x", evidence=[src.id], proposed_by="a").id
+    _simulate_decided_and_stale_proposed(store, pid)
+    matching = [p for p in store.list_proposals() if p.id == pid]
+    assert len(matching) == 1
+    assert matching[0].status is ProposalStatus.APPROVED
