@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
-from vouch import audit, lifecycle
+from vouch import audit, lifecycle, storage
 from vouch.models import (
     Claim,
     ClaimStatus,
@@ -1027,3 +1028,139 @@ def test_approve_serializes_on_the_decision_lock(
     holder.join(timeout=5)
     approver.join(timeout=5)
     assert store.get_proposal(pid).status is ProposalStatus.APPROVED
+
+
+# --- durable artifact writes: tmp + fsync + os.replace --------------------
+#
+# The fsynced audit log must never end up attesting to a claim/page/proposal
+# whose yaml a crash left torn or erased. Every durable artifact write goes
+# through _atomic_write: write a temp sibling, fsync it, then place it with an
+# atomic rename (os.replace to overwrite, os.link to preserve the create-only
+# contract of put_claim/put_page). A crash therefore leaves the old bytes or
+# the complete new bytes -- never a half-written mix.
+
+
+def test_atomic_write_overwrite_crash_preserves_old_bytes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """A crash at the final rename leaves the previous good file intact and no
+    temp file behind -- the whole point of swapping through a tmp sibling."""
+    p = tmp_path / "claim.yaml"
+    p.write_text("OLD", encoding="utf-8")
+
+    def _boom(*_a: object, **_k: object) -> None:
+        raise RuntimeError("power loss")
+
+    monkeypatch.setattr(os, "replace", _boom)
+    with pytest.raises(RuntimeError):
+        storage._atomic_write(p, "NEW")
+
+    assert p.read_text(encoding="utf-8") == "OLD"
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_atomic_write_fsyncs_data_before_rename(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """Data is fsynced before the rename makes it visible, so the audit append
+    that follows can never attest to bytes power loss erased."""
+    order: list[str] = []
+    real_fsync, real_replace = os.fsync, os.replace
+
+    def _fsync(fd: int) -> None:
+        order.append("fsync")
+        real_fsync(fd)
+
+    def _replace(src: object, dst: object) -> None:
+        order.append("replace")
+        real_replace(src, dst)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(os, "fsync", _fsync)
+    monkeypatch.setattr(os, "replace", _replace)
+    storage._atomic_write(tmp_path / "c.yaml", "data")
+
+    assert order == ["fsync", "replace"]
+    assert (tmp_path / "c.yaml").read_text(encoding="utf-8") == "data"
+
+
+def test_atomic_write_exclusive_rejects_existing_and_leaves_no_tmp(
+    tmp_path: Path,
+) -> None:
+    """Exclusive mode keeps put_claim/put_page's create-only contract: an
+    existing target raises FileExistsError, unchanged, with no temp leaked."""
+    p = tmp_path / "claim.yaml"
+    p.write_text("EXISTING", encoding="utf-8")
+    with pytest.raises(FileExistsError):
+        storage._atomic_write(p, "NEW", exclusive=True)
+    assert p.read_text(encoding="utf-8") == "EXISTING"
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_atomic_write_exclusive_creates_when_absent(tmp_path: Path) -> None:
+    p = tmp_path / "sub" / "claim.yaml"
+    storage._atomic_write(p, "hello", exclusive=True)
+    assert p.read_text(encoding="utf-8") == "hello"
+    assert list(p.parent.glob("*.tmp")) == []
+
+
+def _spy_atomic_writes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[tuple[str, bool]]:
+    """Record (filename, exclusive) for every _atomic_write, still writing."""
+    seen: list[tuple[str, bool]] = []
+    real = storage._atomic_write
+
+    def spy(path: Path, data: str, *, exclusive: bool = False) -> None:
+        seen.append((Path(path).name, exclusive))
+        real(path, data, exclusive=exclusive)
+
+    monkeypatch.setattr(storage, "_atomic_write", spy)
+    return seen
+
+
+def test_put_and_update_claim_write_through_atomic_helper(
+    store: KBStore, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    src = store.put_source(b"e")
+    seen = _spy_atomic_writes(monkeypatch)
+    store.put_claim(Claim(id="c1", text="orig", evidence=[src.id]))
+    # create uses exclusive mode -- the "already exists" guard must survive.
+    assert ("c1.yaml", True) in seen
+
+    seen.clear()
+    c = store.get_claim("c1")
+    c.text = "revised"
+    store.update_claim(c)
+    # overwrite uses the plain os.replace path.
+    assert ("c1.yaml", False) in seen
+
+
+def test_put_and_update_page_write_through_atomic_helper(
+    store: KBStore, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    src = store.put_source(b"e")
+    store.put_claim(Claim(id="c1", text="t", evidence=[src.id]))
+    seen = _spy_atomic_writes(monkeypatch)
+    page = Page(id="p1", title="T", body="b", claims=["c1"])
+    store.put_page(page)
+    assert ("p1.md", True) in seen
+
+    seen.clear()
+    page.body = "b2"
+    store.update_page(page)
+    assert ("p1.md", False) in seen
+
+
+def test_move_proposal_to_decided_writes_through_atomic_helper(
+    store: KBStore, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    src = store.put_source(b"e")
+    pid = propose_claim(store, text="x", evidence=[src.id], proposed_by="a").id
+    pending = store.get_proposal(pid)
+    seen = _spy_atomic_writes(monkeypatch)
+    decided = pending.model_copy(
+        update={"status": ProposalStatus.APPROVED, "decided_by": "b"}
+    )
+    store.move_proposal_to_decided(decided)
+    # the recorded decision lands as a torn-proof atomic overwrite.
+    assert (f"{pid}.yaml", False) in seen

@@ -23,12 +23,14 @@ that `vouch index` can rebuild from disk.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import logging
 import os
 import re
 import sqlite3
 import stat
+import tempfile
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -130,15 +132,41 @@ def sha256_hex(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _fsync_file(path: Path) -> None:
-    """Flush a file's data to disk. Used before a dependent step (unlinking the
-    pending copy, appending an audit event) makes the write authoritative, so a
-    crash cannot leave the tree attesting to bytes power loss erased."""
-    fd = os.open(path, os.O_RDONLY)
+def _atomic_write(path: Path, data: str, *, exclusive: bool = False) -> None:
+    """Write ``data`` to ``path`` durably: a crash leaves either the old bytes
+    or the complete new bytes, never a torn mix.
+
+    Write to a temp sibling in the same directory (same filesystem, so the
+    placement is an atomic rename), ``fsync`` it, then put it in place --
+    ``os.replace`` for an overwrite, or ``os.link`` (which raises
+    ``FileExistsError`` if the target already exists) to preserve the
+    create-only contract ``put_claim`` / ``put_page`` previously got from
+    ``open("x")``. The pre-placement ``fsync`` is what lets the audit append
+    that follows never attest to yaml power loss erased -- generalizing the
+    fsync-before-unlink that ``move_proposal_to_decided`` used to do inline.
+
+    Mirrors the migration layer's ``migrations.rewriter.atomic_write_text``,
+    which imports from here, so the two stay separate by necessity."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
+    tmp = Path(tmp_name)
     try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        if exclusive:
+            os.link(tmp, path)  # atomic create; FileExistsError if target present
+        else:
+            os.replace(tmp, path)  # atomic overwrite; consumes tmp
+    except BaseException:
+        # Leave no temp behind on any failure, incl. KeyboardInterrupt.
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(tmp)
+        raise
+    # os.replace consumed tmp; os.link left it as a second link to drop.
+    with contextlib.suppress(FileNotFoundError):
+        os.unlink(tmp)
 
 
 def discover_root(start: Path | None = None) -> Path:
@@ -362,7 +390,7 @@ class KBStore:
             tags=tags or [],
             metadata=metadata or {},
         )
-        meta_path.write_text(_yaml_dump(src.model_dump(mode="json")), encoding="utf-8")
+        _atomic_write(meta_path, _yaml_dump(src.model_dump(mode="json")))
         self._embed_and_store(kind="source", id=src.id, text=src.title or src.locator or "")
         return src
 
@@ -469,8 +497,11 @@ class KBStore:
             )
         self._validate_claim_refs(claim)
         try:
-            with self._claim_path(claim.id).open("x", encoding="utf-8") as f:
-                f.write(_yaml_dump(claim.model_dump(mode="json")))
+            _atomic_write(
+                self._claim_path(claim.id),
+                _yaml_dump(claim.model_dump(mode="json")),
+                exclusive=True,
+            )
         except FileExistsError as e:
             raise ValueError(
                 f"claim {claim.id} already exists -- use update_claim()"
@@ -508,8 +539,10 @@ class KBStore:
         # model validator can't catch (it has no KB access). Mirrors the
         # put_claim guard so the update path can't reintroduce the gap.
         self._validate_claim_refs(claim)
-        self._claim_path(claim.id).write_text(
-            _yaml_dump(claim.model_dump(mode="json")), encoding="utf-8")
+        _atomic_write(
+            self._claim_path(claim.id),
+            _yaml_dump(claim.model_dump(mode="json")),
+        )
         self._embed_and_store(kind="claim", id=claim.id, text=claim.text)
         # Keep the FTS5 row in sync with the on-disk claim so lifecycle
         # mutations (archive, supersede, contradict, confirm) are reflected
@@ -544,12 +577,13 @@ class KBStore:
             if not (self._source_dir(sid) / "meta.yaml").exists():
                 raise ValueError(f"page {page.id} references unknown source {sid}")
         try:
-            # Explicit UTF-8: page bodies are user / agent prose and routinely
-            # contain non-ASCII (em-dashes, smart quotes, unicode in claims).
-            # The default text-mode encoding follows the locale (Latin-1 on a
-            # bare Linux container), which would mangle anything past 0x7F.
-            with self._page_path(page.id).open("x", encoding="utf-8") as f:
-                f.write(_serialize_page(page))
+            # Explicit UTF-8 (in _atomic_write): page bodies are user / agent
+            # prose and routinely contain non-ASCII (em-dashes, smart quotes,
+            # unicode in claims). The default text-mode encoding follows the
+            # locale (Latin-1 on a bare Linux container), mangling past 0x7F.
+            _atomic_write(
+                self._page_path(page.id), _serialize_page(page), exclusive=True
+            )
         except FileExistsError as e:
             raise ValueError(
                 f"page {page.id} already exists -- choose a different slug"
@@ -572,9 +606,7 @@ class KBStore:
         """
         if not self._page_path(page.id).exists():
             raise ArtifactNotFoundError(f"page {page.id}")
-        self._page_path(page.id).write_text(
-            _serialize_page(page), encoding="utf-8"
-        )
+        _atomic_write(self._page_path(page.id), _serialize_page(page))
         self._embed_and_store(
             kind="page", id=page.id,
             text=f"{page.title}\n\n{page.body}",
@@ -595,8 +627,11 @@ class KBStore:
 
     def put_entity(self, entity: Entity) -> Entity:
         try:
-            with self._entity_path(entity.id).open("x", encoding="utf-8") as f:
-                f.write(_yaml_dump(entity.model_dump(mode="json")))
+            _atomic_write(
+                self._entity_path(entity.id),
+                _yaml_dump(entity.model_dump(mode="json")),
+                exclusive=True,
+            )
         except FileExistsError as e:
             raise ValueError(
                 f"entity {entity.id} already exists -- choose a different slug"
@@ -644,8 +679,11 @@ class KBStore:
     def put_relation(self, rel: Relation) -> Relation:
         self._validate_relation_refs(rel)
         try:
-            with self._relation_path(rel.id).open("x", encoding="utf-8") as f:
-                f.write(_yaml_dump(rel.model_dump(mode="json")))
+            _atomic_write(
+                self._relation_path(rel.id),
+                _yaml_dump(rel.model_dump(mode="json")),
+                exclusive=True,
+            )
         except FileExistsError as e:
             raise ValueError(
                 f"relation {rel.id} already exists -- choose a different slug"
@@ -677,8 +715,9 @@ class KBStore:
         # the linked claim was subsequently archived or retracted.
         self._validate_relation_refs(rel)
         try:
-            with path.open("x", encoding="utf-8") as f:
-                f.write(_yaml_dump(rel.model_dump(mode="json")))
+            _atomic_write(
+                path, _yaml_dump(rel.model_dump(mode="json")), exclusive=True
+            )
         except FileExistsError:
             self._embed_and_store(
                 kind="relation", id=rel.id,
@@ -744,8 +783,11 @@ class KBStore:
         if not (self._source_dir(ev.source_id) / "meta.yaml").exists():
             raise ValueError(f"evidence {ev.id} cites unknown source {ev.source_id}")
         try:
-            with self._evidence_path(ev.id).open("x", encoding="utf-8") as f:
-                f.write(_yaml_dump(ev.model_dump(mode="json")))
+            _atomic_write(
+                self._evidence_path(ev.id),
+                _yaml_dump(ev.model_dump(mode="json")),
+                exclusive=True,
+            )
         except FileExistsError as e:
             raise ValueError(
                 f"evidence {ev.id} already exists -- choose a different slug"
@@ -770,8 +812,11 @@ class KBStore:
 
     def put_session(self, sess: Session) -> Session:
         try:
-            with self._session_path(sess.id).open("x", encoding="utf-8") as f:
-                f.write(_yaml_dump(sess.model_dump(mode="json")))
+            _atomic_write(
+                self._session_path(sess.id),
+                _yaml_dump(sess.model_dump(mode="json")),
+                exclusive=True,
+            )
         except FileExistsError as e:
             raise ValueError(
                 f"session {sess.id} already exists -- choose a different id"
@@ -784,8 +829,10 @@ class KBStore:
         # guard against duplicate ids, so updates need a separate path.
         if not self._session_path(sess.id).exists():
             raise ArtifactNotFoundError(f"session {sess.id}")
-        self._session_path(sess.id).write_text(
-            _yaml_dump(sess.model_dump(mode="json")), encoding="utf-8")
+        _atomic_write(
+            self._session_path(sess.id),
+            _yaml_dump(sess.model_dump(mode="json")),
+        )
         return sess
 
     def get_session(self, sid: str) -> Session:
@@ -872,8 +919,11 @@ class KBStore:
 
     def put_proposal(self, proposal: Proposal) -> Proposal:
         try:
-            with self._proposal_path(proposal.id).open("x", encoding="utf-8") as f:
-                f.write(_yaml_dump(proposal.model_dump(mode="json")))
+            _atomic_write(
+                self._proposal_path(proposal.id),
+                _yaml_dump(proposal.model_dump(mode="json")),
+                exclusive=True,
+            )
         except FileExistsError as e:
             raise ValueError(
                 f"proposal {proposal.id} already exists -- choose a different id"
@@ -889,9 +939,7 @@ class KBStore:
         path = self._proposal_path(proposal.id)
         if not path.exists():
             raise ArtifactNotFoundError(f"proposal {proposal.id}")
-        path.write_text(
-            _yaml_dump(proposal.model_dump(mode="json")), encoding="utf-8"
-        )
+        _atomic_write(path, _yaml_dump(proposal.model_dump(mode="json")))
         return proposal
 
     def get_proposal(self, proposal_id: str) -> Proposal:
@@ -924,11 +972,11 @@ class KBStore:
     def move_proposal_to_decided(self, proposal: Proposal) -> None:
         src = self._proposal_path(proposal.id)
         dst = self._decided_path(proposal.id)
-        dst.write_text(_yaml_dump(proposal.model_dump(mode="json")), encoding="utf-8")
-        # fsync the decision before removing the pending copy: a crash may leave
-        # both files (readers prefer decided) but must never leave neither, so
-        # the recorded decision has to be durable before proposed/ is unlinked.
-        _fsync_file(dst)
+        # _atomic_write fsyncs the decision before the rename that publishes it,
+        # so after it returns decided/ is durable. A crash may then leave both
+        # files (readers prefer decided) but must never leave neither, so the
+        # recorded decision has to be durable before proposed/ is unlinked.
+        _atomic_write(dst, _yaml_dump(proposal.model_dump(mode="json")))
         if src.exists():
             src.unlink()
 
