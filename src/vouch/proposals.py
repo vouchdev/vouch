@@ -6,6 +6,7 @@ proposal lifecycle, and writes audit events for every mutation.
 
 from __future__ import annotations
 
+import contextlib
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -160,6 +161,50 @@ def propose_claim(
         rationale=rationale, dry_run=dry_run,
     )
     return ProposeClaimResult(proposal=proposal, warnings=warnings)
+
+
+def propose_quoted_claim(
+    store: KBStore,
+    *,
+    text: str,
+    source_id: str,
+    quote: str,
+    proposed_by: str,
+    claim_type: str = "observation",
+    confidence: float = 0.7,
+    entities: list[str] | None = None,
+    tags: list[str] | None = None,
+    rationale: str | None = None,
+    slug_hint: str | None = None,
+    session_id: str | None = None,
+) -> ProposeClaimResult | None:
+    """File a claim backed by a byte-offset receipt into ``source_id``, or drop.
+
+    Locates ``quote`` verbatim in the source's raw bytes; if it is not there,
+    returns None and files nothing — the mechanical "drops any claim it cannot
+    quote." Otherwise stores a receipt-backed Evidence (idempotently, keyed on
+    the span) and files a normal claim proposal citing it, so the write still
+    goes through the review gate but now carries a receipt the gate can verify
+    by string comparison.
+    """
+    from . import receipts
+
+    source_bytes = store.read_source_content(source_id)
+    evidence = receipts.receipt_for_quote(
+        source_id=source_id, source_bytes=source_bytes, quote=quote,
+    )
+    if evidence is None:
+        return None
+    # deterministic id -> if this span is already stored, cite the existing
+    # Evidence rather than duplicating it.
+    with contextlib.suppress(ValueError):
+        store.put_evidence(evidence)
+    return propose_claim(
+        store, text=text, evidence=[evidence.id], proposed_by=proposed_by,
+        claim_type=claim_type, confidence=confidence, entities=entities,
+        tags=tags, rationale=rationale, slug_hint=slug_hint,
+        session_id=session_id,
+    )
 
 
 def propose_page(

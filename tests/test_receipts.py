@@ -203,3 +203,15 @@ def test_receipt_for_quote_drops_unquotable_claim() -> None:
         source_id="s1", source_bytes=SOURCE, quote="not in here", evidence_id="e9"
     )
     assert ev is None
+
+
+def test_receipt_for_quote_mints_deterministic_id_by_default() -> None:
+    # no evidence_id given -> a content-addressed id, so re-filing the same
+    # span in the same source is idempotent (same id), and distinct spans get
+    # distinct ids.
+    a = receipt_for_quote(source_id="s1", source_bytes=SOURCE, quote="lazy dog")
+    b = receipt_for_quote(source_id="s1", source_bytes=SOURCE, quote="lazy dog")
+    c = receipt_for_quote(source_id="s1", source_bytes=SOURCE, quote="quick brown")
+    assert a is not None and b is not None and c is not None
+    assert a.id == b.id
+    assert c.id != a.id

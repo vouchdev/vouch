@@ -21,6 +21,7 @@ hashed and persisted, so it must be expressed in that artifact's own units.
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING
@@ -92,26 +93,38 @@ def locate_span(source_bytes: bytes, quote: str) -> tuple[int, int] | None:
     return (idx, idx + len(needle))
 
 
+def _span_evidence_id(source_id: str, start: int, end: int) -> str:
+    """A content-addressed id for a source span, so intake is idempotent.
+
+    The same span in the same source always yields the same id — re-filing it
+    reuses the existing Evidence rather than duplicating it — while distinct
+    spans get distinct ids.
+    """
+    digest = hashlib.sha256(f"{source_id}:{start}:{end}".encode()).hexdigest()
+    return f"ev-{digest[:16]}"
+
+
 def receipt_for_quote(
     *,
     source_id: str,
     source_bytes: bytes,
     quote: str,
-    evidence_id: str,
+    evidence_id: str | None = None,
 ) -> Evidence | None:
     """Build an ``Evidence`` carrying a verifying receipt, or None to drop.
 
     Locates ``quote`` in ``source_bytes`` and, if found, returns an Evidence
     whose byte-offset receipt is guaranteed to verify against those same bytes.
     Returns None when the quote is not present verbatim — the mechanical form
-    of "drops any claim it cannot quote."
+    of "drops any claim it cannot quote." When ``evidence_id`` is omitted, a
+    content-addressed id derived from the span is minted.
     """
     span = locate_span(source_bytes, quote)
     if span is None:
         return None
     start, end = span
     return Evidence(
-        id=evidence_id,
+        id=evidence_id or _span_evidence_id(source_id, start, end),
         source_id=source_id,
         locator=f"b{start}-{end}",
         quote=quote,
