@@ -2,7 +2,7 @@
 Claude session's context (memvid-style), via the SessionStart hook.
 
 Unlike ``kb.context`` (task-scoped retrieval), this emits EVERY live approved
-claim as a compact ``[id] text`` line plus every approved page title, so a
+claim as a compact ``[id] text`` line plus every live page title, so a
 fresh session is aware of the whole reviewed KB from the first turn. Page
 bodies are fetched on demand with ``kb_read_page`` / ``kb_search``.
 
@@ -17,6 +17,7 @@ from dataclasses import dataclass
 import yaml
 
 from .context import _RETRACTED_CLAIM_STATUSES
+from .models import PageStatus
 from .storage import KBStore
 
 DEFAULT_ENABLED = True
@@ -58,7 +59,11 @@ def build_digest(store: KBStore, *, max_chars: int = DEFAULT_MAX_CHARS) -> str:
         c for c in store.list_claims()
         if c.status not in _RETRACTED_CLAIM_STATUSES
     ]
-    pages = store.list_pages()
+    # archived pages are retracted knowledge, same as the archived claims
+    # filtered above — leaking a title back into every session's opening
+    # context would make the archive control decorative. DRAFT and STALE
+    # stay: unpolished or aging is still live.
+    pages = [p for p in store.list_pages() if p.status != PageStatus.ARCHIVED]
     if not claims and not pages:
         return ""
 

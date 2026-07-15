@@ -52,6 +52,11 @@ All notable changes to vouch are documented here. Format follows
 - demo image build: `hatch_build.py` (the build hook pyproject.toml
   declares for console bundling) is copied into the docker build context;
   the image had been unbuildable since the hook landed (#474).
+- `vouch recall` excludes archived pages from the session-start digest.
+  claims were filtered by status but pages were not, so an archived page's
+  title kept reaching every new session's opening context while its claims
+  stayed suppressed — the same asymmetry `synthesize` already avoids. draft
+  and stale pages are unaffected (#490).
 
 ## [1.3.0] — 2026-07-14
 
