@@ -71,6 +71,13 @@ def _store() -> KBStore:
 
 
 def _agent() -> str:
+    # An authenticated bearer subject (set by the /mcp transport) is the
+    # principal's real identity and must be what proposals/audit attribute to,
+    # so a token cannot be spoofed and distinct tokens are distinct actors.
+    # VOUCH_AGENT is only the tokenless (stdio/dev) fallback.
+    subject = trust_mod.current().auth_subject
+    if subject is not None:
+        return f"token:{subject}"
     return os.environ.get("VOUCH_AGENT", "unknown-agent")
 
 
@@ -1030,7 +1037,9 @@ def kb_doctor() -> dict[str, Any]:
 
 @mcp.tool()
 def kb_export(out_path: str) -> dict[str, Any]:
-    manifest = bundle.export(_store().kb_dir, dest=Path(out_path), actor=_agent())
+    s = _store()
+    dest = bundle.fenced_bundle_path(s, out_path)
+    manifest = bundle.export(s.kb_dir, dest=dest, actor=_agent())
     return {
         "bundle_id": manifest["bundle_id"],
         "files": len(manifest["files"]),
@@ -1040,7 +1049,8 @@ def kb_export(out_path: str) -> dict[str, Any]:
 
 @mcp.tool()
 def kb_export_check(bundle_path: str) -> dict[str, Any]:
-    r = bundle.export_check(Path(bundle_path))
+    s = _store()
+    r = bundle.export_check(bundle.fenced_bundle_path(s, bundle_path))
     return {
         "ok": r.ok, "bundle_id": r.bundle_id,
         "files_checked": r.files_checked, "issues": r.issues,
@@ -1049,7 +1059,8 @@ def kb_export_check(bundle_path: str) -> dict[str, Any]:
 
 @mcp.tool()
 def kb_import_check(bundle_path: str) -> dict[str, Any]:
-    r = bundle.import_check(_store().kb_dir, Path(bundle_path))
+    s = _store()
+    r = bundle.import_check(s.kb_dir, bundle.fenced_bundle_path(s, bundle_path))
     return {
         "ok": r.ok, "bundle_id": r.bundle_id,
         "new_files": r.new_files, "conflicts": r.conflicts,
@@ -1057,17 +1068,10 @@ def kb_import_check(bundle_path: str) -> dict[str, Any]:
     }
 
 
-@mcp.tool()
-def kb_import_apply(bundle_path: str, on_conflict: str = "skip") -> dict[str, Any]:
-    try:
-        r = bundle.import_apply(
-            _store().kb_dir, Path(bundle_path),
-            on_conflict=on_conflict, actor=_agent(),
-        )
-    except (RuntimeError, ValueError) as e:
-        raise ValueError(str(e)) from e
-    health.rebuild_index(_store())
-    return r
+# kb_import_apply is intentionally not exposed as an MCP tool: applying a bundle
+# writes members (claims/pages/decided) straight to disk, bypassing
+# proposals.approve(). It remains the human-only `vouch import apply` CLI command
+# until gated import lands (roadmap 8.2). kb_import_check (read-only) stays.
 
 
 @mcp.tool()
@@ -1119,7 +1123,6 @@ def kb_dedup_scan(
 @mcp.tool()
 def kb_eval_embeddings(*, queries_path: str, k: int = 10) -> dict[str, Any]:
     """Run retrieval eval over a JSONL queries file."""
-    from pathlib import Path
 
     from .embeddings.scorer import evaluate
     store = _store()

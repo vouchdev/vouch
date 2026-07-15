@@ -84,6 +84,14 @@ def _store() -> KBStore:
 
 
 def _agent() -> str:
+    # An authenticated bearer subject is the principal's real identity; it must
+    # win over the client-supplied X-Vouch-Agent header (and VOUCH_AGENT env),
+    # or one token could propose as one actor and approve as another to defeat
+    # the self-approval gate. Only fall back to the header/env when the request
+    # is unauthenticated (tokenless loopback/dev), which is trusted by design.
+    subject = trust_mod.current().auth_subject
+    if subject is not None:
+        return f"token:{subject}"
     return _actor.get() or os.environ.get("VOUCH_AGENT", "unknown-agent")
 
 
@@ -706,32 +714,33 @@ def _h_doctor(_: dict) -> dict:
 
 
 def _h_export(p: dict) -> dict:
-    manifest = bundle.export(_store().kb_dir, dest=Path(p["out_path"]),
-                             actor=_agent())
+    s = _store()
+    dest = bundle.fenced_bundle_path(s, p["out_path"])
+    manifest = bundle.export(s.kb_dir, dest=dest, actor=_agent())
     return {"bundle_id": manifest["bundle_id"],
             "files": len(manifest["files"]), "out": p["out_path"]}
 
 
 def _h_export_check(p: dict) -> dict:
-    r = bundle.export_check(Path(p["bundle_path"]))
+    s = _store()
+    r = bundle.export_check(bundle.fenced_bundle_path(s, p["bundle_path"]))
     return {"ok": r.ok, "bundle_id": r.bundle_id,
             "files_checked": r.files_checked, "issues": r.issues}
 
 
 def _h_import_check(p: dict) -> dict:
-    r = bundle.import_check(_store().kb_dir, Path(p["bundle_path"]))
+    s = _store()
+    r = bundle.import_check(s.kb_dir, bundle.fenced_bundle_path(s, p["bundle_path"]))
     return {"ok": r.ok, "bundle_id": r.bundle_id,
             "new_files": r.new_files, "conflicts": r.conflicts,
             "identical_files": len(r.identical), "issues": r.issues}
 
 
-def _h_import_apply(p: dict) -> dict:
-    r = bundle.import_apply(
-        _store().kb_dir, Path(p["bundle_path"]),
-        on_conflict=p.get("on_conflict", "skip"), actor=_agent(),
-    )
-    health.rebuild_index(_store())
-    return r
+# kb.import_apply is deliberately NOT an agent-facing handler: it writes bundle
+# members (claims/pages/decided) straight to disk, a parallel path past
+# proposals.approve(). It survives only as the human `vouch import apply` CLI
+# command until gated import lands (roadmap 8.2). kb.import_check (read-only)
+# stays available to agents.
 
 
 def _h_audit(p: dict) -> dict:
@@ -765,7 +774,6 @@ def _h_dedup_scan(p: dict) -> dict:
 
 
 def _h_eval_embeddings(p: dict) -> dict:
-    from pathlib import Path
 
     from .embeddings.scorer import evaluate
     return evaluate(
@@ -940,7 +948,6 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.export": _h_export,
     "kb.export_check": _h_export_check,
     "kb.import_check": _h_import_check,
-    "kb.import_apply": _h_import_apply,
     "kb.audit": _h_audit,
     "kb.reindex_embeddings": _h_reindex_embeddings,
     "kb.dedup_scan": _h_dedup_scan,

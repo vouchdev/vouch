@@ -262,6 +262,23 @@ class KBStore:
         with os.fdopen(fd, "rb") as f:
             return resolved, f.read()
 
+    def resolve_under_root(self, path: str | Path) -> Path:
+        """Resolve ``path`` and confirm it is inside the project root, or raise.
+
+        The containment half of :meth:`read_under_root`, without opening — for
+        a client-supplied path that will be written (a bundle export
+        destination) or read as a whole file. Pre-existing symlinks are
+        resolved first, then the result is checked for containment; a read that
+        needs the stronger O_NOFOLLOW / regular-file guarantees should use
+        :meth:`read_under_root`.
+        """
+        resolved = Path(path).resolve()
+        if not resolved.is_relative_to(self.root):
+            raise ValueError(
+                f"path must be inside project root ({self.root}): {resolved}"
+            )
+        return resolved
+
     # --- bootstrap ---------------------------------------------------------
 
     @classmethod

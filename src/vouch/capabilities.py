@@ -82,7 +82,8 @@ METHODS = [
     "kb.export",
     "kb.export_check",
     "kb.import_check",
-    "kb.import_apply",
+    # kb.import_apply intentionally absent — it writes past the review gate, so
+    # it is a human-only CLI command, not an agent method (roadmap step 0.2).
     "kb.audit",
     "kb.reindex_embeddings",
     "kb.dedup_scan",

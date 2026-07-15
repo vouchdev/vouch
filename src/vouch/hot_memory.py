@@ -184,7 +184,6 @@ HOT_MEMORY_EXCLUDED: dict[str, str] = {
     "kb.export": "bundle write — not a read response",
     "kb.export_check": "preflight — no claim sidebar needed",
     "kb.import_check": "preflight — no claim sidebar needed",
-    "kb.import_apply": "mutation — applies bundle",
     "kb.audit": "event log — different shape from claim reads",
     "kb.reindex_embeddings": "maintenance — mutates derived index",
     "kb.dedup_scan": "analysis — not a standard read",

@@ -2017,6 +2017,21 @@ def archive(claim_id: str) -> None:
     click.echo(f"archived {claim_id}")
 
 
+@cli.command()
+@click.argument("claim_id")
+def redact(claim_id: str) -> None:
+    """Mask secrets in a claim's text and mark it REDACTED.
+
+    For a credential that reached a durable claim. Rewrites the current tree
+    only — the append-only audit log and git history are untouched, so a truly
+    leaked secret must still be rotated (see docs/security/git-retention.md).
+    """
+    store = _load_store()
+    with _cli_errors():
+        life.redact(store, claim_id=claim_id, actor=_whoami())
+    click.echo(f"redacted {claim_id}")
+
+
 @cli.command(name="claims-clear")
 @click.option("--auto-only", is_flag=True, default=True, show_default=True,
               help="Clear only auto-approved claims (default: yes)")

@@ -53,6 +53,22 @@ def test_observe_appends_line(store: KBStore) -> None:
     assert "Edited a.py" in lines[0]
 
 
+def test_observe_masks_secrets_before_buffering(store: KBStore) -> None:
+    """A pasted credential must never reach the buffer — once there it rolls
+    into a committed session page and the append-only audit log."""
+    wrote = cap.observe(
+        store, "s1", tool="Bash",
+        summary="Ran: export AWS_KEY=AKIAIOSFODNN7EXAMPLE",
+        cmd="export AWS_KEY=AKIAIOSFODNN7EXAMPLE",
+        now=100.0,
+    )
+    assert wrote is True
+    obs = cap._read_observations(cap.buffer_path(store, "s1"))
+    assert len(obs) == 1
+    assert "AKIAIOSFODNN7EXAMPLE" not in obs[0]["summary"]
+    assert "AKIAIOSFODNN7EXAMPLE" not in obs[0]["cmd"]
+
+
 def test_observe_dedups_within_window(store: KBStore) -> None:
     assert cap.observe(store, "s1", tool="Read", summary="Read a.py", now=100.0)
     # identical within 60s window -> skipped
