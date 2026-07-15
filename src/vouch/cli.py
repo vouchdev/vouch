@@ -66,6 +66,7 @@ from .proposals import (
     check_approvable,
     expire_pending,
     propose_claim,
+    propose_delete,
     propose_entity,
     propose_page,
     propose_relation,
@@ -1818,6 +1819,28 @@ def propose_relation_cmd(src: str, relation: str, target: str, confidence: float
     click.echo(pr.id)
 
 
+@cli.command(name="propose-delete")
+@click.argument("target_kind", type=click.Choice(["claim", "page", "entity", "relation"]))
+@click.argument("target_id")
+@click.option("--rationale", default=None)
+@click.option("--dry-run", is_flag=True, help="Validate without filing the proposal.")
+def propose_delete_cmd(
+    target_kind: str, target_id: str, rationale: str | None, dry_run: bool
+) -> None:
+    """File a review-gated request to hard-delete an artifact."""
+    store = _load_store()
+    with _cli_errors():
+        pr = propose_delete(
+            store,
+            target_kind=target_kind,
+            target_id=target_id,
+            rationale=rationale,
+            dry_run=dry_run,
+            proposed_by=_whoami(),
+        )
+    click.echo(pr.id)
+
+
 # --- sources --------------------------------------------------------------
 
 
@@ -1909,6 +1932,22 @@ def source_verify(fail_on_issue: bool) -> None:
         )
     if fail_on_issue and bad:
         sys.exit(1)
+
+
+@source.command("list")
+@click.option("--json", "as_json", is_flag=True)
+def source_list(as_json: bool) -> None:
+    """List all registered sources."""
+    store = _load_store()
+    sources = store.list_sources()
+    if as_json:
+        _emit_json([s.model_dump(mode="json") for s in sources])
+        return
+    if not sources:
+        click.echo("no sources found")
+        return
+    for src in sources:
+        click.echo(f"{src.id:66} {src.title or src.locator}")
 
 
 @cli.command(name="inbox")
@@ -2172,6 +2211,62 @@ def session_end_cmd(session_id: str, note: str | None) -> None:
     with _cli_errors():
         sess = sess_mod.session_end(store, session_id, note=note)
     _emit_json({"session": sess.id, "proposals": sess.proposal_ids})
+
+
+@session.command("list")
+@click.option("--json", "as_json", is_flag=True)
+def session_list_cmd(as_json: bool) -> None:
+    """List captured sessions for the review pipeline."""
+    from . import session_split
+
+    store = _load_store()
+    rows = session_split.build_session_rows(store)
+    if as_json:
+        _emit_json({"sessions": rows})
+        return
+    if not rows:
+        click.echo("no sessions found")
+        return
+    for row in rows:
+        click.echo(
+            f"{row.get('session_id') or '?':40} "
+            f"{row.get('stage') or '?':10} "
+            f"summarized={'yes' if row.get('summarized') else 'no'}"
+        )
+
+
+@session.command("transcript")
+@click.argument("session_id")
+@click.option(
+    "--agent",
+    type=click.Choice(["claude", "codex"]),
+    default=None,
+    help="Pin the transcript source instead of auto-detecting.",
+)
+def session_transcript_cmd(session_id: str, agent: str | None) -> None:
+    """Emit the normalized transcript of a captured session as JSON."""
+    from . import transcript
+
+    store = _load_store()
+    with _cli_errors():
+        _emit_json(transcript.load_transcript(store, session_id, agent=agent))
+
+
+@session.command("summarize")
+@click.argument("session_id")
+@click.option(
+    "--mode",
+    type=click.Choice(["auto", "split", "mechanical"]),
+    default="auto",
+    show_default=True,
+)
+def session_summarize_cmd(session_id: str, mode: str) -> None:
+    """Roll a session buffer into pending page proposals. Never approves."""
+    from . import session_split
+
+    store = _load_store()
+    with _cli_errors():
+        _emit_json(session_split.summarize(store, session_id, mode=mode))
 
 
 @cli.group()

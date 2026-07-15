@@ -105,6 +105,14 @@ def _starter_config() -> dict[str, Any]:
             # embedding | fts5 | substring. See context._retrieve.
             "backend": "hybrid",
             "default_limit": 10,
+            # blend a half-life decay into context-pack scores so fresher
+            # knowledge outranks equally-relevant stale knowledge. new KBs
+            # get it on; existing KBs keep byte-identical ordering until
+            # they add this key.
+            "recency": {
+                "enabled": True,
+                "half_life_days": 90,
+            },
         },
         "agents": {
             "recommended_loop": [

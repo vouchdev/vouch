@@ -593,12 +593,16 @@ def approve(
     proposal.decided_at = datetime.now(UTC)
     proposal.decided_by = approved_by
     proposal.decision_reason = reason
-    store.move_proposal_to_decided(proposal)
+    # Audit before the decided-move: the log is the authoritative history, so
+    # a crash between the two must leave a pending proposal WITH its decision
+    # event (recoverable; retry is blocked by _ensure_no_existing_artifact),
+    # never a decided proposal without one.
     audit.log_event(
         store.kb_dir, event=f"proposal.{proposal.kind.value}.approve",
         actor=approved_by, object_ids=[proposal.id, result.id],
         data={"reason": reason},
     )
+    store.move_proposal_to_decided(proposal)
     return result
 
 
@@ -620,12 +624,13 @@ def reject(
     proposal.decided_at = datetime.now(UTC)
     proposal.decided_by = rejected_by
     proposal.decision_reason = reason
-    store.move_proposal_to_decided(proposal)
+    # Audit before the decided-move — same ordering invariant as approve().
     audit.log_event(
         store.kb_dir, event=f"proposal.{proposal.kind.value}.reject",
         actor=rejected_by, object_ids=[proposal.id],
         data={"reason": reason},
     )
+    store.move_proposal_to_decided(proposal)
     return proposal
 
 
@@ -712,7 +717,7 @@ def expire_one(
     proposal.decided_at = datetime.now(UTC)
     proposal.decided_by = expired_by
     proposal.decision_reason = EXPIRE_REASON
-    store.move_proposal_to_decided(proposal)
+    # Audit before the decided-move — same ordering invariant as approve().
     audit.log_event(
         store.kb_dir,
         event="proposal.expire",
@@ -720,6 +725,7 @@ def expire_one(
         object_ids=[proposal.id],
         data={"kind": proposal.kind.value},
     )
+    store.move_proposal_to_decided(proposal)
     return proposal
 
 

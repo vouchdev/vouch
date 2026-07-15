@@ -701,3 +701,65 @@ def test_cli_survives_non_utf8_stdio(tmp_path: Path, args: list[str], needle: st
     assert proc.returncode == 0, proc.stderr
     assert "UnicodeEncodeError" not in proc.stderr, proc.stderr
     assert needle in proc.stdout, proc.stdout
+
+
+# --- three-surface parity: cli mirrors added for kb.* methods ---------------
+
+
+def test_source_list_lists_registered_sources(store: KBStore) -> None:
+    src = store.put_source(b"listing test", title="doc one")
+    result = CliRunner().invoke(cli, ["source", "list"])
+    assert result.exit_code == 0, result.output
+    assert src.id in result.output
+    assert "doc one" in result.output
+
+
+def test_source_list_empty(store: KBStore) -> None:
+    result = CliRunner().invoke(cli, ["source", "list"])
+    assert result.exit_code == 0, result.output
+    assert "no sources found" in result.output
+
+
+def test_propose_delete_files_pending_proposal(store: KBStore) -> None:
+    src = store.put_source(b"evidence")
+    pr = propose_claim(
+        store, text="deletable fact", evidence=[src.id], proposed_by="agent"
+    )
+    from vouch.proposals import approve
+
+    claim = approve(store, pr.id, approved_by="human")
+    result = CliRunner().invoke(cli, ["propose-delete", "claim", claim.id])
+    assert result.exit_code == 0, result.output
+    proposal_id = result.output.strip().splitlines()[-1]
+    pending = {p.id: p for p in store.list_proposals(ProposalStatus.PENDING)}
+    assert proposal_id in pending
+    assert pending[proposal_id].kind == ProposalKind.DELETE
+
+
+def test_propose_delete_unknown_target_is_clean_error(store: KBStore) -> None:
+    result = CliRunner().invoke(cli, ["propose-delete", "claim", "no-such-claim"])
+    _assert_clean_error(result, "no-such-claim")
+
+
+def test_session_list_empty(store: KBStore) -> None:
+    result = CliRunner().invoke(cli, ["session", "list"])
+    assert result.exit_code == 0, result.output
+    assert "no sessions found" in result.output
+
+
+def test_session_transcript_missing_session_degrades_to_json(store: KBStore) -> None:
+    # mirrors the jsonl surface: an unknown session returns the degraded
+    # transcript shape (observation fallback), never a traceback.
+    result = CliRunner().invoke(cli, ["session", "transcript", "no-such-session"])
+    assert result.exit_code == 0, result.output
+    assert "Traceback" not in result.output, result.output
+    assert isinstance(json.loads(result.output), dict)
+
+
+def test_session_summarize_missing_session_degrades_to_json(store: KBStore) -> None:
+    # mirrors the jsonl surface: summarizing an absent buffer reports a
+    # no-op result rather than erroring.
+    result = CliRunner().invoke(cli, ["session", "summarize", "no-such-session"])
+    assert result.exit_code == 0, result.output
+    assert "Traceback" not in result.output, result.output
+    assert isinstance(json.loads(result.output), dict)

@@ -35,7 +35,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # vouch from this checkout — the [web] extra brings the HTTP transport in.
-COPY pyproject.toml README.md /src/
+# hatch_build.py is the build hook pyproject.toml points at; without it the
+# sdist build backend fails before pip ever resolves dependencies.
+COPY pyproject.toml README.md hatch_build.py /src/
 COPY src /src/src
 COPY adapters /src/adapters
 RUN python3 -m venv /opt/venv && /opt/venv/bin/pip install --no-cache-dir "/src[web]"
