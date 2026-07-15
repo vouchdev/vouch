@@ -509,7 +509,23 @@ def approve(
 
     Raises ProposalError if the proposal is not pending or if
     approved_by matches proposed_by (forbidden_self_approval).
+
+    The whole read-check-write runs under the per-KB decision lock so a
+    concurrent reject or approve of the same proposal cannot both proceed.
     """
+    with audit.decision_lock(store.kb_dir):
+        return _approve_locked(
+            store, proposal_id, approved_by=approved_by, reason=reason
+        )
+
+
+def _approve_locked(
+    store: KBStore,
+    proposal_id: str,
+    *,
+    approved_by: str,
+    reason: str | None = None,
+) -> Claim | Page | Entity | Relation:
     proposal = store.get_proposal(proposal_id)
     block = _approval_block_reason(store, proposal, approved_by)
     if block:
@@ -616,22 +632,25 @@ def reject(
 ) -> Proposal:
     if not reason.strip():
         raise ProposalError("rejection must include a reason (future agent context)")
-    proposal = store.get_proposal(proposal_id)
-    if proposal.status != ProposalStatus.PENDING:
-        raise ProposalError(
-            f"proposal {proposal_id} is {proposal.status.value}, not pending"
+    # Serialise with approve()/expire_one() so a concurrent approve of this same
+    # proposal cannot land a durable claim under this REJECTED record.
+    with audit.decision_lock(store.kb_dir):
+        proposal = store.get_proposal(proposal_id)
+        if proposal.status != ProposalStatus.PENDING:
+            raise ProposalError(
+                f"proposal {proposal_id} is {proposal.status.value}, not pending"
+            )
+        proposal.status = ProposalStatus.REJECTED
+        proposal.decided_at = datetime.now(UTC)
+        proposal.decided_by = rejected_by
+        proposal.decision_reason = reason
+        store.move_proposal_to_decided(proposal)
+        audit.log_event(
+            store.kb_dir, event=f"proposal.{proposal.kind.value}.reject",
+            actor=rejected_by, object_ids=[proposal.id],
+            data={"reason": reason},
         )
-    proposal.status = ProposalStatus.REJECTED
-    proposal.decided_at = datetime.now(UTC)
-    proposal.decided_by = rejected_by
-    proposal.decision_reason = reason
-    store.move_proposal_to_decided(proposal)
-    audit.log_event(
-        store.kb_dir, event=f"proposal.{proposal.kind.value}.reject",
-        actor=rejected_by, object_ids=[proposal.id],
-        data={"reason": reason},
-    )
-    return proposal
+        return proposal
 
 
 def reject_auto_extracted(
@@ -703,29 +722,32 @@ def expire_one(
     expired_by: str = EXPIRE_ACTOR,
 ) -> Proposal:
     """Expire a single pending proposal (terminal reject + audit)."""
-    proposal = store.get_proposal(proposal_id)
-    if proposal.status != ProposalStatus.PENDING:
-        if (
-            proposal.status == ProposalStatus.REJECTED
-            and proposal.decision_reason == EXPIRE_REASON
-        ):
-            return proposal
-        raise ProposalError(
-            f"proposal {proposal_id} is {proposal.status.value}, not pending"
+    # Same decision lock as approve()/reject(): expiry is a reject, so it must
+    # not race a concurrent approve of the same proposal.
+    with audit.decision_lock(store.kb_dir):
+        proposal = store.get_proposal(proposal_id)
+        if proposal.status != ProposalStatus.PENDING:
+            if (
+                proposal.status == ProposalStatus.REJECTED
+                and proposal.decision_reason == EXPIRE_REASON
+            ):
+                return proposal
+            raise ProposalError(
+                f"proposal {proposal_id} is {proposal.status.value}, not pending"
+            )
+        proposal.status = ProposalStatus.REJECTED
+        proposal.decided_at = datetime.now(UTC)
+        proposal.decided_by = expired_by
+        proposal.decision_reason = EXPIRE_REASON
+        store.move_proposal_to_decided(proposal)
+        audit.log_event(
+            store.kb_dir,
+            event="proposal.expire",
+            actor=expired_by,
+            object_ids=[proposal.id],
+            data={"kind": proposal.kind.value},
         )
-    proposal.status = ProposalStatus.REJECTED
-    proposal.decided_at = datetime.now(UTC)
-    proposal.decided_by = expired_by
-    proposal.decision_reason = EXPIRE_REASON
-    store.move_proposal_to_decided(proposal)
-    audit.log_event(
-        store.kb_dir,
-        event="proposal.expire",
-        actor=expired_by,
-        object_ids=[proposal.id],
-        data={"kind": proposal.kind.value},
-    )
-    return proposal
+        return proposal
 
 
 def expire_pending(

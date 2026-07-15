@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 
 AUDIT_FILENAME = "audit.log.jsonl"
 AUDIT_LOCKFILE = AUDIT_FILENAME + ".lock"
+DECISION_LOCKFILE = "decisions.lock"
 GENESIS_HASH = "0" * 64
 
 
@@ -37,16 +38,13 @@ def _audit_lockfile(kb_dir: Path) -> Path:
 
 
 @contextlib.contextmanager
-def _audit_lock(kb_dir: Path) -> Iterator[None]:
-    """Hold an exclusive cross-process lock for the duration of a log_event.
+def _flock(lockfile: Path) -> Iterator[None]:
+    """Hold an exclusive cross-process lock on ``lockfile`` for the block.
 
-    Serialises the read-then-append sequence in `log_event` so two concurrent
-    writers cannot both observe the same `prev_hash` and fork the chain.
-    Lock is held on a sibling `audit.log.jsonl.lock` file so the audit log
-    itself is never opened in a mode that could truncate it. Blocks until
-    acquired and is always released, including on exceptions.
+    Blocks until acquired and is always released, including on exceptions.
+    POSIX uses flock(2); Windows uses msvcrt byte-range locking on the same
+    descriptor.
     """
-    lockfile = _audit_lockfile(kb_dir)
     lockfile.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(lockfile, os.O_RDWR | os.O_CREAT, 0o644)
     try:
@@ -69,6 +67,34 @@ def _audit_lock(kb_dir: Path) -> Iterator[None]:
                     msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
     finally:
         os.close(fd)
+
+
+@contextlib.contextmanager
+def _audit_lock(kb_dir: Path) -> Iterator[None]:
+    """Hold an exclusive cross-process lock for the duration of a log_event.
+
+    Serialises the read-then-append sequence in `log_event` so two concurrent
+    writers cannot both observe the same `prev_hash` and fork the chain.
+    Lock is held on a sibling `audit.log.jsonl.lock` file so the audit log
+    itself is never opened in a mode that could truncate it.
+    """
+    with _flock(_audit_lockfile(kb_dir)):
+        yield
+
+
+@contextlib.contextmanager
+def decision_lock(kb_dir: Path) -> Iterator[None]:
+    """Serialise the review-gate decisions (approve/reject/expire) on a KB.
+
+    The read-check-write in approve()/reject()/expire_one() is not atomic, so
+    two processes — console, mcp, cli — can both read a proposal as pending and
+    both decide it, leaving a durable claim under a REJECTED record. Holding
+    this per-KB lock across a whole decision makes the second caller observe the
+    first's result. A distinct lockfile from the audit lock; log_event's
+    `_audit_lock` nests inside it in a consistent order, so there is no deadlock.
+    """
+    with _flock(kb_dir / DECISION_LOCKFILE):
+        yield
 
 
 def new_event_id() -> str:

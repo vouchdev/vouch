@@ -983,3 +983,47 @@ def test_list_proposals_dedups_preferring_decided(store: KBStore) -> None:
     matching = [p for p in store.list_proposals() if p.id == pid]
     assert len(matching) == 1
     assert matching[0].status is ProposalStatus.APPROVED
+
+
+def test_approve_serializes_on_the_decision_lock(
+    store: KBStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """approve() must hold the per-KB decision lock across its read-check-write,
+    so a concurrent approve/reject on the same proposal cannot both proceed and
+    leave a durable claim under a REJECTED record."""
+    import threading
+
+    from vouch import audit
+    from vouch.proposals import approve, propose_claim
+
+    monkeypatch.chdir(store.root)
+    src = store.put_source(b"e")
+    pid = propose_claim(store, text="x", evidence=[src.id], proposed_by="a").id
+
+    lock_held = threading.Event()
+    release = threading.Event()
+    approve_done = threading.Event()
+
+    def hold_lock() -> None:
+        with audit.decision_lock(store.kb_dir):
+            lock_held.set()
+            release.wait(timeout=5)
+
+    def do_approve() -> None:
+        approve(store, pid, approved_by="b")
+        approve_done.set()
+
+    holder = threading.Thread(target=hold_lock)
+    holder.start()
+    assert lock_held.wait(timeout=5)
+
+    approver = threading.Thread(target=do_approve)
+    approver.start()
+    # while the decision lock is held elsewhere, approve must block
+    assert not approve_done.wait(timeout=0.5)
+    release.set()
+    assert approve_done.wait(timeout=5)
+
+    holder.join(timeout=5)
+    approver.join(timeout=5)
+    assert store.get_proposal(pid).status is ProposalStatus.APPROVED
