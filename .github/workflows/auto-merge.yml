@@ -1,0 +1,78 @@
+name: auto-merge
+
+# Auto-merge the safe, prose-only contributions (docs, examples, issue
+# templates) once CI is green — no maintainer needed. Anything that touches
+# code, tests, adapters, config, or the core paths in CODEOWNERS is left for a
+# human. This is the repo mirror of vouch's own gate: a change that carries no
+# risk is auto-approved; a change to the gate needs a person.
+#
+# SECURITY: pull_request_target runs with the base repo's token so it can enable
+# auto-merge on pull requests from forks. This job only READS the changed-file
+# list through the API — it never checks out or runs the PR's code — so
+# untrusted code never touches the privileged token. Do not add a checkout of
+# the PR head here.
+#
+# Enabling auto-merge does not bypass anything: GitHub still waits for the
+# required status checks and any required reviews configured in branch
+# protection before it actually merges. See GOVERNANCE.md → "Turning this on".
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.draft == false
+    steps:
+      - name: classify changed files and enable auto-merge if prose-only
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          # A path is auto-merge-safe only if it cannot change code execution,
+          # the gate, the schema, or the protocol. Keep in sync with
+          # GOVERNANCE.md → "Tier 2 — auto-merge safe".
+          is_safe() {
+            case "$1" in
+              # governance / security / contract docs are owner-reviewed
+              SECURITY.md|GOVERNANCE.md|CONTRIBUTING.md|CODEOWNERS) return 1 ;;
+              spec/*) return 1 ;;            # the protocol contract, not prose
+              docs/*) return 0 ;;            # curated prose docs
+              .github/ISSUE_TEMPLATE/*) return 0 ;;
+              */*.md) return 1 ;;            # nested .md (examples/, adapters/, …) — review it
+              *.md) return 0 ;;             # top-level prose (README, CHANGELOG, …)
+              *) return 1 ;;                # everything else — code, examples, tests, config
+            esac
+          }
+
+          files=$(gh pr view "$PR" --repo "$REPO" --json files --jq '.files[].path')
+          if [ -z "$files" ]; then
+            echo "no changed files reported; nothing to do"; exit 0
+          fi
+
+          all_safe=true
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            if is_safe "$f"; then
+              echo "safe   : $f"
+            else
+              echo "review : $f"
+              all_safe=false
+            fi
+          done <<< "$files"
+
+          if [ "$all_safe" = true ]; then
+            echo "::notice::prose-only PR — enabling auto-merge (still waits for required CI)."
+            gh pr merge "$PR" --repo "$REPO" --auto --squash \
+              || echo "::warning::could not enable auto-merge — enable 'Allow auto-merge' in repo Settings › General and add a required status check in branch protection."
+          else
+            echo "::notice::PR touches code/tests/adapters/core — leaving it for human review."
+          fi

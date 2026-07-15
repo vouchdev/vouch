@@ -10,10 +10,20 @@ usually save everyone time.
 
 Every PR gets an automated review pass (CodeRabbit; pushes to `test` also
 get a Copilot review) plus the CI gate — lint, mypy, the test matrix on
-Python 3.11/3.12/3.13, and an sdist + wheel build. A maintainer reads the
-review output and the diff, then merges or closes; there is no auto-merge.
-So get it green before you push: run the full local gate below, keep the
-branch conflict-free, and keep the PR to one concern.
+Python 3.11/3.12/3.13, and an sdist + wheel build. What happens next depends
+on *where* your PR lands, which [GOVERNANCE.md](GOVERNANCE.md) maps out in
+full:
+
+- **prose-only** (`docs/**`, `examples/**`, top-level markdown, issue
+  templates) merges itself once CI is green — no maintainer needed.
+- **contributor-friendly code** (adapters, retrieval/capture quality, the web
+  console, tests) is merged by any maintainer after a read of the diff.
+- **core** (the review gate, verification, the audit log, storage/schema, the
+  `kb.*` surface, packaging, CI) needs the code owner — see the area map before
+  you start, so you know which lane you are in.
+
+Either way: get it green before you push — run the full local gate below, keep
+the branch conflict-free, and keep the PR to one concern.
 
 Base feature branches on `test` and target `test` in the PR — it is the
 integration branch, and it reaches `main` via promotion PRs cut by the
