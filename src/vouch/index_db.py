@@ -14,7 +14,7 @@ from __future__ import annotations
 import datetime as _dt
 import json
 import sqlite3
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from contextlib import contextmanager, suppress
 from pathlib import Path
 
@@ -73,6 +73,13 @@ CREATE TABLE IF NOT EXISTS embedding_dupes (
     near_id         TEXT NOT NULL,
     cosine          REAL NOT NULL,
     detected_at     TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS transcript_grades (
+    session_id      TEXT PRIMARY KEY,
+    content_hash    TEXT NOT NULL,
+    grades          TEXT NOT NULL,
+    graded_at       TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS prov_edges (
@@ -327,6 +334,51 @@ def stats(kb_dir: Path) -> dict[str, int]:
             "pages": conn.execute("SELECT COUNT(*) FROM pages_fts").fetchone()[0],
             "entities": conn.execute("SELECT COUNT(*) FROM entities_fts").fetchone()[0],
         }
+
+
+# --- transcript grade cache -------------------------------------------------
+#
+# LLM review-relevance grades for a session transcript. Derived cache like
+# everything else in state.db: keyed by a hash of the raw session file so a
+# session that grew since grading re-grades, and losing the DB just means
+# paying for the grading again.
+
+
+def get_transcript_grades(
+    kb_dir: Path, session_id: str, content_hash: str
+) -> dict[str, object] | None:
+    """The cached grades payload for (session, exact file content), or None."""
+    with open_db(kb_dir) as conn:
+        row = conn.execute(
+            "SELECT content_hash, grades, graded_at FROM transcript_grades "
+            "WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()
+    if row is None or row[0] != content_hash:
+        return None
+    try:
+        grades = json.loads(row[1])
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(grades, dict):
+        return None
+    return {"grades": grades, "graded_at": row[2]}
+
+
+def put_transcript_grades(
+    kb_dir: Path,
+    session_id: str,
+    *,
+    content_hash: str,
+    grades: Mapping[str, object],
+    graded_at: str,
+) -> None:
+    with open_db(kb_dir) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO transcript_grades "
+            "(session_id, content_hash, grades, graded_at) VALUES (?, ?, ?, ?)",
+            (session_id, content_hash, json.dumps(grades), graded_at),
+        )
 
 
 # --- embeddings storage --------------------------------------------------

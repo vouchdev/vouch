@@ -401,7 +401,11 @@ def _h_session_transcript(p: dict) -> dict:
     agent = p.get("agent")
     if agent is not None and agent not in ("claude", "codex"):
         raise ValueError(f"unknown agent: {agent!r} (expected 'claude' or 'codex')")
-    return transcript.load_transcript(_store(), session_id, agent=agent)
+    return transcript.load_transcript(
+        _store(), session_id, agent=agent,
+        grade=bool(p.get("grade", False)),
+        regrade=bool(p.get("regrade", False)),
+    )
 
 
 def _h_propose_entity(p: dict) -> dict:

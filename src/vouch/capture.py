@@ -11,6 +11,7 @@ intact. See docs/superpowers/specs/2026-07-01-vouch-session-autocapture-design.m
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import time
 from dataclasses import dataclass
@@ -38,7 +39,15 @@ class CaptureConfig:
 
 
 def load_config(store: KBStore) -> CaptureConfig:
-    """Read ``capture:`` from config.yaml; fall back to defaults."""
+    """Read ``capture:`` from config.yaml; fall back to defaults.
+
+    ``VOUCH_CAPTURE_DISABLE=1`` overrides to disabled: vouch's own LLM
+    subprocesses (compile, session-split, transcript grading) set it so the
+    agent session they spawn does not capture itself back into the KB as a
+    fresh pending summary on every run.
+    """
+    if os.environ.get("VOUCH_CAPTURE_DISABLE") == "1":
+        return CaptureConfig(enabled=False)
     try:
         loaded = yaml.safe_load(store.config_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, yaml.YAMLError):

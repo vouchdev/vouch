@@ -2228,13 +2228,26 @@ def session_list_cmd(as_json: bool) -> None:
     default=None,
     help="Pin the transcript source instead of auto-detecting.",
 )
-def session_transcript_cmd(session_id: str, agent: str | None) -> None:
+@click.option(
+    "--grade", is_flag=True,
+    help="Annotate dialog with cached LLM review-relevance grades.",
+)
+@click.option(
+    "--regrade", is_flag=True,
+    help="Re-run the LLM grading even when a cached grade exists.",
+)
+def session_transcript_cmd(
+    session_id: str, agent: str | None, grade: bool, regrade: bool
+) -> None:
     """Emit the normalized transcript of a captured session as JSON."""
     from . import transcript
 
     store = _load_store()
     with _cli_errors():
-        _emit_json(transcript.load_transcript(store, session_id, agent=agent))
+        _emit_json(transcript.load_transcript(
+            store, session_id, agent=agent,
+            grade=grade or regrade, regrade=regrade,
+        ))
 
 
 @session.command("summarize")

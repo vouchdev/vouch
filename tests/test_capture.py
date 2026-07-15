@@ -723,3 +723,14 @@ def test_capture_e2e_sessionstart_cleanup_then_finalize(tmp_path):
 
     # Total proposals: old + new
     assert len(pending_after) >= 2
+
+
+def test_observe_noop_under_capture_disable_env(
+    store: KBStore, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """VOUCH_CAPTURE_DISABLE=1 (set by vouch-spawned llm subprocesses) wins
+    over an enabled capture config — the drafting session must not capture
+    itself back into the KB."""
+    monkeypatch.setenv("VOUCH_CAPTURE_DISABLE", "1")
+    assert cap.observe(store, "s1", tool="Bash", summary="Ran: x") is False
+    assert not cap.buffer_path(store, "s1").exists()
