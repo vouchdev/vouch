@@ -13,6 +13,7 @@ explicit notice — never silently dropped.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 import yaml
 
@@ -32,6 +33,15 @@ class RecallConfig:
     max_chars: int = DEFAULT_MAX_CHARS
 
 
+def _coerce(value: Any, default: Any, cast: Any) -> Any:
+    # A config typo (max_chars: a lot) must degrade to the default, not
+    # take down the SessionStart hook that reads this config every run.
+    try:
+        return cast(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def load_config(store: KBStore) -> RecallConfig:
     """Read ``recall:`` from config.yaml; fall back to defaults."""
     try:
@@ -45,7 +55,7 @@ def load_config(store: KBStore) -> RecallConfig:
         return RecallConfig()
     return RecallConfig(
         enabled=bool(raw.get("enabled", DEFAULT_ENABLED)),
-        max_chars=int(raw.get("max_chars", DEFAULT_MAX_CHARS)),
+        max_chars=_coerce(raw.get("max_chars", DEFAULT_MAX_CHARS), DEFAULT_MAX_CHARS, int),
     )
 
 

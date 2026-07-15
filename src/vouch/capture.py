@@ -38,6 +38,15 @@ class CaptureConfig:
     dedup_window_seconds: float = DEFAULT_DEDUP_WINDOW_SECONDS
 
 
+def _coerce(value: Any, default: Any, cast: Any) -> Any:
+    # A config typo (min_observations: a few) must degrade to the default,
+    # not take down every hook-driven observe()/finalize() call.
+    try:
+        return cast(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def load_config(store: KBStore) -> CaptureConfig:
     """Read ``capture:`` from config.yaml; fall back to defaults."""
     try:
@@ -51,9 +60,13 @@ def load_config(store: KBStore) -> CaptureConfig:
         return CaptureConfig()
     return CaptureConfig(
         enabled=bool(raw.get("enabled", DEFAULT_ENABLED)),
-        min_observations=int(raw.get("min_observations", DEFAULT_MIN_OBSERVATIONS)),
-        dedup_window_seconds=float(
-            raw.get("dedup_window_seconds", DEFAULT_DEDUP_WINDOW_SECONDS)
+        min_observations=_coerce(
+            raw.get("min_observations", DEFAULT_MIN_OBSERVATIONS),
+            DEFAULT_MIN_OBSERVATIONS, int,
+        ),
+        dedup_window_seconds=_coerce(
+            raw.get("dedup_window_seconds", DEFAULT_DEDUP_WINDOW_SECONDS),
+            DEFAULT_DEDUP_WINDOW_SECONDS, float,
         ),
     )
 

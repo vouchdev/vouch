@@ -132,6 +132,19 @@ def test_load_config_capture_not_a_mapping(store: KBStore) -> None:
     assert cap.load_config(store).enabled is True
 
 
+def test_load_config_bad_numeric_values_fall_back_to_defaults(store: KBStore) -> None:
+    # a config typo must degrade, not take down every hook-driven
+    # observe()/finalize() call that reads this config.
+    store.config_path.write_text(
+        "capture:\n  enabled: true\n"
+        "  min_observations: a few\n  dedup_window_seconds: soon\n"
+    )
+    cfg = cap.load_config(store)
+    assert cfg.enabled is True
+    assert cfg.min_observations == cap.DEFAULT_MIN_OBSERVATIONS
+    assert cfg.dedup_window_seconds == cap.DEFAULT_DEDUP_WINDOW_SECONDS
+
+
 def test_read_observations_skips_blank_and_bad_lines(store: KBStore) -> None:
     p = cap.buffer_path(store, "s1")
     p.parent.mkdir(parents=True, exist_ok=True)
