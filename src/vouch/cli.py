@@ -1369,6 +1369,54 @@ def propose_claim_cmd(
         _echo(_format_similarity_warning(w), err=True)
 
 
+@cli.command(name="ingest")
+@click.argument(
+    "path", type=click.Path(exists=True, dir_okay=False, path_type=Path)
+)
+@click.option(
+    "--title", default=None,
+    help="Human label for the source (default: the filename).",
+)
+@click.option(
+    "--no-approve", is_flag=True,
+    help="File the claims but never auto-approve, even if the receipt gate is on.",
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit source id + counts as json.")
+def ingest_cmd(
+    path: Path, title: str | None, no_approve: bool, as_json: bool
+) -> None:
+    """Ingest a file as a source and extract receipt-backed claims from it.
+
+    With review.auto_approve_on_receipt on, every claim whose quote verifies
+    against the source is approved with no human -- "run vouch on a doc and it
+    just captures the knowledge." Without the gate the claims are filed pending
+    for review; a claim that cannot quote its source is never rubber-stamped.
+    """
+    from . import extract as extract_mod
+
+    store = _load_store()
+    with _cli_errors():
+        source, approved = extract_mod.ingest_source(
+            store, path.read_bytes(),
+            proposed_by=_whoami(),
+            title=title or path.name,
+            auto_approve=not no_approve,
+        )
+    pending = sum(
+        1 for p in store.list_proposals(ProposalStatus.PENDING)
+        if p.kind == ProposalKind.CLAIM
+    )
+    if as_json:
+        _emit_json(
+            {"source": source.id, "approved": len(approved), "pending_claims": pending}
+        )
+    else:
+        click.echo(
+            f"ingested {source.id[:12]}… — {len(approved)} claim(s) "
+            f"auto-approved, {pending} pending review"
+        )
+
+
 @cli.command(name="propose-page")
 @click.option("--title", required=True)
 @click.option("--body", default="", help="Page body. Use `-` to read from stdin.")
