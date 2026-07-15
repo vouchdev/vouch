@@ -413,6 +413,7 @@ def test_adapter_settings_wires_capture_hooks() -> None:
     assert any("capture observe" in c for c in commands("PostToolUse"))
     assert any("capture finalize" in c for c in commands("SessionEnd"))
     assert any("capture banner" in c for c in commands("SessionStart"))
+    assert any("capture finalize-all" in c for c in commands("SessionStart"))
 
 
 def test_capture_finalize_all_cmd_with_old_buffers(tmp_path: Path, monkeypatch) -> None:
@@ -475,6 +476,70 @@ def test_capture_finalize_all_cmd_reads_session_from_env(tmp_path: Path, monkeyp
     assert result.exit_code == 0
     output = _json.loads(result.output)
     assert current_sess in output["skipped_current"]
+
+
+def test_capture_finalize_all_cmd_reads_session_from_stdin(tmp_path: Path) -> None:
+    """The shipped SessionStart hook passes no --session-id, so the current
+    session id has to come off the hook payload on stdin."""
+    import os
+    import time as time_mod
+
+    store = _make_store(tmp_path)
+    current_sess = "current-from-stdin"
+    old_sess = "old-session"
+
+    old_path = cap.buffer_path(store, old_sess)
+    old_path.parent.mkdir(parents=True, exist_ok=True)
+    old_path.write_text(
+        '{"ts": 1.0, "tool": "Read", "summary": "test1"}\n'
+        '{"ts": 2.0, "tool": "Read", "summary": "test2"}\n'
+        '{"ts": 3.0, "tool": "Read", "summary": "test3"}\n'
+    )
+    old_mtime = time_mod.time() - 7200
+    os.utime(old_path, (old_mtime, old_mtime))
+
+    curr_path = cap.buffer_path(store, current_sess)
+    curr_path.write_text('{"ts": 1.0, "tool": "Read", "summary": "test"}\n')
+
+    result = CliRunner().invoke(
+        cli, ["capture", "finalize-all"],
+        input=_json.dumps({"session_id": current_sess, "cwd": str(tmp_path)}),
+        env={"VOUCH_KB_PATH": str(store.kb_dir)},
+    )
+
+    assert result.exit_code == 0
+    output = _json.loads(result.output)
+    assert old_sess in output["finalized"]
+    assert current_sess in output["skipped_current"]
+
+
+def test_capture_finalize_all_cmd_survives_malformed_stdin(tmp_path: Path) -> None:
+    """A hook must never fail the host turn on an unparseable payload."""
+    store = _make_store(tmp_path)
+    result = CliRunner().invoke(
+        cli, ["capture", "finalize-all"],
+        input="not json at all",
+        env={"VOUCH_KB_PATH": str(store.kb_dir)},
+    )
+    assert result.exit_code == 0
+    assert _json.loads(result.output)["finalized"] == []
+
+
+def test_capture_finalize_all_cmd_flag_beats_stdin(tmp_path: Path) -> None:
+    """An explicit --session-id wins over the stdin payload."""
+    store = _make_store(tmp_path)
+    curr_path = cap.buffer_path(store, "from-flag")
+    curr_path.parent.mkdir(parents=True, exist_ok=True)
+    curr_path.write_text('{"ts": 1.0, "tool": "Read", "summary": "test"}\n')
+
+    result = CliRunner().invoke(
+        cli, ["capture", "finalize-all", "--session-id", "from-flag"],
+        input=_json.dumps({"session_id": "from-stdin"}),
+        env={"VOUCH_KB_PATH": str(store.kb_dir)},
+    )
+
+    assert result.exit_code == 0
+    assert "from-flag" in _json.loads(result.output)["skipped_current"]
 
 
 def test_capture_finalize_all_cmd_silent_on_no_kb(tmp_path: Path, monkeypatch) -> None:

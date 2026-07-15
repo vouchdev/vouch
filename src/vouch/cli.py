@@ -2428,11 +2428,34 @@ def capture_answer_cmd(session_id: str | None) -> None:
 
 
 @capture.command("finalize-all")
-@click.option("--session-id", default=None, help="Current session id (else env VOUCH_SESSION_ID).")
+@click.option(
+    "--session-id", default=None,
+    help="Current session id (else stdin payload, else env VOUCH_SESSION_ID).",
+)
 @click.option("--max-age-seconds", type=float, default=3600.0, help="Max age in seconds.")
 def capture_finalize_all_cmd(session_id: str | None, max_age_seconds: float) -> None:
-    """Finalize all capture buffers except current session (SessionStart cleanup)."""
-    sid = session_id or os.environ.get("VOUCH_SESSION_ID") or ""
+    """Finalize all buffers except current session (SessionStart hook payload on stdin)."""
+    # the shipped SessionStart hook passes no --session-id and nothing sets
+    # VOUCH_SESSION_ID, so the current session id has to come off the hook
+    # payload on stdin — the same wire `capture finalize` reads at SessionEnd.
+    # without it sid is always "" and the sweep no-ops, leaving the buffers of
+    # sessions that died without SessionEnd on disk forever.
+    payload: dict[str, Any] = {}
+    if not sys.stdin.isatty():
+        raw = sys.stdin.read()
+        if raw.strip():
+            try:
+                loaded = json.loads(raw)
+                if isinstance(loaded, dict):
+                    payload = loaded
+            except json.JSONDecodeError:
+                payload = {}
+    sid = (
+        session_id
+        or str(payload.get("session_id") or "")
+        or os.environ.get("VOUCH_SESSION_ID")
+        or ""
+    )
     if not sid:
         # No session ID provided; silently succeed
         _emit_json({"finalized": [], "skipped_recent": [], "skipped_current": []})

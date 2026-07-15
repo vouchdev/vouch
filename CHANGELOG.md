@@ -52,6 +52,12 @@ All notable changes to vouch are documented here. Format follows
 - demo image build: `hatch_build.py` (the build hook pyproject.toml
   declares for console bundling) is copied into the docker build context;
   the image had been unbuildable since the hook landed (#474).
+- `vouch capture finalize-all` reads the session id off the SessionStart
+  hook payload on stdin, the same wire `capture finalize` reads at
+  SessionEnd. the shipped hook passes no `--session-id` and nothing sets
+  `VOUCH_SESSION_ID`, so the sweep silently no-opped on every session
+  start and buffers orphaned by sessions that ended without SessionEnd
+  were never rolled up into pending proposals (#492).
 
 ## [1.3.0] — 2026-07-14
 
