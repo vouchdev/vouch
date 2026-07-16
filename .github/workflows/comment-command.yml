@@ -1,0 +1,76 @@
+name: comment-command
+# slash-command trigger: the owner comments `/auto-merge` or `/verify` on a PR
+# to authorize verification, as an alternative to applying the auto-merge label.
+on:
+  issue_comment:
+    types: [created]
+permissions: {}
+concurrency:
+  group: comment-command-${{ github.event.issue.number }}
+  cancel-in-progress: false
+jobs:
+  parse:
+    # only PR comments, only the trusted owner, only a recognized command.
+    if: >
+      github.event.issue.pull_request &&
+      github.event.comment.author_association == 'OWNER' &&
+      github.event.comment.user.login == 'plind-junior'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    outputs:
+      is_command: ${{ steps.cmd.outputs.is_command }}
+      head_sha: ${{ steps.meta.outputs.head_sha }}
+      klass: ${{ steps.meta.outputs.klass }}
+    steps:
+      - name: detect /auto-merge or /verify
+        id: cmd
+        env:
+          BODY: ${{ github.event.comment.body }}
+        run: |
+          if printf '%s' "$BODY" | grep -Eiq '(^|[[:space:]])/(auto-merge|verify)([[:space:]]|$)'; then
+            echo "is_command=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_command=false" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        if: steps.cmd.outputs.is_command == 'true'
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        if: steps.cmd.outputs.is_command == 'true'
+        with:
+          python-version: "3.12"
+      - name: resolve head, classify, and mark authorized
+        id: meta
+        if: steps.cmd.outputs.is_command == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.issue.number }}
+        run: |
+          head_sha="$(gh pr view "$PR" --repo "$REPO" --json headRefOid --jq .headRefOid)"
+          gh pr view "$PR" --repo "$REPO" --json files --jq '.files[].path' > changed.txt
+          klass="$(PYTHONPATH=src python -m vouch.pr_bot classify --files-file changed.txt --print-klass)"
+          # mark authorized (visible, and enables deauthorize-on-push). a label
+          # added via GITHUB_TOKEN does not re-trigger auto-merge.yml (GitHub's
+          # token-recursion guard), so this does not double-run verification.
+          gh pr edit "$PR" --repo "$REPO" --add-label auto-merge || true
+          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
+          echo "klass=$klass" >> "$GITHUB_OUTPUT"
+
+  call-verify:
+    needs: parse
+    if: needs.parse.outputs.is_command == 'true'
+    permissions:
+      contents: write
+      pull-requests: write
+      checks: write
+    uses: ./.github/workflows/pr-verify.yml
+    with:
+      pr_number: ${{ github.event.issue.number }}
+      head_sha: ${{ needs.parse.outputs.head_sha }}
+      klass: ${{ needs.parse.outputs.klass }}
+    secrets:
+      anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
