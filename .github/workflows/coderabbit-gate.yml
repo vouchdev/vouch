@@ -47,6 +47,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           STATE: ${{ steps.gate.outputs.state }}
           VERDICT: ${{ steps.gate.outputs.verdict }}
@@ -56,8 +57,22 @@ jobs:
             changes)  desc="CodeRabbit requested changes — resolve them to merge." ;;
             *)        desc="Waiting for CodeRabbit to review this commit." ;;
           esac
-          gh api --method POST "repos/$REPO/statuses/$HEAD_SHA" \
-            -f state="$STATE" -f context="coderabbit-approved" -f description="$desc"
+          # the GITHUB_TOKEN can't write a commit status onto a fork's head sha —
+          # POST .../statuses returns 403 "resource not accessible by integration"
+          # for a pr opened from a fork. that's expected and unfixable with this
+          # token, so don't fail this infra job over it: the required status simply
+          # stays unset, native auto-merge waits, and a maintainer merges the fork
+          # pr by hand. same-repo prs must still publish, so only forks are tolerated.
+          if gh api --method POST "repos/$REPO/statuses/$HEAD_SHA" \
+               -f state="$STATE" -f context="coderabbit-approved" -f description="$desc"; then
+            exit 0
+          fi
+          if [ "$HEAD_REPO" != "$REPO" ]; then
+            echo "::warning::could not publish the coderabbit-approved status on a fork pr head ($HEAD_REPO); a maintainer must merge this pr manually (or wire a token with statuses:write for cross-fork writes)."
+            exit 0
+          fi
+          echo "::error::failed to publish the coderabbit-approved status"
+          exit 1
       - name: auto-close after 3 rejected rounds
         if: steps.gate.outputs.close == 'true'
         env:
