@@ -58,7 +58,7 @@ def verify_receipt(evidence: Evidence, source_bytes: bytes) -> ReceiptResult:
     when the decoded span equals the quote exactly.
     """
     start, end, quote = evidence.byte_start, evidence.byte_end, evidence.quote
-    if start is None or end is None or quote is None:
+    if start is None or end is None or not quote:
         return ReceiptResult(ReceiptStatus.NO_RECEIPT, "no byte-offset span")
     if start > end or end > len(source_bytes):
         return ReceiptResult(

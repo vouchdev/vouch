@@ -98,6 +98,19 @@ def test_no_receipt_when_quote_absent() -> None:
     assert result.status is ReceiptStatus.NO_RECEIPT
 
 
+def test_no_receipt_when_quote_is_empty_string() -> None:
+    # a zero-length span decodes to "" and trivially equals an empty quote --
+    # the docstring promises NO_RECEIPT for "no quote to compare", and
+    # locate_span already refuses to mint an empty-quote receipt for the same
+    # reason (see test_locate_span_returns_none_for_empty_quote); verify_receipt
+    # must reject one landing on disk some other way (bundle import, sync),
+    # not report it VERIFIED.
+    ev = _ev(quote="", byte_start=0, byte_end=0)
+    result = verify_receipt(ev, SOURCE)
+    assert result.status is ReceiptStatus.NO_RECEIPT
+    assert result.verified is False
+
+
 def test_receipt_uses_byte_offsets_not_char_offsets() -> None:
     # "café — au lait": 'é' is 2 bytes (0xc3 0xa9), '—' is 3 bytes (em dash).
     # "au lait" starts at char index 7 but byte index 10. A char-offset
