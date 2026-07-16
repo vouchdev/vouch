@@ -1,6 +1,6 @@
 name: ui-screenshot-gate
 on:
-  pull_request_target:
+  pull_request_target: # zizmor: ignore[dangerous-triggers] reads PR body/files as data only; never checks out or runs head code
     types: [opened, reopened, edited]
 permissions:
   contents: read
@@ -12,11 +12,11 @@ jobs:
     steps:
       # base ref => trusted logic. body/files come from the API as data, never
       # interpolated into the shell (avoids PR-body script injection).
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
       - name: fetch changed files + body (as files, not interpolated)

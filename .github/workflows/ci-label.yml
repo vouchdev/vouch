@@ -1,6 +1,6 @@
 name: ci-label
 on:
-  workflow_run:
+  workflow_run: # zizmor: ignore[dangerous-triggers] runs from the base repo on ci completion; reads metadata only, never checks out or runs PR code
     workflows: ["ci"]
     types: [completed]
 permissions:
