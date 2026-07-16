@@ -124,7 +124,7 @@ vouch init                          # creates .vouch/ with starter config
 vouch install-mcp claude-code       # wires capture hooks into Claude Code
 ```
 
-`install-mcp` writes `.mcp.json` (the `kb.*` MCP tools), the `/vouch-*` slash commands, and three hooks — `PostToolUse` capture, `SessionEnd` rollup, `SessionStart` recall. Restart Claude Code so they load.
+`install-mcp` writes `.mcp.json` (the `kb.*` MCP tools), the `/vouch-*` slash commands, and the Claude Code hooks: `PostToolUse` capture, `SessionEnd` rollup, `SessionStart` recall, `UserPromptSubmit` per-prompt recall, and a `Stop` answer-capture (inert until you switch on [passive memory](#passive-memory)). Restart Claude Code so they load.
 
 **2. Point `compile` at an LLM** — the only step that needs a model. In `.vouch/config.yaml`:
 
@@ -224,6 +224,64 @@ git add .vouch/ && git commit -m "kb: approve session summary"
 ```
 
 Pending drafts (`proposed/`) and the derived search index (`state.db`) are gitignored — what lands in history is exactly what passed review.
+
+## Passive memory
+
+The loop above keeps a human at the gate: every session rolls up into a
+*pending* page you approve. If you'd rather your agent **remember its own
+answers automatically** — ask a question in one session, have it recalled in the
+next, with no approval step — turn on *passive memory*. It's **off by default**
+and enables in two steps.
+
+**1. Wire the hooks** (the same `install-mcp` from above already does this):
+
+```bash
+vouch init
+vouch install-mcp claude-code       # restart Claude Code so the hooks load
+```
+
+Two of the installed hooks drive passive memory: `Stop` → `vouch capture answer`
+(saves each answer) and `UserPromptSubmit` → `vouch context-hook` (injects
+relevant approved knowledge into every prompt, zero tool calls).
+
+**2. Open the auto-approve gate** in `.vouch/config.yaml`:
+
+```yaml
+review:
+  auto_approve_on_receipt: true     # the receipt is the reviewer
+```
+
+A captured answer is stored as a source and split into claims that **quote it
+verbatim**; a claim whose byte-offset receipt verifies is approved
+mechanically, with no human. To trust the agent for *everything*, not only
+receipt-backed claims, use `approver_role: trusted-agent` instead. **With
+neither set, passive capture is inert** — the `Stop` hook is a no-op, so it can
+never flood your review queue. The gate is the on-switch.
+
+That's the whole setup. Now:
+
+- **Ask** a substantive question. When the turn finishes, the answer is saved
+  and auto-approved — verify with `vouch status` (claims went up, `pending: 0`).
+  It saves **per answer, not on tab-close**, so there's nothing to close.
+- **Open a new session** and ask something related. `SessionStart` recall and
+  the per-prompt hook surface the earlier answer, so the agent starts from
+  memory instead of re-deriving it.
+
+### Before you rely on it
+
+- **It saves every substantive answer, not just the important ones** — the KB
+  accumulates over time. Passive memory trades tidiness for zero friction;
+  selective capture (keep facts, drop chatter) is not built yet. Prune with
+  `vouch review` / delete, or run passive mode only for focused sessions.
+- **Recall is injected, not enforced.** The per-prompt hook adds vouch knowledge
+  to the model's context and asks it to ground its answer there; a model can
+  still answer from its own priors. For a **guaranteed** KB-grounded answer,
+  call `vouch synthesize "<question>"` (or the `/vouch-ask` slash command) — it
+  answers from approved claims only, with citations, or tells you the KB has
+  nothing.
+- **Short answers and exact repeats are skipped** — a length floor plus a
+  content-hash dedup keep the every-turn hook from saving acknowledgements or
+  duplicates.
 
 ## The rules underneath
 
