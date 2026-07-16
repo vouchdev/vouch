@@ -25,7 +25,7 @@ jobs:
       - uses: actions/checkout@v4
       # Build the React console so the wheel can bundle it as vouch/web/console
       # (hatch_build.py force-includes webapp/dist when present).
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4 # zizmor: ignore[cache-poisoning] release runs only on maintainer v* tag pushes; no untrusted input and no shared PR-writable cache
         with:
           node-version: "20"
       - run: npm --prefix webapp ci && npm --prefix webapp run build

@@ -1,0 +1,15 @@
+# zizmor configuration — https://docs.zizmor.sh/configuration/
+#
+# the pr-bot workflows (auto-merge, trust-gate, ci-label, ui-screenshot-gate,
+# workflow-lint) pin their actions and annotate their triggers. these three
+# audits are disabled repo-wide so the new workflow-lint gate does not force a
+# full pin / least-permissions migration of the older workflows in a single
+# change — the same stance as openclaw's config. pin new actions by hand and
+# re-enable a rule once the older workflows are migrated.
+rules:
+  unpinned-uses:
+    disable: true
+  excessive-permissions:
+    disable: true
+  artipacked:
+    disable: true

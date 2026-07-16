@@ -1,7 +1,7 @@
 name: Labeler
 
 "on":
-  pull_request_target:
+  pull_request_target: # zizmor: ignore[dangerous-triggers] maintainer-owned triage; reads base config + PR metadata only, never checks out or runs PR code
     # Maintainer-owned triage workflow: it reads base-branch config and PR
     # metadata only. It never checks out or executes pull request code.
     types: [opened, synchronize, reopened, edited, ready_for_review]
