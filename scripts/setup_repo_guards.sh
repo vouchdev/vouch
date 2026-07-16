@@ -6,12 +6,15 @@
 #   - labels: auto-merge, ci: passing, ci: failing
 #   - repo setting: allow auto-merge
 #   - a branch RULESET requiring a PR, code-owner review, and the ci +
-#     trust-gate status checks — the versionable replacement for classic branch
-#     protection, with org admins allowed to bypass (so you can still merge your
-#     own core PRs, which you can't self-approve).
+#     trust-gate + coderabbit-approved status checks — the versionable
+#     replacement for classic branch protection, with org admins allowed to
+#     bypass (so you can still merge your own core PRs, which you can't
+#     self-approve, and override the coderabbit gate when you must).
 #
-# review is done by CodeRabbit (install its GitHub App) + ci; this script does
-# not configure any AI reviewer or secret.
+# review is done by CodeRabbit (install its GitHub App). the coderabbit-gate
+# workflow turns its verdict into the required `coderabbit-approved` check, so a
+# pr only auto-merges once CodeRabbit approves; this script does not configure
+# any AI reviewer or secret.
 #
 # VERIFY BEFORE RELYING ON IT (schema/ids are account-specific):
 #   - the required check names below match .github/workflows/ci.yml job names.
@@ -42,7 +45,7 @@ cat > "$rules_body" <<JSON
   "conditions": {"ref_name": {"include": ["refs/heads/$BRANCH"], "exclude": []}},
   "rules": [
     {"type": "pull_request", "parameters": {"require_code_owner_review": true, "required_approving_review_count": 0, "dismiss_stale_reviews_on_push": false, "require_last_push_approval": false, "required_review_thread_resolution": false}},
-    {"type": "required_status_checks", "parameters": {"strict_required_status_checks_policy": true, "required_status_checks": [{"context": "test (py3.11)"}, {"context": "test (py3.12)"}, {"context": "test (py3.13)"}, {"context": "build sdist + wheel"}, {"context": "trust-gate"}]}}
+    {"type": "required_status_checks", "parameters": {"strict_required_status_checks_policy": true, "required_status_checks": [{"context": "test (py3.11)"}, {"context": "test (py3.12)"}, {"context": "test (py3.13)"}, {"context": "build sdist + wheel"}, {"context": "trust-gate"}, {"context": "coderabbit-approved"}]}}
   ]
 }
 JSON
