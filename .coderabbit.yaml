@@ -1,13 +1,16 @@
 # CodeRabbit configuration — https://docs.coderabbit.ai/guides/configure-coderabbit
-# CodeRabbit is the AI reviewer for vouch (free for this public repo). it reviews
-# every non-draft PR automatically. it is advisory: it comments, it does not gate
-# merges. the merge gate stays deterministic — ci + trust-gate + CODEOWNERS, with
-# the owner's auto-merge label as the go signal.
+# CodeRabbit is the required review gate for vouch (free for this public repo). it
+# reviews every non-draft PR automatically. request_changes_workflow is on, so it
+# submits a formal approve / request-changes review; the coderabbit-gate workflow
+# turns that verdict into the required `coderabbit-approved` status check, so a pr
+# only auto-merges once CodeRabbit approves (on top of ci + trust-gate + CODEOWNERS,
+# with the owner's auto-merge label as the go signal). a pr CodeRabbit requests
+# changes on 3 times is auto-closed (the owner and bots are exempt).
 language: "en-US"
 early_access: false
 reviews:
   profile: "chill"
-  request_changes_workflow: false
+  request_changes_workflow: true
   high_level_summary: true
   poem: false
   review_status: true

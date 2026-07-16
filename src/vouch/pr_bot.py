@@ -4,8 +4,9 @@ Pure stdlib — no model dependency, no vouch-runtime imports. The CI workflows
 call ``python -m vouch.pr_bot <subcommand>`` for every decision that must be
 trustworthy: an author's trust tier, whether a PR touches core/ui paths, whether
 a UI PR carries before/after screenshots, and whether a labeled PR may arm
-native auto-merge. Claude Code verification runs as a GitHub Action, not here —
-this module only makes the deterministic calls that gate it.
+native auto-merge. CodeRabbit is the review gate and runs as a GitHub App, not
+here — this module only turns its verdict into the required `coderabbit-approved`
+commit status and the deterministic calls that gate the merge.
 """
 from __future__ import annotations
 
@@ -13,7 +14,8 @@ import argparse
 import json
 import re
 import sys
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
+from typing import Any
 
 # the review-gate core: writes here are the north star. mirrored verbatim in
 # .github/CODEOWNERS (test_pr_bot asserts parity). a PR touching any of these
@@ -44,6 +46,15 @@ UI_GLOBS: tuple[str, ...] = (
 
 _OWNER_ASSOCIATION = "OWNER"
 _BOT_ACTORS = frozenset({"dependabot[bot]"})
+
+# CodeRabbit is the required review gate (.coderabbit.yaml). only reviews it
+# authors on github count; anyone else's approval never satisfies the gate.
+CODERABBIT_LOGIN = "coderabbitai[bot]"
+
+# a contributor gets STRIKE_LIMIT rounds of "changes requested" from CodeRabbit
+# before the pr is auto-closed. the owner and bots are exempt (author_is_exempt).
+STRIKE_LIMIT = 3
+_EXEMPT_AUTHORS = frozenset({"plind-junior"}) | _BOT_ACTORS
 
 
 def _match(path: str, glob: str) -> bool:
@@ -99,6 +110,58 @@ def should_arm_automerge(*, is_core: bool, ci_passing: bool,
     return claude_verdict == "APPROVE"
 
 
+def _cr_verdicts(reviews: Sequence[Mapping[str, Any]], *,
+                 login: str) -> list[tuple[str, Any]]:
+    """(state, commit_id) for CodeRabbit reviews carrying a verdict.
+
+    COMMENTED and DISMISSED reviews carry no verdict and are dropped.
+    """
+    out: list[tuple[str, Any]] = []
+    for r in reviews:
+        if (r.get("user") or {}).get("login") != login:
+            continue
+        state = str(r.get("state") or "").upper()
+        if state in ("APPROVED", "CHANGES_REQUESTED"):
+            out.append((state, r.get("commit_id")))
+    return out
+
+
+def coderabbit_verdict(reviews: Sequence[Mapping[str, Any]], *,
+                       head_sha: str | None = None,
+                       login: str = CODERABBIT_LOGIN) -> tuple[str, int]:
+    """CodeRabbit's (verdict, strikes) for a pr's review list.
+
+    ``verdict`` is its stance on ``head_sha`` — 'approved', 'changes', or
+    'pending' when it has not yet reviewed that commit (so a fresh push voids
+    a prior approval). ``strikes`` counts the distinct commits it has requested
+    changes on, i.e. failed review rounds, across the pr's whole history.
+    """
+    verdicts = _cr_verdicts(reviews, login=login)
+    strikes = len({cid for state, cid in verdicts if state == "CHANGES_REQUESTED"})
+    scoped = [v for v in verdicts if head_sha is None or v[1] == head_sha]
+    if not scoped:
+        return "pending", strikes
+    return ("approved" if scoped[-1][0] == "APPROVED" else "changes"), strikes
+
+
+def gate_status(verdict: str) -> str:
+    """Commit-status state for the required `coderabbit-approved` check."""
+    return {"approved": "success", "changes": "failure"}.get(verdict, "pending")
+
+
+def author_is_exempt(author: str) -> bool:
+    """The owner and bots are never auto-closed for failed reviews."""
+    return author in _EXEMPT_AUTHORS
+
+
+def should_close(verdict: str, strikes: int, *, author: str,
+                 limit: int = STRIKE_LIMIT) -> bool:
+    """Auto-close a contributor pr CodeRabbit has rejected `limit` rounds."""
+    return (not author_is_exempt(author)
+            and verdict == "changes"
+            and strikes >= limit)
+
+
 def _read_lines(path: str) -> list[str]:
     with open(path, encoding="utf-8") as fh:
         return [ln.strip() for ln in fh if ln.strip()]
@@ -129,6 +192,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     a.add_argument("--verdict", required=True)
     a.add_argument("--draft", action="store_true")
 
+    g = sub.add_parser("coderabbit-gate")
+    g.add_argument("--reviews-file", required=True)
+    g.add_argument("--head-sha", required=True)
+    g.add_argument("--author", required=True)
+
     ns = p.parse_args(argv)
 
     if ns.cmd == "classify":
@@ -149,6 +217,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         ok = should_arm_automerge(is_core=c2["is_core"], ci_passing=ns.ci == "passing",
                                   claude_verdict=ns.verdict, is_draft=ns.draft)
         return 0 if ok else 1
+    if ns.cmd == "coderabbit-gate":
+        with open(ns.reviews_file, encoding="utf-8") as fh:
+            loaded = json.load(fh)
+        reviews = loaded if isinstance(loaded, list) else []
+        verdict, strikes = coderabbit_verdict(reviews, head_sha=ns.head_sha)
+        close = should_close(verdict, strikes, author=ns.author)
+        sys.stdout.write(
+            f"state={gate_status(verdict)}\n"
+            f"verdict={verdict}\n"
+            f"strikes={strikes}\n"
+            f"close={'true' if close else 'false'}\n")
+        return 0
     return 2
 
 
