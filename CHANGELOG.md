@@ -248,6 +248,13 @@ All notable changes to vouch are documented here. Format follows
   in config.yaml (#476).
 
 ### Fixed
+- `propose-claim`, `propose-relation`, and `propose-entity` now validate
+  the payload against the Claim/Relation/Entity model at propose time
+  instead of only at approve. an out-of-range `--confidence` or an
+  invalid entity/relation type used to file a proposal that could never
+  pass `approve()`, sitting stuck in the pending queue with no clear way
+  to fix it; it is now rejected immediately with the same error message
+  approve would have raised.
 - approve/reject/expire record the audit event *before* moving the
   proposal to decided/. a crash between the two used to leave a durable
   decision with no authoritative history; it now leaves a pending
