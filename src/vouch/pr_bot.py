@@ -9,6 +9,10 @@ this module only makes the deterministic calls that gate it.
 """
 from __future__ import annotations
 
+import argparse
+import json
+import re
+import sys
 from collections.abc import Iterable, Sequence
 
 # the review-gate core: writes here are the north star. mirrored verbatim in
@@ -69,3 +73,84 @@ def klass(changed: Sequence[str]) -> str:
 
 def is_trusted(author_association: str, actor: str) -> bool:
     return author_association == _OWNER_ASSOCIATION or actor in _BOT_ACTORS
+
+
+_GH_IMAGE = re.compile(
+    r"""(?:!\[[^\]]*\]\(\s*|<img\b[^>]*\bsrc\s*=\s*["']?)"""
+    r"""(?:https?://(?:user-images\.githubusercontent\.com/"""
+    r"""|github\.com/user-attachments/assets/"""
+    r"""|github\.com/[^/\s"'>]+/[^/\s"'>]+/assets/))""",
+    re.I,
+)
+
+
+def has_before_after_screenshots(body: str | None) -> bool:
+    """True when the PR body embeds >=2 GitHub-hosted images (before + after)."""
+    if not body:
+        return False
+    return len(_GH_IMAGE.findall(body)) >= 2
+
+
+def should_arm_automerge(*, is_core: bool, ci_passing: bool,
+                         claude_verdict: str, is_draft: bool) -> bool:
+    """Deterministic arm gate. Claude can only veto — it never widens this."""
+    if is_draft or is_core or not ci_passing:
+        return False
+    return claude_verdict == "APPROVE"
+
+
+def _read_lines(path: str) -> list[str]:
+    with open(path, encoding="utf-8") as fh:
+        return [ln.strip() for ln in fh if ln.strip()]
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    p = argparse.ArgumentParser(prog="vouch.pr_bot")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    c = sub.add_parser("classify")
+    c.add_argument("--files-file", required=True)
+    c.add_argument("--print-klass", action="store_true")
+
+    for name in ("core-touched", "ui-touched"):
+        sp = sub.add_parser(name)
+        sp.add_argument("--files-file", required=True)
+
+    t = sub.add_parser("trust")
+    t.add_argument("--author-association", required=True)
+    t.add_argument("--actor", required=True)
+
+    s = sub.add_parser("has-screenshots")
+    s.add_argument("--body-file", required=True)
+
+    a = sub.add_parser("should-arm")
+    a.add_argument("--files-file", required=True)
+    a.add_argument("--ci", required=True, choices=["passing", "failing"])
+    a.add_argument("--verdict", required=True)
+    a.add_argument("--draft", action="store_true")
+
+    ns = p.parse_args(argv)
+
+    if ns.cmd == "classify":
+        changed = _read_lines(ns.files_file)
+        sys.stdout.write(klass(changed) if ns.print_klass else json.dumps(classify(changed)))
+        return 0
+    if ns.cmd == "core-touched":
+        return 0 if classify(_read_lines(ns.files_file))["is_core"] else 1
+    if ns.cmd == "ui-touched":
+        return 0 if _touches(_read_lines(ns.files_file), UI_GLOBS) else 1
+    if ns.cmd == "trust":
+        return 0 if is_trusted(ns.author_association, ns.actor) else 1
+    if ns.cmd == "has-screenshots":
+        with open(ns.body_file, encoding="utf-8") as fh:
+            return 0 if has_before_after_screenshots(fh.read()) else 1
+    if ns.cmd == "should-arm":
+        c2 = classify(_read_lines(ns.files_file))
+        ok = should_arm_automerge(is_core=c2["is_core"], ci_passing=ns.ci == "passing",
+                                  claude_verdict=ns.verdict, is_draft=ns.draft)
+        return 0 if ok else 1
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
