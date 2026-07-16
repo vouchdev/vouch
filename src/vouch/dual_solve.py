@@ -20,7 +20,7 @@ from pathlib import Path
 
 from .auto_pr import Engine, Runner, slugify
 from .context import build_context_pack
-from .models import ContextPack, SourceType
+from .models import SourceType
 from .proposals import propose_claim
 from .sandbox import DEFAULT_SANDBOX_IMAGE, require_docker_sandbox
 from .storage import KBStore
@@ -223,10 +223,18 @@ def ground_prompt(store: KBStore, query: str, *, limit: int = 8) -> str:
     If the KB has nothing for this query, returns an explicit message saying so.
     """
     pack = build_context_pack(store, query=query, limit=limit)
-    items = pack.items if isinstance(pack, ContextPack) else []
+    # build_context_pack returns a model_dump'd dict in production; the old guard
+    # only accepted a ContextPack object, so items was always empty and grounding
+    # always said "nothing" even when the kb matched — dual-solve never saw any
+    # context. tolerate both shapes, mirroring synthesize's grounding.
+    items = pack["items"] if isinstance(pack, dict) else pack.items
     if not items:
         return "(the knowledge base has nothing on this topic yet.)"
-    return "\n".join(f"- [{it.id}] {it.summary}" for it in items)
+    return "\n".join(
+        f"- [{it['id'] if isinstance(it, dict) else it.id}] "
+        f"{it['summary'] if isinstance(it, dict) else it.summary}"
+        for it in items
+    )
 
 
 def build_prompt(issue: Issue, grounding: str) -> str:

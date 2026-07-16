@@ -12,7 +12,7 @@ import pytest
 
 from vouch import auto_pr as ap
 from vouch import dual_solve as ds
-from vouch.models import ContextItem, ContextPack, ProposalStatus
+from vouch.models import Claim, ContextItem, ContextPack, ProposalStatus
 from vouch.storage import KBStore
 
 
@@ -140,6 +140,20 @@ def test_ground_prompt_empty_is_explicit(tmp_path, monkeypatch):
     monkeypatch.setattr(ds, "build_context_pack",
                         lambda *a, **k: ContextPack(query="q", items=[]))
     assert "nothing" in ds.ground_prompt(store, "x").lower()
+
+
+def test_ground_prompt_renders_real_context_pack(tmp_path):
+    # regression: build_context_pack returns a model_dump'd dict in production, so
+    # ground_prompt must read items out of that dict. the old isinstance(pack,
+    # ContextPack) guard was always false for the real (unmocked) path, so
+    # dual-solve grounding was silently empty even when the kb matched. seed a
+    # real claim and assert the unmocked pipeline surfaces it.
+    store = KBStore.init(tmp_path)
+    src = store.put_source(b"auth doc")
+    store.put_claim(Claim(id="c1", text="auth uses jwt tokens", evidence=[src.id]))
+    out = ds.ground_prompt(store, "auth")
+    assert "[c1]" in out and "auth uses jwt tokens" in out
+    assert "nothing" not in out.lower()
 
 
 def test_build_prompt_includes_issue_and_grounding():
