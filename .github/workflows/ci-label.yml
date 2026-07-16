@@ -1,0 +1,31 @@
+name: ci-label
+on:
+  workflow_run:
+    workflows: ["ci"]
+    types: [completed]
+permissions:
+  pull-requests: write
+  issues: write
+jobs:
+  label:
+    if: github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: apply CI status label to the PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          # workflow_run.pull_requests is empty for fork PRs — resolve via the
+          # commit->pulls endpoint instead (base token, no PR code executed).
+          pr=$(gh api "repos/$REPO/commits/$HEAD_SHA/pulls" --jq '.[0].number' 2>/dev/null || true)
+          if [ -z "$pr" ] || [ "$pr" = "null" ]; then
+            echo "no open PR for $HEAD_SHA"; exit 0
+          fi
+          if [ "$CONCLUSION" = "success" ]; then
+            gh pr edit "$pr" --repo "$REPO" --add-label "ci: passing" --remove-label "ci: failing" || true
+          else
+            gh pr edit "$pr" --repo "$REPO" --add-label "ci: failing" --remove-label "ci: passing" || true
+          fi
