@@ -22,6 +22,32 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "Pointer into a Source backing a specific Claim.\n\nUnlike Source (which is the whole document), Evidence specifies *where*\nin the source the supporting material is \u2014 line range, timestamp, quote.",
   "properties": {
+    "byte_end": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Byte End"
+    },
+    "byte_start": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Byte Start"
+    },
     "created_at": {
       "format": "date-time",
       "title": "Created At",

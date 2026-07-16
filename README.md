@@ -12,7 +12,6 @@
   <a href="https://github.com/mcp/vouchdev/vouch"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fregistry.modelcontextprotocol.io%2Fv0.1%2Fservers%3Fsearch%3Dio.github.vouchdev%2Fvouch&query=%24.servers%5B0%5D.server.version&label=MCP%20Registry&logo=modelcontextprotocol&logoColor=white&color=6E56CF&prefix=v" alt="MCP Registry"></a>
   <a href="https://pypi.org/project/vouch-kb/"><img src="https://img.shields.io/pypi/pyversions/vouch-kb.svg" alt="Python versions"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/vouchdev/vouch.svg" alt="MIT licensed"></a>
-  <a href="https://x.com/vouch_dev"><img src="https://img.shields.io/badge/follow-%40vouch__dev-000000?logo=x&logoColor=white" alt="Follow @vouch_dev on X"></a>
   <a href="https://gittensor.io/miners/repository?name=vouchdev/vouch"><img src="https://api.gittensor.io/repos/vouchdev%2Fvouch/badge.svg" alt="Gittensor impact"></a>
 </p>
 
@@ -21,6 +20,32 @@
 `vouch` gives LLM agents durable memory with an explicit **review gate**: sessions capture themselves, agents *propose* writes, and nothing becomes durable knowledge until you approve it. Approved artifacts are plain files under `.vouch/` — YAML claims, markdown pages — so the KB lives in your repo, is reviewed like code, diffs cleanly, and travels with `git clone`.
 
 The destination is the one [Andrej Karpathy's llm-wiki idea file](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) sketches: stop using LLMs as search engines that rediscover your documents on every question — use them as tireless knowledge engineers that compile, cross-reference, and maintain a living wiki, while humans curate and think. vouch is that idea with the write path made trustworthy. `vouch compile` has an LLM draft the topic pages, but every page cites approved claims, every `[claim: …]` citation is machine-verified before the draft is filed, and the drafts pass through the same review gate as every other write. The LLM compiles; the human approves; the wiki compounds.
+
+## "I can do this with one prompt"
+
+Often true — and worth being honest about. If you want your agent to remember things, a paragraph in `CLAUDE.md`, a memory file, or your host's built-in auto-memory gets you most of the way, costs nothing, and needs no install. Reach for that first. Recall is not a hard problem.
+
+What is hard is *trust in the write path*, and that's a different problem than memory. Single-writer memory needs no trust model: you're the only author, and a bad line costs you a shrug. The moment writes come from **more than one author** — several agents, a teammate, a future you who forgot the context — the question stops being "what did we say?" and becomes "**who decided this was true, on what evidence, and can I audit it later?**" A prompt cannot answer that, no matter how good the prompt is.
+
+That's the whole of vouch:
+
+| | one prompt / memory file | vouch |
+|---|---|---|
+| **Who can write** | whatever the agent decides to save | agents *propose*; a human approves — nothing else lands |
+| **Why believe a line** | vibes | every claim cites a content-hashed source; uncited is a validation error |
+| **When it's wrong** | edit and hope | supersede / contradict / archive, with the old version still in history |
+| **Who changed it** | file mtime | append-only audit log: who proposed, who approved, citing what, when |
+| **At n ≥ 2 writers** | last write wins, silently | one gate, one reviewed history, shared by `git clone` |
+| **What you read** | a growing pile of notes | compiled topic pages with verified citations — a wiki, not a log |
+
+The same argument as a picture — at one writer the two are the same thing; the gap opens at the second writer and only widens:
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/trust-vs-writers-dark.svg">
+  <img src="docs/img/trust-vs-writers-light.svg" width="760" alt="Illustrative line chart of trust in what you read as writers are added. At one writer, a memory file and vouch are identical. From two writers on, the memory file's line decays toward low (last write wins, silently) while vouch's line stays high (every landed write reviewed).">
+</picture>
+
+So the honest pitch: **vouch is not a better place to put memory — it's a review gate in front of one, and a wiki on the other side of it.** If you're solo and happy, one prompt is genuinely fine; vouch's session capture runs passively alongside whatever your host already remembers, rather than replacing it. But once a fleet of agents writes to shared knowledge — or a team does — that pile of notes needs an editor, and an editor is not something you can prompt your way to. The case in full: [docs/review-gate.md](docs/review-gate.md).
 
 ## Watch it work (110 seconds)
 
@@ -69,6 +94,23 @@ The one-liner is POSIX `sh` and never needs `sudo` — inspect [`install.sh`](in
 docker run -i --rm -v "$PWD:/data" ghcr.io/vouchdev/vouch:latest          # stdio MCP server
 docker run --rm -v "$PWD:/data" ghcr.io/vouchdev/vouch:latest status      # any CLI command
 ```
+
+**For local development** — CLI and webapp, both running from source:
+
+```bash
+git clone https://github.com/vouchdev/vouch
+cd vouch
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e '.[dev,web]'    # dev,web is what CI installs — make check needs both
+vouch --version                # the CLI now runs straight from src/ — edits apply without reinstalling
+
+make console                   # webapp in dev mode: vouch backend on :8731 + live-reload
+                               # console at http://localhost:5173 — Ctrl-C stops both
+
+make check                     # the CI gate: lint + type + test
+```
+
+`make console` needs node — it starts `vouch serve --transport http` and the Vite dev server as a pair, installing the console's node deps automatically on first run. To instead serve the console the way a release wheel does (no dev server), run `make webapp-build` once, then `vouch console`. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full dev workflow.
 
 ## Reproduce the loop on your project
 

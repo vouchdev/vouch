@@ -6,6 +6,7 @@ proposal lifecycle, and writes audit events for every mutation.
 
 from __future__ import annotations
 
+import contextlib
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -158,6 +159,50 @@ def propose_claim(
         rationale=rationale, dry_run=dry_run,
     )
     return ProposeClaimResult(proposal=proposal, warnings=warnings)
+
+
+def propose_quoted_claim(
+    store: KBStore,
+    *,
+    text: str,
+    source_id: str,
+    quote: str,
+    proposed_by: str,
+    claim_type: str = "observation",
+    confidence: float = 0.7,
+    entities: list[str] | None = None,
+    tags: list[str] | None = None,
+    rationale: str | None = None,
+    slug_hint: str | None = None,
+    session_id: str | None = None,
+) -> ProposeClaimResult | None:
+    """File a claim backed by a byte-offset receipt into ``source_id``, or drop.
+
+    Locates ``quote`` verbatim in the source's raw bytes; if it is not there,
+    returns None and files nothing — the mechanical "drops any claim it cannot
+    quote." Otherwise stores a receipt-backed Evidence (idempotently, keyed on
+    the span) and files a normal claim proposal citing it, so the write still
+    goes through the review gate but now carries a receipt the gate can verify
+    by string comparison.
+    """
+    from . import receipts
+
+    source_bytes = store.read_source_content(source_id)
+    evidence = receipts.receipt_for_quote(
+        source_id=source_id, source_bytes=source_bytes, quote=quote,
+    )
+    if evidence is None:
+        return None
+    # deterministic id -> if this span is already stored, cite the existing
+    # Evidence rather than duplicating it.
+    with contextlib.suppress(ValueError):
+        store.put_evidence(evidence)
+    return propose_claim(
+        store, text=text, evidence=[evidence.id], proposed_by=proposed_by,
+        claim_type=claim_type, confidence=confidence, entities=entities,
+        tags=tags, rationale=rationale, slug_hint=slug_hint,
+        session_id=session_id,
+    )
 
 
 def propose_page(
@@ -364,6 +409,14 @@ def propose_delete(
 # --- decisions ------------------------------------------------------------
 
 
+def _claim_receipts_verify(store: KBStore, proposal: Proposal) -> bool:
+    """True if this CLAIM proposal's citations all carry receipts that verify."""
+    from . import receipts
+
+    evidence_ids = list(proposal.payload.get("evidence", []))
+    return receipts.evaluate_claim_receipts(store, evidence_ids).approve
+
+
 def _approval_block_reason(
     store: KBStore, proposal: Proposal, approved_by: str
 ) -> str | None:
@@ -376,10 +429,10 @@ def _approval_block_reason(
     if proposal.status != ProposalStatus.PENDING:
         return f"proposal {proposal.id} is {proposal.status.value}, not pending"
     if approved_by == proposal.proposed_by:
-        # Protected page kinds are exempt from the trusted-agent opt-out:
+        # Protected page kinds are exempt from every self-approval opt-out:
         # policy-bearing pages (voice, decision records) always need a
-        # reviewer other than the proposer, whatever review.approver_role
-        # says. Checked first so the opt-out below can never widen it.
+        # reviewer other than the proposer. Checked first so nothing below
+        # can widen it.
         if proposal.kind == ProposalKind.PAGE:
             page_type = str(proposal.payload.get("type", ""))
             if page_type and load_page_kind_registry(store).is_protected(page_type):
@@ -387,12 +440,56 @@ def _approval_block_reason(
                     f"forbidden_self_approval: page kind '{page_type}' is protected — "
                     "it always requires a reviewer other than the proposer"
                 )
-        if store.config.review.approver_role != "trusted-agent":
-            return (
-                f"forbidden_self_approval: {approved_by} cannot approve their own "
-                "proposal (set review.approver_role: trusted-agent in config.yaml to opt out)"
-            )
+        # Blanket opt-out: trust the agent for everything.
+        if store.config.review.approver_role == "trusted-agent":
+            return None
+        # Phase D: the receipt is the reviewer. A claim whose byte-offset
+        # receipts all verify needs no human — the mechanical check already
+        # confirmed the quoted span is in the source. A claim that cannot quote
+        # its source (bare source id, forged or missing receipt) does not
+        # qualify and still falls through to the human gate below.
+        if (
+            store.config.review.auto_approve_on_receipt
+            and proposal.kind == ProposalKind.CLAIM
+            and _claim_receipts_verify(store, proposal)
+        ):
+            return None
+        return (
+            f"forbidden_self_approval: {approved_by} cannot approve their own "
+            "proposal (set review.approver_role: trusted-agent, or "
+            "review.auto_approve_on_receipt for receipt-backed claims)"
+        )
     return None
+
+
+def auto_approve_receipts(
+    store: KBStore, *, actor: str | None = None
+) -> list[Claim]:
+    """Approve every pending receipt-verified claim, no human in the loop.
+
+    The mechanical gate is the reviewer: a pending CLAIM whose citations all
+    carry receipts that verify by string comparison is approved; anything else
+    — a bare source id, a forged or missing receipt, a non-claim proposal — is
+    left pending for a human. This is the drain that makes "run vouch and it
+    just captures knowledge" real. No-op unless ``review.auto_approve_on_receipt``
+    is set, so the human-review gate is never silently bypassed.
+    """
+    if not store.config.review.auto_approve_on_receipt:
+        return []
+    approved: list[Claim] = []
+    for proposal in store.list_proposals(ProposalStatus.PENDING):
+        if proposal.kind != ProposalKind.CLAIM or not _claim_receipts_verify(
+            store, proposal
+        ):
+            continue
+        result = approve(
+            store, proposal.id,
+            approved_by=actor or proposal.proposed_by,
+            reason="receipt verified — auto-approved",
+        )
+        assert isinstance(result, Claim)  # kind == CLAIM guaranteed above
+        approved.append(result)
+    return approved
 
 
 def _payload_block_reason(store: KBStore, proposal: Proposal) -> str | None:
@@ -580,12 +677,16 @@ def approve(
     proposal.decided_at = datetime.now(UTC)
     proposal.decided_by = approved_by
     proposal.decision_reason = reason
-    store.move_proposal_to_decided(proposal)
+    # Audit before the decided-move: the log is the authoritative history, so
+    # a crash between the two must leave a pending proposal WITH its decision
+    # event (recoverable; retry is blocked by _ensure_no_existing_artifact),
+    # never a decided proposal without one.
     audit.log_event(
         store.kb_dir, event=f"proposal.{proposal.kind.value}.approve",
         actor=approved_by, object_ids=[proposal.id, result.id],
         data={"reason": reason},
     )
+    store.move_proposal_to_decided(proposal)
     return result
 
 
@@ -607,12 +708,13 @@ def reject(
     proposal.decided_at = datetime.now(UTC)
     proposal.decided_by = rejected_by
     proposal.decision_reason = reason
-    store.move_proposal_to_decided(proposal)
+    # Audit before the decided-move — same ordering invariant as approve().
     audit.log_event(
         store.kb_dir, event=f"proposal.{proposal.kind.value}.reject",
         actor=rejected_by, object_ids=[proposal.id],
         data={"reason": reason},
     )
+    store.move_proposal_to_decided(proposal)
     return proposal
 
 
@@ -687,7 +789,7 @@ def expire_one(
     proposal.decided_at = datetime.now(UTC)
     proposal.decided_by = expired_by
     proposal.decision_reason = EXPIRE_REASON
-    store.move_proposal_to_decided(proposal)
+    # Audit before the decided-move — same ordering invariant as approve().
     audit.log_event(
         store.kb_dir,
         event="proposal.expire",
@@ -695,6 +797,7 @@ def expire_one(
         object_ids=[proposal.id],
         data={"kind": proposal.kind.value},
     )
+    store.move_proposal_to_decided(proposal)
     return proposal
 
 

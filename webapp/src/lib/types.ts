@@ -18,8 +18,10 @@ export interface SynthesizeResult {
   query: string
   answer: string
   claims: string[]
+  /** Cited page ids (llm backend only; absent on older servers). */
+  pages?: string[]
   gaps: string[]
-  _meta?: { synthesis_confidence?: Confidence }
+  _meta?: { synthesis_confidence?: Confidence; synthesis_backend?: string }
 }
 
 export interface SearchHit {

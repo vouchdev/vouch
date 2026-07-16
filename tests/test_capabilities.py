@@ -11,6 +11,25 @@ from vouch import capabilities
 from vouch.jsonl_server import HANDLERS
 
 
+def test_import_apply_is_not_on_agent_surfaces() -> None:
+    """kb.import_apply writes past the review gate, so agents must not reach it.
+
+    It stays a human-only CLI command; the read-only kb.import_check survives
+    on every surface. (The real fix is gated import — roadmap 8.2.)
+    """
+    from vouch.jsonl_server import HANDLERS
+
+    assert "kb.import_apply" not in HANDLERS
+    assert "kb.import_apply" not in set(capabilities.capabilities().methods)
+    # read-only diff stays available to agents
+    assert "kb.import_check" in HANDLERS
+
+    from vouch.server import mcp
+
+    assert mcp._tool_manager.get_tool("kb_import_apply") is None
+    assert mcp._tool_manager.get_tool("kb_import_check") is not None
+
+
 def test_capabilities_matches_jsonl_handlers() -> None:
     caps = capabilities.capabilities()
     declared = set(caps.methods)
@@ -104,4 +123,70 @@ def test_mcp_tools_match_methods() -> None:
         f"mcp/methods mismatch: "
         f"missing tools={declared - as_methods}, "
         f"undeclared tools={as_methods - declared}"
+    )
+
+
+# Irregular method → cli-command mirrors. The path part (before any flag) must
+# exist in the click tree; flags document which invocation form is the mirror.
+_CLI_MIRRORS = {
+    "kb.list_pending": "pending",
+    "kb.triage_pending": "triage",
+    "kb.clear_claims": "claims-clear",
+    "kb.volunteer_context": "session volunteer",
+    "kb.list_sessions": "session list",
+    "kb.session_transcript": "session transcript",
+    "kb.summarize_session": "session summarize",
+    "kb.register_source": "source add",
+    "kb.register_source_from_path": "source add",
+    "kb.list_sources": "source list",
+    "kb.source_verify": "source verify",
+    "kb.session_start": "session start",
+    "kb.session_end": "session end",
+    "kb.embeddings_stats": "embeddings stats",
+    "kb.provenance_rebuild": "provenance rebuild",
+    "kb.index_rebuild": "reindex",
+    "kb.reindex_embeddings": "reindex --embeddings",
+    "kb.dedup_scan": "dedup",
+    "kb.eval_embeddings": "eval embedding",
+    "kb.graph_export": "graph",
+    "kb.propose_theme": "detect-themes --propose",
+}
+
+
+def test_cli_commands_match_methods() -> None:
+    """Every kb.* method has a CLI mirror — the third surface of the parity
+    invariant (JSONL and MCP are covered above).
+
+    Default rule: kb.foo_bar mirrors as `vouch foo-bar`. Anything irregular is
+    declared in _CLI_MIRRORS; a new method with neither fails here until its
+    CLI command lands.
+    """
+    import click
+
+    from vouch.cli import cli as root
+
+    paths: set[str] = set()
+
+    def walk(group: click.Group, prefix: str = "") -> None:
+        for name, cmd in group.commands.items():
+            full = f"{prefix}{name}"
+            paths.add(full)
+            if isinstance(cmd, click.Group):
+                walk(cmd, full + " ")
+
+    walk(root)
+
+    stale = set(_CLI_MIRRORS) - set(capabilities.METHODS)
+    assert not stale, f"_CLI_MIRRORS entries for unknown methods: {stale}"
+
+    missing = []
+    for method in capabilities.METHODS:
+        target = _CLI_MIRRORS.get(
+            method, method.removeprefix("kb.").replace("_", "-")
+        )
+        cmd_path = target.split(" --")[0].strip()
+        if cmd_path not in paths:
+            missing.append(f"{method} -> vouch {target}")
+    assert not missing, (
+        "kb.* methods with no cli mirror:\n" + "\n".join(missing)
     )

@@ -82,6 +82,11 @@ def _starter_config() -> dict[str, Any]:
         "review": {
             "require_human_approval": True,
             "expire_pending_after_days": 90,
+            # phase d — the receipt is the reviewer. When true, a claim whose
+            # byte-offset receipts all verify is auto-approved with no human;
+            # a claim that cannot quote its source is left pending. Opt-in:
+            # the human-review gate stays on by default.
+            "auto_approve_on_receipt": False,
         },
         "capture": {
             # auto-capture agent sessions into pending summaries.
@@ -108,6 +113,14 @@ def _starter_config() -> dict[str, Any]:
             # embedding | fts5 | substring. See context._retrieve.
             "backend": "hybrid",
             "default_limit": 10,
+            # blend a half-life decay into context-pack scores so fresher
+            # knowledge outranks equally-relevant stale knowledge. new KBs
+            # get it on; existing KBs keep byte-identical ordering until
+            # they add this key.
+            "recency": {
+                "enabled": True,
+                "half_life_days": 90,
+            },
         },
         "agents": {
             "recommended_loop": [
@@ -264,6 +277,23 @@ class KBStore:
             raise
         with os.fdopen(fd, "rb") as f:
             return resolved, f.read()
+
+    def resolve_under_root(self, path: str | Path) -> Path:
+        """Resolve ``path`` and confirm it is inside the project root, or raise.
+
+        The containment half of :meth:`read_under_root`, without opening — for
+        a client-supplied path that will be written (a bundle export
+        destination) or read as a whole file. Pre-existing symlinks are
+        resolved first, then the result is checked for containment; a read that
+        needs the stronger O_NOFOLLOW / regular-file guarantees should use
+        :meth:`read_under_root`.
+        """
+        resolved = Path(path).resolve()
+        if not resolved.is_relative_to(self.root):
+            raise ValueError(
+                f"path must be inside project root ({self.root}): {resolved}"
+            )
+        return resolved
 
     # --- bootstrap ---------------------------------------------------------
 

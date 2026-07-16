@@ -115,6 +115,29 @@ def archive(store: KBStore, *, claim_id: str, actor: str) -> Claim:
     return claim
 
 
+def redact(store: KBStore, *, claim_id: str, actor: str) -> Claim:
+    """Mask any secret in a claim's text and mark it REDACTED.
+
+    The backstop for a credential that reached a durable claim — pasted before
+    capture-time masking existed, or via a path that bypasses it. Rewrites the
+    stored yaml so the current tree no longer carries the secret and the claim
+    drops out of live retrieval. It does NOT rewrite the audit log or git
+    history, which are append-only, so a genuinely leaked credential must still
+    be rotated (see docs/security/git-retention.md).
+    """
+    from .secrets import mask_secrets
+
+    claim = store.get_claim(claim_id)
+    claim.text = mask_secrets(claim.text)
+    claim.status = ClaimStatus.REDACTED
+    claim.updated_at = datetime.now(UTC)
+    store.update_claim(claim)
+    audit.log_event(
+        store.kb_dir, event="claim.redact", actor=actor, object_ids=[claim.id],
+    )
+    return claim
+
+
 def confirm(store: KBStore, *, claim_id: str, actor: str) -> Claim:
     """Re-confirm a stale claim — bumps `last_confirmed_at`."""
     claim = store.get_claim(claim_id)

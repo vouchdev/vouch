@@ -22,6 +22,7 @@ from mcp.server.fastmcp import FastMCP
 from . import audit, bundle, health, mcp_profiles, volunteer_context
 from . import compile as compile_mod
 from . import digest as digest_mod
+from . import hot_memory as hot_mod
 from . import lifecycle as life
 from . import metrics as metrics_mod
 from . import salience as salience_mod
@@ -47,7 +48,7 @@ from .proposals import (
     reject,
     reject_auto_extracted,
 )
-from .scoping import filter_hits, scoped_fetch_limit, viewer_from
+from .scoping import viewer_from
 from .stats import collect_activity, collect_stats
 from .storage import (
     ArtifactNotFoundError,
@@ -70,6 +71,13 @@ def _store() -> KBStore:
 
 
 def _agent() -> str:
+    # An authenticated bearer subject (set by the /mcp transport) is the
+    # principal's real identity and must be what proposals/audit attribute to,
+    # so a token cannot be spoofed and distinct tokens are distinct actors.
+    # VOUCH_AGENT is only the tokenless (stdio/dev) fallback.
+    subject = trust_mod.current().auth_subject
+    if subject is not None:
+        return f"token:{subject}"
     return os.environ.get("VOUCH_AGENT", "unknown-agent")
 
 
@@ -190,79 +198,31 @@ def kb_search(
     query: str,
     *,
     limit: int = 10,
-    backend: str = "auto",
+    backend: str | None = None,
     min_score: float = 0.0,
     project: str | None = None,
     agent: str | None = None,
 ) -> dict[str, Any]:
     """Search the KB.
 
-    backend: "auto" (default, embedding then fts5 then substring),
-    "embedding", "fts5", "substring", or "hybrid".
+    backend: None (default) defers to retrieval.backend in config.yaml;
+    "auto"/"hybrid" fuse embedding + fts5 via RRF (substring fallback under
+    "auto"), or pin "embedding", "fts5", or "substring". The response
+    retrieval block reports the backend that actually served the query.
     project/agent: optional viewer context for scope filtering.
     """
-    from . import index_db
-    store = _store()
-    viewer = viewer_from(
-        config_path=store.config_path,
+    from .context import search_kb
+
+    # One shared implementation across MCP / JSONL — see context.search_kb.
+    return search_kb(
+        _store(),
+        query=query,
+        limit=limit,
+        backend=backend,
+        min_score=min_score,
         project=project,
         agent=agent,
     )
-    fetch_limit = scoped_fetch_limit(limit, viewer)
-    hits: list[tuple[str, str, str, float]] = []
-
-    def _to_dicts(h: list[tuple[str, str, str, float]], used: str) -> dict[str, Any]:
-        scoped = filter_hits(store, h, viewer, limit=limit)
-        return {
-            "backend": used,
-            "viewer": {"project": viewer.project, "agent": viewer.agent},
-            "hits": [
-                {"kind": k, "id": i, "snippet": sn, "score": sc, "backend": used}
-                for k, i, sn, sc in scoped
-            ],
-        }
-
-    if backend in ("auto", "embedding"):
-        hits = index_db.search_semantic(
-            store.kb_dir, query, limit=fetch_limit, min_score=min_score,
-        )
-        if hits:
-            return _to_dicts(hits, "embedding")
-        if backend == "embedding":
-            return _to_dicts([], "embedding")
-
-    if backend in ("auto", "fts5"):
-        try:
-            hits = index_db.search(store.kb_dir, query, limit=fetch_limit)
-        except Exception:
-            hits = []
-        if hits:
-            return _to_dicts(hits, "fts5")
-        if backend == "fts5":
-            return _to_dicts([], "fts5")
-
-    if backend in ("auto", "substring"):
-        hits = store.search_substring(query, limit=fetch_limit)
-        return _to_dicts(hits, "substring")
-
-    if backend == "hybrid":
-        from .embeddings.fusion import (  # type: ignore[import-not-found,import-untyped,unused-ignore]
-            rrf_fuse,
-        )
-        # Hybrid must honour min_score (the embedding side can return
-        # low-relevance noise otherwise) and survive FTS failures the same
-        # way the dedicated fts5 branch does.
-        emb = index_db.search_semantic(
-            store.kb_dir, query, limit=fetch_limit * 2, min_score=min_score,
-        )
-        try:
-            fts = index_db.search(store.kb_dir, query, limit=fetch_limit * 2)
-        except Exception:
-            fts = []
-        hits = rrf_fuse(emb, fts, limit=fetch_limit)
-        return _to_dicts(hits, "hybrid")
-
-    raise ValueError(f"unknown backend: {backend}")
 
 
 def _load_cfg(store: KBStore) -> dict[str, Any]:
@@ -338,7 +298,12 @@ def kb_context(
         project=project, agent=agent,
         expand_graph=expand_graph, graph_depth=graph_depth, graph_limit=graph_limit,
     )
-    return salience_mod.attach_salience(result, store, session_id, cfg)
+    result = salience_mod.attach_salience(result, store, session_id, cfg)
+    pack_items = result.get("items") if isinstance(result, dict) else None
+    exclude = [it.get("id") for it in pack_items] if isinstance(pack_items, list) else []
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        result, store, query=task, exclude_ids=[i for i in exclude if i],
+    )
 
 
 @mcp.tool()
@@ -346,48 +311,74 @@ def kb_synthesize(
     query: str,
     depth: int = 3,
     max_chars: int = 4000,
+    llm: bool = False,
 ) -> dict[str, Any]:
-    """Answer a query from approved claims only, with inline `[claim_id]`
-    citations, an explicit gaps block, and a synthesis_confidence grade.
+    """Answer a query from the review-gated KB, with inline `[id]` citations,
+    an explicit gaps block, and a synthesis_confidence grade.
 
     Unlike `kb_context` (a ranked list), this returns prose where every
-    sentence is traceable to an approved claim.
+    sentence is traceable to a source. Deterministic by default (approved
+    claims only); `llm=True` drafts the answer with the deployment-configured
+    LLM (compile.llm_cmd) grounded in pages and approved claims — citations
+    are still verified mechanically, and the call is synchronous.
     """
-    return synthesize(_store(), query=query, depth=depth, max_chars=max_chars)
+    return synthesize(
+        _store(), query=query, depth=depth, max_chars=max_chars, llm=llm,
+    )
 
 
 @mcp.tool()
 def kb_read_page(page_id: str) -> dict[str, Any]:
     """Return a page (title, body, claim ids)."""
+    store = _store()
     try:
-        return _store().get_page(page_id).model_dump(mode="json")
+        page = store.get_page(page_id)
     except ArtifactNotFoundError as e:
         raise ValueError(str(e)) from e
+    result = page.model_dump(mode="json")
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        result, store, query=hot_mod.query_bias_for_page(page),
+    )
 
 
 @mcp.tool()
 def kb_read_claim(claim_id: str) -> dict[str, Any]:
     """Return a claim with its citation list."""
+    store = _store()
     try:
-        return _store().get_claim(claim_id).model_dump(mode="json")
+        claim = store.get_claim(claim_id)
     except ArtifactNotFoundError as e:
         raise ValueError(str(e)) from e
+    result = claim.model_dump(mode="json")
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        result, store, query=claim.text, exclude_ids=[claim.id],
+    )
 
 
 @mcp.tool()
 def kb_read_entity(entity_id: str) -> dict[str, Any]:
+    store = _store()
     try:
-        return _store().get_entity(entity_id).model_dump(mode="json")
+        entity = store.get_entity(entity_id)
     except ArtifactNotFoundError as e:
         raise ValueError(str(e)) from e
+    result = entity.model_dump(mode="json")
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        result, store, query=hot_mod.query_bias_for_entity(entity),
+    )
 
 
 @mcp.tool()
 def kb_read_relation(relation_id: str) -> dict[str, Any]:
+    store = _store()
     try:
-        return _store().get_relation(relation_id).model_dump(mode="json")
+        relation = store.get_relation(relation_id)
     except ArtifactNotFoundError as e:
         raise ValueError(str(e)) from e
+    result = relation.model_dump(mode="json")
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        result, store, query=None,
+    )
 
 
 @mcp.tool()
@@ -409,7 +400,7 @@ def kb_list_pages(
     meta: dict[str, str] | None = None,
     meta_before: dict[str, str] | None = None,
     meta_after: dict[str, str] | None = None,
-) -> list[dict[str, Any]]:
+) -> dict[str, Any]:
     """List pages, optionally filtered by kind and frontmatter.
 
     type: page kind (built-in or config-declared, e.g. "followup").
@@ -417,62 +408,85 @@ def kb_list_pages(
     meta_before / meta_after: inclusive bounds — numbers or ISO dates,
     e.g. meta_before={"due_at": "2026-07-10"} for followups due by then.
     """
+    store = _store()
     pages = filter_pages(
-        _store().list_pages(),
+        store.list_pages(),
         kind=type,
         equals=meta,
         before=meta_before,
         after=meta_after,
     )
-    return [
+    items = [
         {"id": p.id, "title": p.title, "type": p.type, "tags": p.tags, "metadata": p.metadata}
         for p in pages
     ]
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        items, store, query=None, list_envelope=True,
+    )
 
 
 @mcp.tool()
-def kb_list_claims(status: str | None = None) -> list[dict[str, Any]]:
+def kb_list_claims(status: str | None = None) -> dict[str, Any]:
     """List all claims, optionally filtered by status."""
-    claims = _store().list_claims()
+    store = _store()
+    claims = store.list_claims()
     if status:
         claims = [c for c in claims if c.status.value == status]
-    return [c.model_dump(mode="json") for c in claims]
+    items = [c.model_dump(mode="json") for c in claims]
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        items, store, query=None, list_envelope=True,
+    )
 
 
 @mcp.tool()
-def kb_list_entities(entity_type: str | None = None) -> list[dict[str, Any]]:
-    entities = _store().list_entities()
+def kb_list_entities(entity_type: str | None = None) -> dict[str, Any]:
+    store = _store()
+    entities = store.list_entities()
     if entity_type:
         entities = [e for e in entities if e.type.value == entity_type]
-    return [e.model_dump(mode="json") for e in entities]
+    items = [e.model_dump(mode="json") for e in entities]
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        items, store, query=None, list_envelope=True,
+    )
 
 
 @mcp.tool()
-def kb_list_relations(node_id: str | None = None) -> list[dict[str, Any]]:
+def kb_list_relations(node_id: str | None = None) -> dict[str, Any]:
     """List all relations; if node_id is given, only edges touching it."""
     store = _store()
     rels = store.list_relations()
     if node_id:
         rels = [r for r in rels if r.source == node_id or r.target == node_id]
-    return [r.model_dump(mode="json") for r in rels]
+    items = [r.model_dump(mode="json") for r in rels]
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        items, store, query=None, list_envelope=True,
+    )
 
 
 @mcp.tool()
-def kb_list_sources() -> list[dict[str, Any]]:
-    return [
+def kb_list_sources() -> dict[str, Any]:
+    store = _store()
+    items = [
         {"id": s.id, "title": s.title, "type": s.type.value,
          "locator": s.locator, "byte_size": s.byte_size}
-        for s in _store().list_sources()
+        for s in store.list_sources()
     ]
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        items, store, query=None, list_envelope=True,
+    )
 
 
 @mcp.tool()
-def kb_list_pending() -> list[dict[str, Any]]:
+def kb_list_pending() -> dict[str, Any]:
     """List proposals awaiting human review."""
-    return [
+    store = _store()
+    items = [
         p.model_dump(mode="json")
-        for p in _store().list_proposals(ProposalStatus.PENDING)
+        for p in store.list_proposals(ProposalStatus.PENDING)
     ]
+    return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
+        items, store, query=None, list_envelope=True,
+    )
 
 
 @mcp.tool()
@@ -970,7 +984,9 @@ def kb_doctor() -> dict[str, Any]:
 
 @mcp.tool()
 def kb_export(out_path: str) -> dict[str, Any]:
-    manifest = bundle.export(_store().kb_dir, dest=Path(out_path), actor=_agent())
+    s = _store()
+    dest = bundle.fenced_bundle_path(s, out_path)
+    manifest = bundle.export(s.kb_dir, dest=dest, actor=_agent())
     return {
         "bundle_id": manifest["bundle_id"],
         "files": len(manifest["files"]),
@@ -980,7 +996,8 @@ def kb_export(out_path: str) -> dict[str, Any]:
 
 @mcp.tool()
 def kb_export_check(bundle_path: str) -> dict[str, Any]:
-    r = bundle.export_check(Path(bundle_path))
+    s = _store()
+    r = bundle.export_check(bundle.fenced_bundle_path(s, bundle_path))
     return {
         "ok": r.ok, "bundle_id": r.bundle_id,
         "files_checked": r.files_checked, "issues": r.issues,
@@ -989,7 +1006,8 @@ def kb_export_check(bundle_path: str) -> dict[str, Any]:
 
 @mcp.tool()
 def kb_import_check(bundle_path: str) -> dict[str, Any]:
-    r = bundle.import_check(_store().kb_dir, Path(bundle_path))
+    s = _store()
+    r = bundle.import_check(s.kb_dir, bundle.fenced_bundle_path(s, bundle_path))
     return {
         "ok": r.ok, "bundle_id": r.bundle_id,
         "new_files": r.new_files, "conflicts": r.conflicts,
@@ -997,17 +1015,10 @@ def kb_import_check(bundle_path: str) -> dict[str, Any]:
     }
 
 
-@mcp.tool()
-def kb_import_apply(bundle_path: str, on_conflict: str = "skip") -> dict[str, Any]:
-    try:
-        r = bundle.import_apply(
-            _store().kb_dir, Path(bundle_path),
-            on_conflict=on_conflict, actor=_agent(),
-        )
-    except (RuntimeError, ValueError) as e:
-        raise ValueError(str(e)) from e
-    health.rebuild_index(_store())
-    return r
+# kb_import_apply is intentionally not exposed as an MCP tool: applying a bundle
+# writes members (claims/pages/decided) straight to disk, bypassing
+# proposals.approve(). It remains the human-only `vouch import apply` CLI command
+# until gated import lands (roadmap 8.2). kb_import_check (read-only) stays.
 
 
 @mcp.tool()
@@ -1059,7 +1070,6 @@ def kb_dedup_scan(
 @mcp.tool()
 def kb_eval_embeddings(*, queries_path: str, k: int = 10) -> dict[str, Any]:
     """Run retrieval eval over a JSONL queries file."""
-    from pathlib import Path
 
     from .embeddings.scorer import evaluate
     store = _store()

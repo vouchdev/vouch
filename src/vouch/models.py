@@ -209,6 +209,14 @@ class Evidence(BaseModel):
     locator: str = Field(description="span ref: 'L10-L20', 't=00:14:23', '#section-3'")
     quote: str | None = None
     hash: str | None = None
+    # The byte-offset receipt: the half-open range [byte_start, byte_end) into
+    # the cited source's raw bytes that `quote` was taken from. When both are
+    # set alongside `quote`, the citation is mechanically verifiable — the
+    # quoted span is in the source at those offsets or it is not, checked by
+    # string comparison with no judge (see receipts.verify_receipt). Absent on
+    # legacy/free-text citations, which carry no receipt.
+    byte_start: int | None = Field(default=None, ge=0)
+    byte_end: int | None = Field(default=None, ge=0)
     created_at: datetime = Field(default_factory=utcnow)
 
 
@@ -507,10 +515,14 @@ class Capabilities(BaseModel):
         default_factory=dict,
         description=(
             "Per-host compatibility ranges (#237). Mirrors the "
-            "`openclaw.compat` block in openclaw.plugin.json so non-OpenClaw "
+            "`openclaw.compat` block in package.json so non-OpenClaw "
             "clients can detect compat without parsing the manifest, e.g. "
             '{"openclaw": {"pluginApi": ">=2026.4.0"}}.'
         ),
+    )
+    hot_memory: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Hot-memory sidebar contract on read-side kb.* responses",
     )
 
 
@@ -537,6 +549,10 @@ class ReviewConfig(BaseModel):
     # "trusted-agent" lets an agent approve its own proposals; anything else
     # (incl. unset) keeps the human-in-the-loop gate.
     approver_role: str | None = None
+    # Phase D self-approval opt-in: a self-proposed CLAIM whose byte-offset
+    # receipts all verify is auto-approved without a human. Off by default —
+    # the human-review gate stays on.
+    auto_approve_on_receipt: bool = False
 
 
 class RetrievalConfig(BaseModel):
@@ -552,6 +568,11 @@ class RetrievalConfig(BaseModel):
     default_limit: int = Field(default=10, ge=1)
     # Legacy plural list, honoured for KBs created before `backend` existed.
     backends: list[str] | None = None
+    # Optional retrieval stages owned by their own readers in `context.py`
+    # (`_configured_rerank` / `_configured_recency`). Declared here so a real
+    # `retrieval.rerank` / `retrieval.recency` block is not flagged as a typo.
+    rerank: dict[str, Any] | None = None
+    recency: dict[str, Any] | None = None
 
     def resolved_backend(self) -> str:
         """Effective backend, preserving pre-#243 fallback behaviour.

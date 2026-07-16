@@ -75,7 +75,63 @@ test('submits a query to kb.synthesize and renders the cited answer', async () =
   expect(rpc).toHaveBeenCalledWith(
     expect.objectContaining({ endpoint: TEST_ENDPOINT }),
     'kb.synthesize',
+    { query: 'what does the vouch http server bind', llm: true },
+  )
+})
+
+test('falls back to deterministic synthesis when the llm is not configured', async () => {
+  vi.mocked(rpc).mockImplementation(async (_c, method, params) => {
+    if (method !== 'kb.synthesize') throw new Error(`unexpected ${method}`)
+    if ((params as { llm?: boolean }).llm) {
+      throw new VouchRpcError(
+        'invalid_params',
+        'llm synthesis is not configured — set compile.llm_cmd in .vouch/config.yaml',
+      )
+    }
+    return ANSWER
+  })
+  renderWithProviders(<ChatView />)
+  await ask('what does the vouch http server bind')
+  expect(await screen.findByText(/binds 127\.0\.0\.1:8731 by default/)).toBeInTheDocument()
+  expect(rpc).toHaveBeenCalledWith(
+    expect.anything(),
+    'kb.synthesize',
     { query: 'what does the vouch http server bind' },
+  )
+})
+
+test('a broken llm surfaces as an error instead of silently degrading', async () => {
+  vi.mocked(rpc).mockRejectedValue(
+    new VouchRpcError('invalid_params', 'compile.llm_cmd failed (1): boom'),
+  )
+  renderWithProviders(<ChatView />)
+  await ask('bind')
+  expect((await screen.findAllByText(/llm_cmd failed/)).length).toBeGreaterThan(0)
+  expect(rpc).toHaveBeenCalledTimes(1)
+})
+
+test('llm answers badge the backend and open page citations as pages', async () => {
+  const llmAnswer = {
+    query: 'how does auth work',
+    answer: 'Access tokens are short-lived JWTs [auth-overview].',
+    claims: [],
+    pages: ['auth-overview'],
+    gaps: [],
+    _meta: { synthesis_confidence: 'medium' as const, synthesis_backend: 'llm' },
+  }
+  vi.mocked(rpc).mockImplementation(async (_c, method) => {
+    if (method === 'kb.synthesize') return llmAnswer
+    if (method === 'kb.read_page')
+      return { id: 'auth-overview', title: 'Auth Overview', body: 'JWTs.', type: 'concept', status: 'active' }
+    throw new Error(`unexpected ${method}`)
+  })
+  renderWithProviders(<ChatView />)
+  await ask('how does auth work')
+  expect(await screen.findByTestId('synthesis-backend')).toHaveTextContent('llm')
+  await userEvent.click(screen.getByRole('button', { name: 'auth-overview' }))
+  expect(await screen.findByTestId('drawer')).toBeInTheDocument()
+  await waitFor(() =>
+    expect(rpc).toHaveBeenCalledWith(expect.anything(), 'kb.read_page', { page_id: 'auth-overview' }),
   )
 })
 

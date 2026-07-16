@@ -96,14 +96,16 @@ def test_jsonl_list_pages_filters(
 
     from vouch.jsonl_server import HANDLERS
 
-    rows = HANDLERS["kb.list_pages"]({"type": "followup", "meta": {"followup_status": "open"}})
+    rows = HANDLERS["kb.list_pages"](
+        {"type": "followup", "meta": {"followup_status": "open"}}
+    )["items"]
     assert sorted(r["id"] for r in rows) == ["ping-alice-example", "renew-acme-example"]
 
-    rows = HANDLERS["kb.list_pages"]({"meta_before": {"due_at": "2026-06-30"}})
+    rows = HANDLERS["kb.list_pages"]({"meta_before": {"due_at": "2026-06-30"}})["items"]
     assert [r["id"] for r in rows] == ["ship-report"]
 
     # no params -> unchanged full listing
-    rows = HANDLERS["kb.list_pages"]({})
+    rows = HANDLERS["kb.list_pages"]({})["items"]
     assert len(rows) == 4
 
 
@@ -115,7 +117,7 @@ def test_mcp_list_pages_filters(
 
     from vouch import server
 
-    rows = server.kb_list_pages(type="followup", meta={"followup_status": "open"})
+    rows = server.kb_list_pages(type="followup", meta={"followup_status": "open"})["items"]
     assert sorted(r["id"] for r in rows) == ["ping-alice-example", "renew-acme-example"]
     assert all("metadata" in r for r in rows)
 

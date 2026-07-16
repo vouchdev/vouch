@@ -6,25 +6,58 @@ All notable changes to vouch are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+- cli mirrors for the last five `kb.*` methods that had none —
+  `vouch propose-delete`, `vouch source list`, `vouch session list`,
+  `vouch session transcript`, `vouch session summarize` — and the
+  capabilities test now enforces cli parity alongside the existing
+  jsonl + mcp checks, so a new method cannot land without its cli
+  command (#475).
+- `retrieval.recency`: a half-life decay (default 90 days, whole-day
+  quantized) blended into fused context-pack scores so fresher knowledge
+  outranks equally-relevant stale knowledge. rescoring-only — an old
+  artifact loses at most half its score and never vanishes. enabled in
+  the starter config for new kbs; existing kbs keep byte-identical
+  ordering until they add the key (#476).
+- a `retrieval` block on `kb.search` and `kb.context` responses reports
+  the configured vs actually-used backend, whether semantic search is
+  available, and a `degraded` flag — a base install serving lexical hits
+  under a semantic-capable backend name now says so instead of labelling
+  them "hybrid" (#476).
+- ai auto-merge bot: the owner arms auto-merge on a pr with the `auto-merge`
+  label or by commenting `/auto-merge`; a non-core pr then merges once ci is
+  green and CodeRabbit approves. core paths always require owner review via
+  `.github/CODEOWNERS`; ui prs opened without before/after screenshots are
+  auto-closed. review is the gate, not just advice: CodeRabbit
+  (`.coderabbit.yaml`, free for this public repo) submits a formal review and
+  the `coderabbit-gate` workflow turns its verdict into the required
+  `coderabbit-approved` status check — so a fresh push voids a prior approval,
+  and a pr CodeRabbit requests changes on 3 times is auto-closed (owner and
+  bots exempt). no paid model in the loop. deterministic decision logic lives
+  in `src/vouch/pr_bot.py` (pure stdlib). repo guards (branch ruleset + labels)
+  are configured by `scripts/setup_repo_guards.sh`. workflow security is linted
+  in ci with zizmor + actionlint.
+
+### Changed
+- `kb.search` is one implementation (`context.search_kb`) across mcp and
+  jsonl instead of three drifting copies; `auto` now fuses embedding +
+  fts5 via rrf with a substring fallback (it used to waterfall
+  embedding-first), and an omitted backend defers to `retrieval.backend`
+  in config.yaml (#476).
+
 ### Fixed
-- `lifecycle.contradict()` no longer lets a claim contradict itself. calling
-  it with the same claim id on both sides previously wrote a self-loop
-  `contradicts` reference and flipped the claim to `contested` with no
-  actual counterparty; it now raises `LifecycleError`, mirroring the
-  existing guard in `supersede()`.
+- approve/reject/expire record the audit event *before* moving the
+  proposal to decided/. a crash between the two used to leave a durable
+  decision with no authoritative history; it now leaves a pending
+  proposal with its decision event, which the approve retry path already
+  guards (#475).
+- demo image build: `hatch_build.py` (the build hook pyproject.toml
+  declares for console bundling) is copied into the docker build context;
+  the image had been unbuildable since the hook landed (#474).
+
+## [1.3.0] — 2026-07-14
 
 ### Added
-- `kb.triage_pending` — advisory triage scoring over the pending-review queue.
-  Scores each pending proposal on fit, citation quality, duplication risk, and
-  contradiction risk, then attaches a `_meta.vouch_triage` block
-  (`recommendation`, `score`, `signals`, `rationale`) to help a reviewer
-  prioritize a long `kb.list_pending`. Read-only and advisory only: it never
-  calls `kb.approve` / `kb.reject` and never moves a proposal out of pending —
-  a human still decides. Duplication and fit reuse the propose-time embedding
-  similarity path and degrade to a `difflib` heuristic when the `[embeddings]`
-  extra isn't installed. Opt-in via `triage.enabled: true` in `config.yaml`.
-  `vouch triage [proposal-id...]` mirrors it on the CLI with `--json` and
-  `--reverse` (#322).
 - typed `Config` model for `.vouch/config.yaml`: the file is parsed once into a
   validated pydantic `Config` (with nested `ReviewConfig` / `RetrievalConfig`)
   exposed as `KBStore.config`, replacing the per-call-site untyped `dict` reads
@@ -34,18 +67,6 @@ All notable changes to vouch are documented here. Format follows
   top-level keys as likely typos instead of dropping them. existing KBs with
   partial or absent `retrieval:` / `review:` blocks load with the documented
   defaults — no on-disk change (#243).
-- `kb.list_skills` / `kb.get_skill` — agents can enumerate the Claude Code
-  slash-command and `SKILL.md` catalogue visible at `<kb_root>/.claude/` and
-  `~/.claude/` over MCP, then fetch the full body of one by name (project-local
-  entries override user-global on collision). Exposed across MCP (`kb_list_skills`
-  / `kb_get_skill`), JSONL, and the CLI (`vouch list-skills` / `vouch get-skill`).
-- `mcp.publish_skills` config flag (default `true`) — gates the skill catalogue
-  for "company-brain" deployments where the catalogue itself is sensitive. When
-  `false`, `kb.list_skills` returns an empty list and `kb.get_skill` errors with
-  `permission_denied`; the flag is read fresh on every call so flipping it hides
-  the catalogue without restarting the server, and is surfaced on
-  `kb.capabilities.mcp.publish_skills` so clients can detect the gate. An
-  existing KB with no `mcp:` block stays default-on (#235).
 - `vouch console`: serve the vendored React web console straight from the
   installed package — a same-origin `/proxy` bridge (loopback-guarded) to
   `vouch serve --transport http` backends, reimplementing the vite dev-proxy
@@ -59,20 +80,159 @@ All notable changes to vouch are documented here. Format follows
   filtered like `kb.audit`.
 - console Dashboard view: 12-month activity calendar, last-30-days bars,
   hour-of-week heatmap, top actors and event mix, driven by `kb.activity`.
+- `kb.synthesize` llm backend: `llm=true` drafts the answer with the
+  deployment-configured `compile.llm_cmd`, grounded in retrieved kb pages
+  and approved claims. code still verifies every `[id]` citation against
+  the offered sources — invented ids are stripped, and a draft left with no
+  verifiable citation returns an empty answer rather than a guess. the wire
+  shape is unchanged plus additive `pages` and `_meta.synthesis_backend`
+  fields. cli mirror: `vouch synthesize --llm`; the jsonl/http surface
+  already forwarded the flag.
+- console Chat: llm answers activated — the chat asks `kb.synthesize` with
+  `llm: true` and falls back to deterministic claim synthesis when no
+  `compile.llm_cmd` is configured. page citations open the page drawer, and
+  llm answers carry an `llm` badge next to the confidence grade.
+- session transcript viewer: the console Review view opens the full
+  transcript of a captured session — thinking, per-tool call rendering
+  with diffs, code blocks, and subagent drill-down — via the new
+  `kb.session_transcript` read method. it locates the raw claude code
+  jsonl session file or codex rollout by id, parses it into normalized
+  blocks, and degrades to the observation buffer when the raw file is
+  gone.
+- review-gated artifact delete: `kb.propose_delete` files a delete
+  proposal for a claim, page, entity, or relation. execution happens only
+  through `proposals.approve()`, which checks the referenced-by matrix,
+  removes the file, deindexes it, and records exactly what was removed in
+  the decided proposal and audit event.
+- `kb.clear_claims` / `vouch claims-clear`: bulk-remove auto-approved
+  claims (`--auto-only`, `--before`, `--dry-run`, and a confirm gate) for
+  cleaning up capture noise in one pass (#433).
+- session-split summaries: large captured sessions are split into topical
+  summary pages by a deployment-configured llm (`capture.split` in
+  `config.yaml`; the split `llm_cmd` falls back to `compile.llm_cmd`),
+  each filed as its own pending summary. `kb.summarize_session` runs the
+  pass on demand, `kb.list_sessions` lists captured sessions for the
+  review pipeline, and a filed mechanical summary can be llm-narrated in
+  place.
+- codex adapter: `vouch install-mcp codex` now wires the full tier — a
+  `toml_merge` install strategy for `.codex/config.toml`, an agents.md
+  fenced snippet, skills mirroring the vouch slash commands, and hook
+  wiring for automatic session capture. codex session rollouts are
+  ingested into review-gated summaries.
 - codex: wired `UserPromptSubmit` to `vouch context-hook` for the first
   time, reusing the existing command unmodified — codex's hook
   payload/response shape matches claude-code's exactly. (#425)
+- `kb.list_skills` / `kb.get_skill` — agents can enumerate the Claude Code
+  slash-command and `SKILL.md` catalogue visible at `<kb_root>/.claude/` and
+  `~/.claude/` over MCP, then fetch the full body of one by name (project-local
+  entries override user-global on collision). Exposed across MCP (`kb_list_skills`
+  / `kb_get_skill`), JSONL, and the CLI (`vouch list-skills` / `vouch get-skill`).
+- `mcp.publish_skills` config flag (default `true`) — gates the skill catalogue
+  for "company-brain" deployments where the catalogue itself is sensitive. When
+  `false`, `kb.list_skills` returns an empty list and `kb.get_skill` errors with
+  `permission_denied`; the flag is read fresh on every call so flipping it hides
+  the catalogue without restarting the server, and is surfaced on
+  `kb.capabilities.mcp.publish_skills` so clients can detect the gate. An
+  existing KB with no `mcp:` block stays default-on (#235).
+- mcp serves a **minimal tool profile by default** (8 core tools) instead
+  of the full method surface; widen with `VOUCH_TOOL_PROFILE=standard|full`
+  or `mcp.tool_profile` in `config.yaml`. approve/reject and maintenance
+  tools live in `standard`/`full` — they stay human/cli actions, not agent
+  defaults. the jsonl and cli surfaces are unaffected.
+- per-prompt auto-recall: the claude-code adapter's `UserPromptSubmit`
+  hook (`vouch context-hook`) injects relevant kb context on every
+  prompt, so recall no longer depends on the agent remembering to ask.
+- `kb.experts` — rank the entities carrying the most matched evidence on
+  a free-text topic (count, recency, and citation weightings). read-only;
+  answers "who/what does this kb actually know about X" (#315).
+- `kb.triage_pending` — advisory triage scoring over the pending-review
+  queue. scores each pending proposal on fit, citation quality,
+  duplication risk, and contradiction risk, then attaches a
+  `_meta.vouch_triage` block to help a reviewer prioritize a long
+  `kb.list_pending`. read-only and advisory only: it never approves,
+  rejects, or moves a proposal — a human still decides. degrades to a
+  `difflib` heuristic without the `[embeddings]` extra. opt-in via
+  `triage.enabled: true`; `vouch triage` mirrors it on the cli (#322).
+- opt-in cross-encoder rerank of the context pack: enable with
+  `retrieval.rerank.enabled: true` in `config.yaml`; `retrieval.rerank.top_k`
+  bounds the rerank window. off by default (#436).
+- `kb.diff` is registered at all four `kb.*` surface sites (mcp tool,
+  jsonl handler, capabilities, cli) instead of cli-only (#327).
 - dual-solve web ui: file-changes tree view in the candidate panes — a compact
   folders-first file tree drives a per-file diff pane, replacing the flat
   changed-files list and the stacked all-files diff. selection is
   per-candidate, so inspecting claude's diff never moves the codex pane.
   (#294)
+- ``_meta.vouch_hot_memory`` on every primary read-side ``kb.*`` response
+  (``kb.search``, ``kb.context``, ``kb.read_*``, ``kb.list_*``): a TTL-cached
+  sidebar of recently approved claims, query-biased where the tool has a
+  natural anchor (entity name/aliases, page title/tags, claim text, search
+  query). ``kb.list_pending`` uses recency only. Meta-tools, write paths, and
+  lifecycle ops are excluded by design (#225).
+- demo: dual-path llm configuration — compile & summarize run through
+  session-capture replay or directly against the api via a stdlib shim
+  wired as `compile.llm_cmd` with a byo `ANTHROPIC_API_KEY`.
+
+### Changed
+- ``kb.list_*`` JSONL/MCP responses now use a dict envelope
+  ``{"items": [...], "_meta": {...}}`` instead of a bare list. A one-release
+  deprecation note lives at ``_meta.deprecation``; read ``result.items`` instead
+  of treating ``result`` as the list. When the KB has recent approved claims,
+  ``_meta.vouch_hot_memory`` carries the same recency sidebar as other read
+  tools (#225).
+- ``kb.capabilities`` advertises the hot-memory contract under ``hot_memory``
+  (sidebar key, list-envelope flag, covered method list).
+- retrieval `auto`/`hybrid` now **fuses embedding + fts5** results via
+  reciprocal rank fusion instead of a waterfall (embedding-first,
+  fts5-fallback), with near-duplicate suppression over the fused list —
+  the highest-scored near-duplicate wins, caller order is preserved for
+  the context pack.
+- mcp serves one-line tool descriptions under non-full profiles, keeping
+  the default surface cheap in agent context windows.
 
 ### Fixed
+- audit: `log_event` serialises appends with a file lock, so concurrent
+  writers cannot fork the hash chain (#263).
+- `lifecycle.contradict()` no longer lets a claim contradict itself. calling
+  it with the same claim id on both sides previously wrote a self-loop
+  `contradicts` reference and flipped the claim to `contested` with no
+  actual counterparty; it now raises `LifecycleError`, mirroring the
+  existing guard in `supersede()`.
+- rpc internal errors no longer leak tracebacks over the wire; they log
+  server-side and return a clean error envelope.
+- models reject empty `text`/`name`/`title` on claim, entity, and page at
+  validation time instead of filing empty artifacts.
+- `kb.crystallize` retries are idempotent for summary pages — a re-run
+  after a partial failure no longer files a duplicate page proposal.
+- `session.crystallize`: retrying on a session that hasn't been ended rewrote
+  the `session-<id>` summary page with a fresh wall-clock `Ended:` stamp each
+  time (and needlessly re-embedded it), so the "idempotent retry" wasn't. an
+  open session now renders a stable marker, so retries produce an identical
+  body.
+- claude-code: the `UserPromptSubmit` context hook computed retrieval but
+  never fed the entity-salience reflex (#223) — `salience.record_query`
+  was never called from the hook path, leaving the reflex permanently
+  dormant for every claude-code session. OpenClaw's context engine already
+  called it correctly; cursor's `beforeSubmitPrompt` hook cannot accept
+  injected context at all, so it is not wired. (#425)
+- `vouch search` tolerates fts index errors instead of crashing — a
+  broken or stale fts table degrades to the substring path (#438).
+- `list_pages` skips corrupt page files instead of failing the whole
+  listing, so one bad yaml no longer takes down every kb-wide caller
+  (#360).
+- context: the `require_citations` gate is computed after the `max_chars`
+  budget is applied, so a claim trimmed out by the budget can no longer
+  satisfy (or fail) the citation requirement on the pack (#268).
 - `vouch digest --limit` now caps the followups-due section like the
   pending, decisions, and stale sections — it previously returned every
   due followup regardless of the limit, contradicting the `--limit` help.
-
+- `kb.capabilities.host_compat` always reported `{}`: `_load_host_compat`
+  (#237) read `openclaw.compat` from `openclaw.plugin.json`, but that
+  manifest may not carry a top-level `openclaw` key at all (enforced by
+  `test_manifest_carries_no_dead_dialect_fields`) — `openclaw.compat.pluginApi`
+  has only ever lived in `package.json`. Repointed `_load_host_compat` (now
+  reading `_PACKAGE_JSON_PATH`) at `package.json`, where the value has been
+  present all along.
 - the dual-solve diff renderer dropped added/removed lines whose content
   starts with `++`/`--` (e.g. an added `++counter` line) by treating them as
   `+++`/`---` file headers; the header skip now requires the trailing
@@ -83,28 +243,16 @@ All notable changes to vouch are documented here. Format follows
   and pending proposals, never updated as drafts were accepted within the
   batch. Approving the second proposal would silently route through
   `update_page()` and overwrite the first. (#439)
-
-### Fixed
-- claude-code: the `UserPromptSubmit` context hook computed retrieval but
-  never fed the entity-salience reflex (#223) — `salience.record_query`
-  was never called from the hook path, leaving the reflex permanently
-  dormant for every claude-code session. OpenClaw's context engine already
-  called it correctly; cursor's `beforeSubmitPrompt` hook cannot accept
-  injected context at all, so it is not wired. (#425)
-## [1.2.2] — 2026-07-07
-
-### Packaging
-- published to the mcp registry (`registry.modelcontextprotocol.io`, mirrored
-  at `github.com/mcp/vouchdev/vouch`) as `io.github.vouchdev/vouch`. a
-  `server.json` at the repo root carries the metadata; the pypi `vouch-kb`
-  package is the artifact, run over stdio via `uvx vouch-kb serve`.
-- `vouch-kb` console-script alias (alongside `vouch`) so `uvx vouch-kb serve`
-  resolves — the registry launches a package by its pypi identifier, which
-  otherwise wouldn't match the `vouch` script name.
-- README carries an `<!-- mcp-name: io.github.vouchdev/vouch -->` marker;
-  the registry verifies package ownership by matching it against `server.json`.
-
-### Fixed
+- volunteer scoring treats hybrid relevance as rank-relative instead of
+  assuming pre-normalized scores.
+- `kb.capabilities` reads `openclaw.compat` from `package.json` instead
+  of a stale manifest field (#417).
+- the context hook never raises on a non-dict payload or a missing kb —
+  a broken hook environment degrades to no injection instead of failing
+  the host prompt.
+- `context` and `lifecycle` catch only the exceptions they can handle
+  (sqlite errors on fts5 fallback, missing-artifact on citation lookup)
+  instead of blanket `except Exception`.
 - `vouch install-mcp <host>` (codex `toml_merge`): a `config.toml` the minimal
   serializer couldn't faithfully re-emit (a non-BMP string value, a `nan`/`inf`
   float) was bucketed as `skipped` and printed as `(already present)` with a
@@ -120,15 +268,31 @@ All notable changes to vouch are documented here. Format follows
   produced a usable diff" for the entire duration of a still-running job — the
   hint was computed over the not-yet-populated candidate list on every poll.
   it is now omitted until candidates exist.
-- `session.crystallize`: retrying on a session that hasn't been ended rewrote
-  the `session-<id>` summary page with a fresh wall-clock `Ended:` stamp each
-  time (and needlessly re-embedded it), so the "idempotent retry" wasn't. an
-  open session now renders a stable marker, so retries produce an identical
-  body.
 - `vouch capture ingest-codex`: rollout parsing had no size cap and could read
   an oversized (or newline-free blob) rollout whole into memory. the file is
   now bounded to 64 MiB up front, mirroring the byte caps on other untrusted
   reads.
+
+### Security
+- `kb.register_source_from_path` blocks path traversal: the path is
+  resolved (following symlinks) and must land inside the kb root before
+  reading, with `O_NOFOLLOW` + `fstat` closing the toctou window between
+  the containment check and the read. previously any file the process
+  could access was registrable as a "source" and retrievable via
+  `kb.cite` / `kb.list_sources` (#421).
+
+## [1.2.2] — 2026-07-07
+
+### Packaging
+- published to the mcp registry (`registry.modelcontextprotocol.io`, mirrored
+  at `github.com/mcp/vouchdev/vouch`) as `io.github.vouchdev/vouch`. a
+  `server.json` at the repo root carries the metadata; the pypi `vouch-kb`
+  package is the artifact, run over stdio via `uvx vouch-kb serve`.
+- `vouch-kb` console-script alias (alongside `vouch`) so `uvx vouch-kb serve`
+  resolves — the registry launches a package by its pypi identifier, which
+  otherwise wouldn't match the `vouch` script name.
+- README carries an `<!-- mcp-name: io.github.vouchdev/vouch -->` marker;
+  the registry verifies package ownership by matching it against `server.json`.
 
 ## [1.2.1] — 2026-07-06
 
@@ -222,24 +386,6 @@ All notable changes to vouch are documented here. Format follows
 ## [1.1.0] — 2026-07-03
 
 ### Added
-- `kb.diff` — `vouch diff <id-old> <id-new>` (0.1.0) now has full `kb.*`
-  parity: an MCP tool and a JSONL `kb.diff` handler alongside the existing
-  CLI, registered in `capabilities.METHODS` like every other read method.
-  `<id-new>` is now optional for a claim: omitting it resolves the diff
-  against `superseded_by`, with a clear error when the claim has no
-  successor (pages still require an explicit `new_id` — they have no
-  successor pointer). Read-only throughout; still no writes, proposals, or
-  audit events (#327).
-- `vouch flag-anomalies` — advisory anomaly flags on pending proposals (#323).
-  scores every pending claim proposal worst-first with reason codes:
-  `thin_evidence` (barely cited), `contradicts_many` (declares contradictions
-  against approved live claims), and `far_from_corpus` (an outlier vs the
-  approved corpus by nearest-neighbour cosine). the embedding-derived
-  `far_from_corpus` degrades gracefully to no code when the embeddings extra is
-  absent — the two non-embedding codes still compute. thresholds resolve from
-  `review.anomaly.*` in `.vouch/config.yaml`. read-only by construction — a hint
-  for the reviewer that flags nothing durable and never rejects or quarantines,
-  so the review gate is untouched. `--json` for the machine shape.
 - auto-capture: claude code sessions are harvested via hooks and filed as a
   single pending session-summary proposal for human approval. a `PostToolUse`
   hook (`vouch capture observe`) appends compact tool-use observations to an

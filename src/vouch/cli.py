@@ -24,7 +24,6 @@ import click
 import yaml
 
 from . import __version__, bundle, health, volunteer_context
-from . import anomaly as anomaly_mod
 from . import audit as audit_mod
 from . import capture as capture_mod
 from . import codex_rollout as codex_rollout_mod
@@ -67,6 +66,7 @@ from .proposals import (
     check_approvable,
     expire_pending,
     propose_claim,
+    propose_delete,
     propose_entity,
     propose_page,
     propose_relation,
@@ -934,62 +934,6 @@ def pending(as_json: bool) -> None:
         click.echo(f"    {str(preview).strip()[:120]}")
 
 
-@cli.command(name="flag-anomalies")
-@click.option(
-    "--min-evidence",
-    default=None,
-    type=int,
-    help="Flag a pending claim whose evidence count is at or below this "
-    "(default from review.anomaly.min_evidence, else 1).",
-)
-@click.option(
-    "--contradictions",
-    "contradiction_count",
-    default=None,
-    type=int,
-    help="Flag a claim declaring at least this many approved contradictions "
-    "(default from review.anomaly.contradiction_count, else 1).",
-)
-@click.option(
-    "--far-floor",
-    default=None,
-    type=float,
-    help="Flag a claim whose best cosine to the approved corpus is below this "
-    "(default from review.anomaly.far_from_corpus_floor, else 0.35; needs the "
-    "embeddings extra — skipped otherwise).",
-)
-@click.option("--json", "as_json", is_flag=True, help="Emit the machine shape instead of text.")
-def flag_anomalies(
-    min_evidence: int | None,
-    contradiction_count: int | None,
-    far_floor: float | None,
-    as_json: bool,
-) -> None:
-    """Advisory flags on pending proposals that deserve a closer look (#323).
-
-    \b
-    Scores every pending claim proposal, worst-first, with reason codes:
-      • thin_evidence   — barely cited
-      • contradicts_many — declares contradictions against approved claims
-      • far_from_corpus — an outlier vs the approved corpus (needs embeddings)
-
-    Read-only — a hint for the reviewer. It flags nothing durable: no proposal,
-    no approval, no write. Never rejects or quarantines; the human gate is
-    untouched.
-    """
-    store = _load_store()
-    anomalies = anomaly_mod.flag_anomalies(
-        store,
-        min_evidence=min_evidence,
-        contradiction_count=contradiction_count,
-        far_floor=far_floor,
-    )
-    if as_json:
-        _emit_json([a.to_dict() for a in anomalies])
-        return
-    click.echo(anomaly_mod.render_text(anomalies), nl=False)
-
-
 def _proposal_preview(pr: Proposal) -> str:
     preview = (
         pr.payload.get("text")
@@ -1423,6 +1367,54 @@ def propose_claim_cmd(
     click.echo(result.id)
     for w in result.warnings:
         _echo(_format_similarity_warning(w), err=True)
+
+
+@cli.command(name="ingest")
+@click.argument(
+    "path", type=click.Path(exists=True, dir_okay=False, path_type=Path)
+)
+@click.option(
+    "--title", default=None,
+    help="Human label for the source (default: the filename).",
+)
+@click.option(
+    "--no-approve", is_flag=True,
+    help="File the claims but never auto-approve, even if the receipt gate is on.",
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit source id + counts as json.")
+def ingest_cmd(
+    path: Path, title: str | None, no_approve: bool, as_json: bool
+) -> None:
+    """Ingest a file as a source and extract receipt-backed claims from it.
+
+    With review.auto_approve_on_receipt on, every claim whose quote verifies
+    against the source is approved with no human -- "run vouch on a doc and it
+    just captures the knowledge." Without the gate the claims are filed pending
+    for review; a claim that cannot quote its source is never rubber-stamped.
+    """
+    from . import extract as extract_mod
+
+    store = _load_store()
+    with _cli_errors():
+        source, approved = extract_mod.ingest_source(
+            store, path.read_bytes(),
+            proposed_by=_whoami(),
+            title=title or path.name,
+            auto_approve=not no_approve,
+        )
+    pending = sum(
+        1 for p in store.list_proposals(ProposalStatus.PENDING)
+        if p.kind == ProposalKind.CLAIM
+    )
+    if as_json:
+        _emit_json(
+            {"source": source.id, "approved": len(approved), "pending_claims": pending}
+        )
+    else:
+        click.echo(
+            f"ingested {source.id[:12]}… — {len(approved)} claim(s) "
+            f"auto-approved, {pending} pending review"
+        )
 
 
 @cli.command(name="propose-page")
@@ -1875,6 +1867,28 @@ def propose_relation_cmd(src: str, relation: str, target: str, confidence: float
     click.echo(pr.id)
 
 
+@cli.command(name="propose-delete")
+@click.argument("target_kind", type=click.Choice(["claim", "page", "entity", "relation"]))
+@click.argument("target_id")
+@click.option("--rationale", default=None)
+@click.option("--dry-run", is_flag=True, help="Validate without filing the proposal.")
+def propose_delete_cmd(
+    target_kind: str, target_id: str, rationale: str | None, dry_run: bool
+) -> None:
+    """File a review-gated request to hard-delete an artifact."""
+    store = _load_store()
+    with _cli_errors():
+        pr = propose_delete(
+            store,
+            target_kind=target_kind,
+            target_id=target_id,
+            rationale=rationale,
+            dry_run=dry_run,
+            proposed_by=_whoami(),
+        )
+    click.echo(pr.id)
+
+
 # --- sources --------------------------------------------------------------
 
 
@@ -1966,6 +1980,22 @@ def source_verify(fail_on_issue: bool) -> None:
         )
     if fail_on_issue and bad:
         sys.exit(1)
+
+
+@source.command("list")
+@click.option("--json", "as_json", is_flag=True)
+def source_list(as_json: bool) -> None:
+    """List all registered sources."""
+    store = _load_store()
+    sources = store.list_sources()
+    if as_json:
+        _emit_json([s.model_dump(mode="json") for s in sources])
+        return
+    if not sources:
+        click.echo("no sources found")
+        return
+    for src in sources:
+        click.echo(f"{src.id:66} {src.title or src.locator}")
 
 
 @cli.command(name="inbox")
@@ -2072,6 +2102,21 @@ def archive(claim_id: str) -> None:
     with _cli_errors():
         life.archive(store, claim_id=claim_id, actor=_whoami())
     click.echo(f"archived {claim_id}")
+
+
+@cli.command()
+@click.argument("claim_id")
+def redact(claim_id: str) -> None:
+    """Mask secrets in a claim's text and mark it REDACTED.
+
+    For a credential that reached a durable claim. Rewrites the current tree
+    only — the append-only audit log and git history are untouched, so a truly
+    leaked secret must still be rotated (see docs/security/git-retention.md).
+    """
+    store = _load_store()
+    with _cli_errors():
+        life.redact(store, claim_id=claim_id, actor=_whoami())
+    click.echo(f"redacted {claim_id}")
 
 
 @cli.command(name="claims-clear")
@@ -2216,6 +2261,62 @@ def session_end_cmd(session_id: str, note: str | None) -> None:
     _emit_json({"session": sess.id, "proposals": sess.proposal_ids})
 
 
+@session.command("list")
+@click.option("--json", "as_json", is_flag=True)
+def session_list_cmd(as_json: bool) -> None:
+    """List captured sessions for the review pipeline."""
+    from . import session_split
+
+    store = _load_store()
+    rows = session_split.build_session_rows(store)
+    if as_json:
+        _emit_json({"sessions": rows})
+        return
+    if not rows:
+        click.echo("no sessions found")
+        return
+    for row in rows:
+        click.echo(
+            f"{row.get('session_id') or '?':40} "
+            f"{row.get('stage') or '?':10} "
+            f"summarized={'yes' if row.get('summarized') else 'no'}"
+        )
+
+
+@session.command("transcript")
+@click.argument("session_id")
+@click.option(
+    "--agent",
+    type=click.Choice(["claude", "codex"]),
+    default=None,
+    help="Pin the transcript source instead of auto-detecting.",
+)
+def session_transcript_cmd(session_id: str, agent: str | None) -> None:
+    """Emit the normalized transcript of a captured session as JSON."""
+    from . import transcript
+
+    store = _load_store()
+    with _cli_errors():
+        _emit_json(transcript.load_transcript(store, session_id, agent=agent))
+
+
+@session.command("summarize")
+@click.argument("session_id")
+@click.option(
+    "--mode",
+    type=click.Choice(["auto", "split", "mechanical"]),
+    default="auto",
+    show_default=True,
+)
+def session_summarize_cmd(session_id: str, mode: str) -> None:
+    """Roll a session buffer into pending page proposals. Never approves."""
+    from . import session_split
+
+    store = _load_store()
+    with _cli_errors():
+        _emit_json(session_split.summarize(store, session_id, mode=mode))
+
+
 @cli.group()
 def capture() -> None:
     """Automatic session capture (driven by claude code hooks)."""
@@ -2293,6 +2394,37 @@ def capture_finalize_cmd(session_id: str | None) -> None:
         transcript_path=transcript,
     )
     _emit_json(result)
+
+
+@capture.command("answer")
+@click.option("--session-id", default=None, help="Session id (else read from stdin payload).")
+def capture_answer_cmd(session_id: str | None) -> None:
+    """Save the latest Q&A as durable knowledge (Stop hook payload on stdin).
+
+    The Stop hook emits {session_id, transcript_path} on stdin; the session's
+    answer is ingested as a source and its receipt-backed claims are
+    auto-approved under the review opt-in (trusted-agent / auto_approve_on_receipt),
+    else left pending. Always exits 0 so a capture failure can never break the turn.
+    """
+    if sys.stdin.isatty():
+        return
+    try:
+        raw = sys.stdin.read()
+        payload = json.loads(raw) if raw.strip() else {}
+        if not isinstance(payload, dict):
+            return
+        sid = session_id or str(payload.get("session_id") or "")
+        transcript_raw = payload.get("transcript_path")
+        if not sid or not transcript_raw:
+            return
+        store = _capture_store()
+        if store is None:
+            return
+        result = capture_mod.capture_answer(store, sid, Path(str(transcript_raw)))
+        _emit_json(result)
+    except Exception:
+        # a capture failure must never break the user's turn.
+        return
 
 
 @capture.command("finalize-all")
@@ -2699,12 +2831,17 @@ def context_hook() -> None:
 @click.argument("query")
 @click.option("--depth", default=3, show_default=True, type=int)
 @click.option("--max-chars", default=4000, show_default=True, type=int)
-def synthesize(query: str, depth: int, max_chars: int) -> None:
-    """Answer a query from approved claims only, with inline citations."""
+@click.option(
+    "--llm", "use_llm", is_flag=True,
+    help="Draft the answer with the configured compile.llm_cmd, grounded in "
+    "pages and approved claims (citations still verified mechanically).",
+)
+def synthesize(query: str, depth: int, max_chars: int, use_llm: bool) -> None:
+    """Answer a query from the KB, with inline citations."""
     store = _load_store()
     with _cli_errors():
         result = synth.synthesize(
-            store, query=query, depth=depth, max_chars=max_chars,
+            store, query=query, depth=depth, max_chars=max_chars, llm=use_llm,
         )
     _emit_json(result)
 
