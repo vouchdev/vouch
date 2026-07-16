@@ -24,17 +24,15 @@ All notable changes to vouch are documented here. Format follows
   available, and a `degraded` flag — a base install serving lexical hits
   under a semantic-capable backend name now says so instead of labelling
   them "hybrid" (#476).
-- ai auto-merge bot: owner-labeled prs are verified by claude code on their
-  branch (functional smoke-test for `code`, before/after screenshot review
-  for `ui`) and auto-merged when green. core paths always require owner
-  review via `.github/CODEOWNERS`; ui prs opened without before/after
-  screenshots are auto-closed. deterministic decision logic lives in
-  `src/vouch/pr_bot.py` (pure stdlib, no model dependency). the owner can
-  authorize a pr with the auto-merge label or by commenting `/auto-merge`
-  or `/verify`; verification runs behind a `pr-verify` environment approval
-  gate. repo guards (branch ruleset + environment + labels) are configured
-  by `scripts/setup_repo_guards.sh`. workflow security is linted in ci with
-  zizmor + actionlint.
+- ai auto-merge bot: the owner arms auto-merge on a pr with the `auto-merge`
+  label or by commenting `/auto-merge`; a non-core pr then merges once ci is
+  green. core paths always require owner review via `.github/CODEOWNERS`; ui
+  prs opened without before/after screenshots are auto-closed. review is done
+  by CodeRabbit (`.coderabbit.yaml`, free for this public repo) plus the free
+  `ci` + `trust-gate` gates — no paid model in the loop. deterministic
+  decision logic lives in `src/vouch/pr_bot.py` (pure stdlib). repo guards
+  (branch ruleset + labels) are configured by `scripts/setup_repo_guards.sh`.
+  workflow security is linted in ci with zizmor + actionlint.
 
 ### Changed
 - `kb.search` is one implementation (`context.search_kb`) across mcp and

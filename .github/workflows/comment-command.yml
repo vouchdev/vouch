@@ -1,6 +1,7 @@
 name: comment-command
-# slash-command trigger: the owner comments `/auto-merge` or `/verify` on a PR
-# to authorize verification, as an alternative to applying the auto-merge label.
+# slash-command trigger: the owner comments `/auto-merge` on a PR to arm
+# auto-merge, as an alternative to applying the auto-merge label. review is done
+# by CodeRabbit + ci; this only arms native auto-merge for non-core PRs.
 on:
   issue_comment:
     types: [created]
@@ -10,7 +11,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   parse:
-    # only PR comments, only the trusted owner, only a recognized command.
+    # only PR comments, only the trusted owner, only the /auto-merge command.
     if: >
       github.event.issue.pull_request &&
       github.event.comment.author_association == 'OWNER' &&
@@ -21,15 +22,14 @@ jobs:
       pull-requests: write
     outputs:
       is_command: ${{ steps.cmd.outputs.is_command }}
-      head_sha: ${{ steps.meta.outputs.head_sha }}
       klass: ${{ steps.meta.outputs.klass }}
     steps:
-      - name: detect /auto-merge or /verify
+      - name: detect /auto-merge
         id: cmd
         env:
           BODY: ${{ github.event.comment.body }}
         run: |
-          if printf '%s' "$BODY" | grep -Eiq '(^|[[:space:]])/(auto-merge|verify)([[:space:]]|$)'; then
+          if printf '%s' "$BODY" | grep -Eiq '(^|[[:space:]])/auto-merge([[:space:]]|$)'; then
             echo "is_command=true" >> "$GITHUB_OUTPUT"
           else
             echo "is_command=false" >> "$GITHUB_OUTPUT"
@@ -42,7 +42,7 @@ jobs:
         if: steps.cmd.outputs.is_command == 'true'
         with:
           python-version: "3.12"
-      - name: resolve head, classify, and mark authorized
+      - name: classify and mark authorized
         id: meta
         if: steps.cmd.outputs.is_command == 'true'
         env:
@@ -50,27 +50,27 @@ jobs:
           REPO: ${{ github.repository }}
           PR: ${{ github.event.issue.number }}
         run: |
-          head_sha="$(gh pr view "$PR" --repo "$REPO" --json headRefOid --jq .headRefOid)"
           gh pr view "$PR" --repo "$REPO" --json files --jq '.files[].path' > changed.txt
           klass="$(PYTHONPATH=src python -m vouch.pr_bot classify --files-file changed.txt --print-klass)"
           # mark authorized (visible, and enables deauthorize-on-push). a label
           # added via GITHUB_TOKEN does not re-trigger auto-merge.yml (GitHub's
-          # token-recursion guard), so this does not double-run verification.
+          # token-recursion guard), so this does not double-arm.
           gh pr edit "$PR" --repo "$REPO" --add-label auto-merge || true
-          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
           echo "klass=$klass" >> "$GITHUB_OUTPUT"
 
-  call-verify:
+  arm:
     needs: parse
-    if: needs.parse.outputs.is_command == 'true'
+    # core PRs are never armed — CODEOWNERS requires the owner's approval.
+    if: needs.parse.outputs.is_command == 'true' && needs.parse.outputs.klass != 'core'
+    runs-on: ubuntu-latest
     permissions:
       contents: write
       pull-requests: write
-      checks: write
-    uses: ./.github/workflows/pr-verify.yml
-    with:
-      pr_number: ${{ github.event.issue.number }}
-      head_sha: ${{ needs.parse.outputs.head_sha }}
-      klass: ${{ needs.parse.outputs.klass }}
-    secrets:
-      anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+    steps:
+      - name: arm native auto-merge (non-core)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.issue.number }}
+        run: |
+          gh pr merge "$PR" --repo "$REPO" --auto --squash

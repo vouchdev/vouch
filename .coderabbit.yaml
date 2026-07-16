@@ -1,0 +1,36 @@
+# CodeRabbit configuration — https://docs.coderabbit.ai/guides/configure-coderabbit
+# CodeRabbit is the AI reviewer for vouch (free for this public repo). it reviews
+# every non-draft PR automatically. it is advisory: it comments, it does not gate
+# merges. the merge gate stays deterministic — ci + trust-gate + CODEOWNERS, with
+# the owner's auto-merge label as the go signal.
+language: "en-US"
+early_access: false
+reviews:
+  profile: "chill"
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  review_status: true
+  collapse_walkthrough: false
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - "test"
+      - "main"
+  path_instructions:
+    - path: "src/vouch/**"
+      instructions: >-
+        Follow CLAUDE.md and AGENTS.md. Use lowercase prose in comments and
+        review notes. Vouch's load-bearing invariant is the review gate: every
+        write goes through proposals.approve(). Flag any change that adds a
+        parallel data path bypassing the review gate. storage.py is pure I/O —
+        flag business logic added there.
+    - path: ".github/workflows/**"
+      instructions: >-
+        These are core, security-sensitive workflows. Flag any pull_request_target
+        or workflow_run that checks out or runs untrusted head code, any unpinned
+        third-party action, and any untrusted event field interpolated into a run
+        block instead of passed through env.
+chat:
+  auto_reply: true
