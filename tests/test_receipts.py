@@ -173,6 +173,23 @@ def test_verify_evidence_not_verified_when_source_missing(store: KBStore) -> Non
     assert result.verified is False
 
 
+def test_verify_evidence_no_receipt_for_empty_quote_and_missing_source(
+    store: KBStore,
+) -> None:
+    # verify_evidence has its own pre-check ahead of the source-read (so a
+    # missing source doesn't mask a plain "nothing to compare" case) --
+    # it must apply the same falsy-quote rule verify_receipt does, or an
+    # empty quote paired with a missing source reports FORGED instead of
+    # NO_RECEIPT, same bug as verify_receipt's, one call site up.
+    ev = Evidence(
+        id="e4", source_id="does-not-exist",
+        locator="x", quote="", byte_start=0, byte_end=0,
+    )
+    result = verify_evidence(store, ev)
+    assert result.status is ReceiptStatus.NO_RECEIPT
+    assert result.verified is False
+
+
 # ---- the quote step: locate a span, or drop what cannot be quoted ----
 
 

@@ -184,7 +184,7 @@ def verify_evidence(store: KBStore, evidence: Evidence) -> ReceiptResult:
     """
     from .storage import ArtifactNotFoundError
 
-    if evidence.byte_start is None or evidence.byte_end is None or evidence.quote is None:
+    if evidence.byte_start is None or evidence.byte_end is None or not evidence.quote:
         return ReceiptResult(ReceiptStatus.NO_RECEIPT, "no byte-offset span")
     try:
         source_bytes = store.read_source_content(evidence.source_id)
