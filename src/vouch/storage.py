@@ -762,6 +762,9 @@ class KBStore:
     def put_evidence(self, ev: Evidence) -> Evidence:
         if not (self._source_dir(ev.source_id) / "meta.yaml").exists():
             raise ValueError(f"evidence {ev.id} cites unknown source {ev.source_id}")
+        # KBs created before receipts existed have no evidence/ dir; create it
+        # on demand so receipt-backed claims work on any KB, not just fresh init.
+        self._evidence_path(ev.id).parent.mkdir(parents=True, exist_ok=True)
         try:
             with self._evidence_path(ev.id).open("x", encoding="utf-8") as f:
                 f.write(_yaml_dump(ev.model_dump(mode="json")))

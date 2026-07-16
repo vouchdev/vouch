@@ -633,6 +633,20 @@ def test_evidence_can_back_claim(store: KBStore) -> None:
     assert store.get_claim("c1").evidence == ["e1"]
 
 
+def test_evidence_dir_created_on_demand(store: KBStore) -> None:
+    """A KB created before receipts existed has no evidence/ dir. put_evidence
+    must create it rather than crash — regression: receipt-backed capture
+    silently filed 0 claims (source written, evidence write threw) on such KBs.
+    """
+    import shutil
+
+    src = store.put_source(b"raw doc")
+    shutil.rmtree(store.kb_dir / "evidence", ignore_errors=True)
+    ev = store.put_evidence(Evidence(id="e1", source_id=src.id,
+                                     locator="L1-L5", quote="snippet"))
+    assert (store.kb_dir / "evidence" / f"{ev.id}.yaml").exists()
+
+
 # --- proposals ------------------------------------------------------------
 
 
