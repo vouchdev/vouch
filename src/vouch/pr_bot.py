@@ -60,7 +60,10 @@ def _touches(changed: Iterable[str], globs: Iterable[str]) -> bool:
 
 
 def classify(changed: Sequence[str]) -> dict[str, bool]:
-    """Classify a changed-file list. Precedence: core > ui > code."""
+    """Classify a changed-file list. Precedence: core > ui > code.
+
+    Callers that build the changed-file list MUST include rename sources (GitHub REST `previous_filename` / git name-status old path). GraphQL `gh pr view --json files` omits them and can mis-classify core renames (#505).
+    """
     is_core = _touches(changed, CORE_GLOBS)
     is_ui = (not is_core) and _touches(changed, UI_GLOBS)
     return {"is_core": is_core, "is_ui": is_ui, "is_code": not is_core and not is_ui}

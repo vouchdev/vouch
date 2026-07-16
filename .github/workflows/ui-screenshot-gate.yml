@@ -25,7 +25,9 @@ jobs:
           REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
         run: |
-          gh pr view "$PR" --repo "$REPO" --json files --jq '.files[].path' > changed.txt
+          gh api "repos/$REPO/pulls/$PR/files" --paginate \
+            --jq '.[] | [.filename, (.previous_filename // empty)] | .[] | select(length>0)' \
+            > changed.txt
           gh pr view "$PR" --repo "$REPO" --json body --jq '.body // ""' > body.txt
       - name: close UI PR lacking before/after screenshots
         env:
