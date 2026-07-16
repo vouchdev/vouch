@@ -2,34 +2,46 @@ name: auto-merge
 on:
   pull_request_target:
     types: [labeled, synchronize]
-permissions:
-  contents: write
-  pull-requests: write
-  checks: write
+# deny-all by default; each job is granted only what it needs. the verify job,
+# which runs untrusted head code, deliberately gets no contents:write.
+permissions: {}
 jobs:
-  guard:
-    # trigger on the auto-merge label (just added, or already present on a
-    # re-push). the label can only be applied by a maintainer — contributors
-    # lack the permission — and the step below pins the labeler to the trusted
-    # owner and strips the label if anyone else applies it, so that step is the
-    # real authorization gate. this lets the owner authorize a CONTRIBUTOR's PR
-    # by labeling it, not just their own PRs.
+  # any push to a labeled PR VOIDS the prior authorization. this job never
+  # checks out or runs head code — it only disarms. re-verification requires a
+  # fresh label from the owner on the new head, which closes the label-then-swap
+  # TOCTOU (a benign commit is labeled, then malicious commits are pushed).
+  deauthorize-on-push:
     if: >
-      github.event.label.name == 'auto-merge' ||
+      github.event.action == 'synchronize' &&
       contains(github.event.pull_request.labels.*.name, 'auto-merge')
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: void authorization on new commits
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          gh pr merge "$PR" --repo "$REPO" --disable-auto || true
+          gh pr edit "$PR" --repo "$REPO" --remove-label auto-merge || true
+          gh pr comment "$PR" --repo "$REPO" --body \
+            "new commits were pushed after the auto-merge label, so the prior verification no longer matches the head. auto-merge is disarmed and the label removed — re-add the auto-merge label to re-verify the new commits."
+
+  guard:
+    # only a FRESH label starts verification (no re-entry on synchronize), and
+    # only from the trusted owner — fail closed otherwise.
+    if: github.event.action == 'labeled' && github.event.label.name == 'auto-merge'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
     outputs:
       klass: ${{ steps.classify.outputs.klass }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.base.sha }}
-          persist-credentials: false
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: the labeler must be trusted (primary authorization gate)
-        if: github.event.action == 'labeled'
+      - name: the labeler must be the trusted owner (fail closed)
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -38,11 +50,17 @@ jobs:
         run: |
           if [ "$SENDER" != "plind-junior" ]; then
             echo "::error::auto-merge label applied by an untrusted actor ($SENDER)"
-            # strip it so an untrusted label can't persist and bypass this check
-            # on a later synchronize (push) event.
+            # strip it so an untrusted label can't persist on the PR.
             gh pr edit "$PR" --repo "$REPO" --remove-label auto-merge || true
             exit 1
           fi
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - name: classify
         id: classify
         env:
@@ -57,9 +75,15 @@ jobs:
   verify:
     needs: guard
     runs-on: ubuntu-latest
+    # least privilege: untrusted head code runs in this job, so NO contents:write.
+    permissions:
+      contents: read
+      pull-requests: write
+      checks: write
     steps:
-      # authorized to run head code because a trusted owner applied the label.
-      # head.sha is a commit hash (not injectable), unlike head.ref/head.label.
+      # pin to the SHA that was labeled (from the labeled-event payload) so a
+      # concurrent push cannot swap in different code for this run. head.sha is a
+      # commit hash (not injectable), unlike head.ref/head.label.
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha }}
@@ -100,6 +124,9 @@ jobs:
     # core PRs are never armed — CODEOWNERS requires the owner's approval.
     if: needs.guard.outputs.klass != 'core'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
       - name: arm native auto-merge (non-core)
         env:
