@@ -143,3 +143,81 @@ def test_codeowners_covers_every_core_glob():
     for glob in pr_bot.CORE_GLOBS:
         needle = "/" + glob.replace("/**", "/")
         assert needle in text, f"{glob} missing from .github/CODEOWNERS"
+
+
+def _review(state, sha, login="coderabbitai[bot]"):
+    return {"user": {"login": login}, "state": state, "commit_id": sha}
+
+
+def test_coderabbit_pending_when_no_review_on_head():
+    # approved an earlier commit, but head has no coderabbit review yet.
+    reviews = [_review("APPROVED", "old")]
+    assert pr_bot.coderabbit_verdict(reviews, head_sha="new") == ("pending", 0)
+
+
+def test_coderabbit_approved_on_head():
+    reviews = [_review("CHANGES_REQUESTED", "c1"), _review("APPROVED", "c2")]
+    assert pr_bot.coderabbit_verdict(reviews, head_sha="c2") == ("approved", 1)
+
+
+def test_coderabbit_changes_on_head():
+    reviews = [_review("CHANGES_REQUESTED", "c1")]
+    assert pr_bot.coderabbit_verdict(reviews, head_sha="c1") == ("changes", 1)
+
+
+def test_coderabbit_strikes_count_distinct_commits():
+    reviews = [
+        _review("CHANGES_REQUESTED", "c1"),
+        _review("CHANGES_REQUESTED", "c1"),  # same commit, still one strike
+        _review("CHANGES_REQUESTED", "c2"),
+        _review("CHANGES_REQUESTED", "c3"),
+    ]
+    verdict, strikes = pr_bot.coderabbit_verdict(reviews, head_sha="c3")
+    assert (verdict, strikes) == ("changes", 3)
+
+
+def test_coderabbit_ignores_other_reviewers_and_comments():
+    reviews = [
+        _review("APPROVED", "c1", login="rando"),      # not coderabbit
+        _review("COMMENTED", "c1"),                     # no verdict
+        _review("CHANGES_REQUESTED", "c1"),
+    ]
+    assert pr_bot.coderabbit_verdict(reviews, head_sha="c1") == ("changes", 1)
+
+
+def test_gate_status_maps_verdicts():
+    assert pr_bot.gate_status("approved") == "success"
+    assert pr_bot.gate_status("changes") == "failure"
+    assert pr_bot.gate_status("pending") == "pending"
+
+
+def test_should_close_after_three_strikes():
+    assert pr_bot.should_close("changes", 3, author="rando") is True
+    assert pr_bot.should_close("changes", 2, author="rando") is False
+
+
+def test_should_close_never_when_approved():
+    assert pr_bot.should_close("approved", 5, author="rando") is False
+
+
+def test_should_close_exempts_owner_and_bots():
+    assert pr_bot.should_close("changes", 9, author="plind-junior") is False
+    assert pr_bot.should_close("changes", 9, author="dependabot[bot]") is False
+
+
+def test_cli_coderabbit_gate_outputs(tmp_path):
+    import json as _json
+    f = tmp_path / "reviews.json"
+    f.write_text(_json.dumps([
+        _review("CHANGES_REQUESTED", "c1"),
+        _review("CHANGES_REQUESTED", "c2"),
+        _review("CHANGES_REQUESTED", "head"),
+    ]), encoding="utf-8")
+    out = subprocess.run(
+        [sys.executable, "-m", "vouch.pr_bot", "coderabbit-gate",
+         "--reviews-file", str(f), "--head-sha", "head", "--author", "rando"],
+        capture_output=True, text=True, check=True)
+    assert "state=failure" in out.stdout
+    assert "verdict=changes" in out.stdout
+    assert "strikes=3" in out.stdout
+    assert "close=true" in out.stdout
