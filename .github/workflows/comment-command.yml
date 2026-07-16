@@ -51,7 +51,9 @@ jobs:
           PR: ${{ github.event.issue.number }}
         run: |
           head_sha="$(gh pr view "$PR" --repo "$REPO" --json headRefOid --jq .headRefOid)"
-          gh pr view "$PR" --repo "$REPO" --json files --jq '.files[].path' > changed.txt
+          gh api "repos/$REPO/pulls/$PR/files" --paginate \
+            --jq '.[] | [.filename, (.previous_filename // empty)] | .[] | select(length>0)' \
+            > changed.txt
           klass="$(PYTHONPATH=src python -m vouch.pr_bot classify --files-file changed.txt --print-klass)"
           # mark authorized (visible, and enables deauthorize-on-push). a label
           # added via GITHUB_TOKEN does not re-trigger auto-merge.yml (GitHub's

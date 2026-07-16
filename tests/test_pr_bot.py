@@ -102,3 +102,22 @@ def test_codeowners_covers_every_core_glob():
     for glob in pr_bot.CORE_GLOBS:
         needle = "/" + glob.replace("/**", "/")
         assert needle in text, f"{glob} missing from .github/CODEOWNERS"
+
+
+def test_classify_treats_renamed_core_previous_path_as_core():
+    """Workflows must feed previous_filename into classify (#505)."""
+    from vouch import pr_bot
+
+    # What REST pulls/files emits for `git mv http_server.py web_server.py`:
+    # filename=web_server.py, previous_filename=http_server.py
+    changed = ["src/vouch/web_server.py", "src/vouch/http_server.py"]
+    assert pr_bot.classify(changed)["is_core"] is True
+    assert pr_bot.klass(changed) == "core"
+
+
+def test_classify_misses_core_when_only_new_rename_path_present():
+    # Documents the GraphQL-only blind spot that workflows must not use.
+    from vouch import pr_bot
+
+    changed = ["src/vouch/web_server.py"]
+    assert pr_bot.classify(changed)["is_core"] is False
