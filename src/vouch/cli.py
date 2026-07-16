@@ -2396,6 +2396,37 @@ def capture_finalize_cmd(session_id: str | None) -> None:
     _emit_json(result)
 
 
+@capture.command("answer")
+@click.option("--session-id", default=None, help="Session id (else read from stdin payload).")
+def capture_answer_cmd(session_id: str | None) -> None:
+    """Save the latest Q&A as durable knowledge (Stop hook payload on stdin).
+
+    The Stop hook emits {session_id, transcript_path} on stdin; the session's
+    answer is ingested as a source and its receipt-backed claims are
+    auto-approved under the review opt-in (trusted-agent / auto_approve_on_receipt),
+    else left pending. Always exits 0 so a capture failure can never break the turn.
+    """
+    if sys.stdin.isatty():
+        return
+    try:
+        raw = sys.stdin.read()
+        payload = json.loads(raw) if raw.strip() else {}
+        if not isinstance(payload, dict):
+            return
+        sid = session_id or str(payload.get("session_id") or "")
+        transcript_raw = payload.get("transcript_path")
+        if not sid or not transcript_raw:
+            return
+        store = _capture_store()
+        if store is None:
+            return
+        result = capture_mod.capture_answer(store, sid, Path(str(transcript_raw)))
+        _emit_json(result)
+    except Exception:
+        # a capture failure must never break the user's turn.
+        return
+
+
 @capture.command("finalize-all")
 @click.option("--session-id", default=None, help="Current session id (else env VOUCH_SESSION_ID).")
 @click.option("--max-age-seconds", type=float, default=3600.0, help="Max age in seconds.")

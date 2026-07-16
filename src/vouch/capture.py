@@ -4,8 +4,14 @@ Passive harvest -> mechanical rollup -> one PENDING page proposal. No LLM.
 `observe` appends compact observations to an ephemeral, gitignored scratch
 buffer (`.vouch/captures/<session>.jsonl`); `finalize` rolls the buffer plus a
 git-diff backstop into a single session-summary page proposal that a human
-approves like any other write. Never calls approve() — the review gate stays
-intact. See docs/superpowers/specs/2026-07-01-vouch-session-autocapture-design.md
+approves like any other write. The tool-activity path never calls approve().
+
+`capture_answer` is the one exception, and it stays inside the gate: it ingests
+a session's answer as a source, files receipt-backed claims, and self-approves
+only what `proposals.approve` already allows (trusted-agent or the receipt
+gate). With neither opt-in set it too leaves the claims pending. See
+docs/superpowers/specs/2026-07-01-vouch-session-autocapture-design.md and
+docs/superpowers/specs/2026-07-16-passive-answer-memory-design.md
 """
 
 from __future__ import annotations
@@ -240,6 +246,105 @@ def first_user_prompt(transcript_path: Path, *, max_chars: int = 240) -> str | N
     return None
 
 
+def _genuine_user_text(obj: dict[str, Any]) -> str | None:
+    """The human-typed text of a user turn, or None for meta/wrapper/tool turns.
+
+    Same filtering as ``first_user_prompt``: skips ``isMeta`` rows, host wrapper
+    messages (``<command-name>…``, ``<task-notification>…``) and caveats, and
+    tool_result turns (which carry no ``text`` block). Whitespace is collapsed.
+    """
+    if obj.get("type") != "user" or obj.get("isMeta"):
+        return None
+    msg = obj.get("message")
+    content = msg.get("content") if isinstance(msg, dict) else None
+    texts: list[str] = []
+    if isinstance(content, str):
+        texts = [content]
+    elif isinstance(content, list):
+        texts = [
+            str(c.get("text", ""))
+            for c in content
+            if isinstance(c, dict) and c.get("type") == "text"
+        ]
+    for raw in texts:
+        text = raw.strip()
+        if not text or text.startswith("<"):
+            continue
+        if text.lower().startswith("caveat:"):
+            continue
+        return " ".join(text.split())
+    return None
+
+
+def _assistant_text(obj: dict[str, Any]) -> str | None:
+    """Concatenated text blocks of an assistant turn, or None (tool-only turns).
+
+    Keeps internal newlines between blocks — the answer becomes a source whose
+    byte-offset receipts must match its stored bytes verbatim, so it is not
+    re-wrapped or whitespace-collapsed the way a one-line prompt is.
+    """
+    if obj.get("type") != "assistant":
+        return None
+    msg = obj.get("message")
+    content = msg.get("content") if isinstance(msg, dict) else None
+    parts: list[str] = []
+    if isinstance(content, str):
+        parts = [content]
+    elif isinstance(content, list):
+        parts = [
+            str(c.get("text", ""))
+            for c in content
+            if isinstance(c, dict) and c.get("type") == "text"
+        ]
+    joined = "\n".join(p.strip() for p in parts if p.strip()).strip()
+    return joined or None
+
+
+def last_exchange(
+    transcript_path: Path,
+    *,
+    max_question_chars: int = 240,
+    max_answer_chars: int = 20000,
+) -> tuple[str, str] | None:
+    """Extract the most recent (user question, assistant answer) from a transcript.
+
+    Pure extraction — no model. Pairs the last assistant text turn with the most
+    recent genuine user prompt at or before it (at Stop-hook time the transcript
+    ends on the assistant turn, so that is the triggering question). Returns None
+    when there is no assistant answer at all. The answer keeps its internal
+    newlines; only the outer length is bounded to ``max_answer_chars``.
+    """
+    try:
+        fh = transcript_path.open(encoding="utf-8")
+    except OSError:
+        return None
+    question: str | None = None
+    pair: tuple[str, str] | None = None
+    with fh:
+        for line in fh:
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(obj, dict):
+                continue
+            user = _genuine_user_text(obj)
+            if user is not None:
+                question = user
+                continue
+            answer = _assistant_text(obj)
+            if answer is not None:
+                pair = (question or "", answer)
+    if pair is None:
+        return None
+    q, a = pair
+    if len(q) > max_question_chars:
+        q = q[: max_question_chars - 1].rstrip() + "…"
+    if len(a) > max_answer_chars:
+        a = a[:max_answer_chars].rstrip()
+    return q, a
+
+
 def _excerpt(prompt: str, *, max_chars: int = 64) -> str:
     if len(prompt) <= max_chars:
         return prompt
@@ -346,6 +451,99 @@ def finalize(
         store, session_id, intent=intent, cwd=cwd, project=project,
         generated_at=generated_at, mode=mode, config=config,
     )
+
+
+ANSWER_ACTOR = CAPTURE_ACTOR
+DEFAULT_MIN_ANSWER_CHARS = 160
+DEFAULT_MAX_ANSWER_CLAIMS = 12
+
+
+def _answer_skip(session_id: str, reason: str) -> dict[str, Any]:
+    return {
+        "captured": False, "skipped": reason, "session_id": session_id,
+        "source": None, "filed": 0, "approved": 0,
+    }
+
+
+def capture_answer(
+    store: KBStore,
+    session_id: str,
+    transcript_path: Path,
+    *,
+    min_answer_chars: int = DEFAULT_MIN_ANSWER_CHARS,
+    max_claims: int = DEFAULT_MAX_ANSWER_CLAIMS,
+    config: CaptureConfig | None = None,
+) -> dict[str, Any]:
+    """Turn a session's latest Q&A into durable, recallable knowledge.
+
+    Fires from a host Stop hook (the turn just finished). Extracts the last
+    exchange, ingests the *answer* as a content-addressed source, files a
+    receipt-backed claim per quotable span (``extract.extract_receipt_claims``),
+    and approves each one the review gate allows — self-approval clears under
+    ``review.approver_role: trusted-agent`` or, for these verbatim-quoting
+    claims, ``review.auto_approve_on_receipt``. With neither gate on the claims
+    stay pending: the review gate is honoured, never bypassed.
+
+    Idempotent and quiet by design: an answer already ingested (same bytes) is
+    skipped, and answers shorter than ``min_answer_chars`` (acknowledgements)
+    are ignored, so a Stop hook firing every turn does not fill the KB with
+    noise or duplicates.
+    """
+    import os
+
+    from . import extract as extract_mod
+    from . import proposals as proposals_mod
+    from .proposals import ProposalError
+    from .storage import ArtifactNotFoundError, sha256_hex
+
+    # vouch's own LLM subprocesses set this so the agent session they spawn does
+    # not capture itself back into the KB (mirrors load_config's contract).
+    if os.environ.get("VOUCH_CAPTURE_DISABLE") == "1":
+        return _answer_skip(session_id, "disabled-env")
+    cfg = config or load_config(store)
+    if not cfg.enabled:
+        return _answer_skip(session_id, "disabled")
+
+    exchange = last_exchange(transcript_path)
+    if exchange is None:
+        return _answer_skip(session_id, "no-answer")
+    question, answer = exchange
+    if len(answer) < min_answer_chars:
+        return _answer_skip(session_id, "answer-too-short")
+
+    content = answer.encode("utf-8")
+    sid = sha256_hex(content)
+    try:
+        store.get_source(sid)
+        return _answer_skip(session_id, "already-captured")
+    except ArtifactNotFoundError:
+        pass
+
+    source = store.put_source(
+        content,
+        title=question or f"session {session_id} answer",
+        source_type="message",
+        tags=["session-answer"],
+        metadata={"session_id": session_id, "question": question},
+    )
+    filed = extract_mod.extract_receipt_claims(
+        store, source.id, proposed_by=ANSWER_ACTOR, limit=max_claims,
+    )
+    approved = 0
+    for result in filed:
+        try:
+            proposals_mod.approve(
+                store, result.proposal.id, approved_by=ANSWER_ACTOR,
+                reason="auto-captured session answer (receipt verified)",
+            )
+            approved += 1
+        except ProposalError:
+            # gate closed (no trusted-agent, no receipt opt-in): leave pending.
+            pass
+    return {
+        "captured": True, "skipped": None, "session_id": session_id,
+        "source": source.id, "filed": len(filed), "approved": approved,
+    }
 
 
 def pending_count(store: KBStore) -> int:

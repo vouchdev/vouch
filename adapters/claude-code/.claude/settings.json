@@ -66,6 +66,18 @@
         ]
       }
     ],
+    "Stop": [
+      {
+        "comment": "save this turn's answer as durable, recallable knowledge — receipt-backed claims, auto-approved only under the review opt-in (trusted-agent / auto_approve_on_receipt); fires every turn but skips short/duplicate answers; never blocks the turn",
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "vouch capture answer || true"
+          }
+        ]
+      }
+    ],
     "SessionEnd": [
       {
         "matcher": "*",
