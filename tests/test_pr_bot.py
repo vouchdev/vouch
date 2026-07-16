@@ -1,5 +1,6 @@
 import subprocess
 import sys
+from pathlib import Path
 
 from vouch import pr_bot
 
@@ -94,3 +95,10 @@ def test_cli_trust_exit_codes():
     bad = subprocess.run([sys.executable, "-m", "vouch.pr_bot", "trust",
                           "--author-association", "NONE", "--actor", "rando"])
     assert ok.returncode == 0 and bad.returncode == 1
+
+
+def test_codeowners_covers_every_core_glob():
+    text = Path(".github/CODEOWNERS").read_text(encoding="utf-8")
+    for glob in pr_bot.CORE_GLOBS:
+        needle = "/" + glob.replace("/**", "/")
+        assert needle in text, f"{glob} missing from .github/CODEOWNERS"
