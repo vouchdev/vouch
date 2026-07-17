@@ -116,15 +116,14 @@ make check                     # the CI gate: lint + type + test
 
 After exploring the demo above, set up vouch in your own project:
 
-**1. Set up the KB and wire Claude Code** (one-time, per repo):
+**1. Set up the KB and wire Claude Code** (one command, one-time, per repo):
 
 ```bash
 cd /path/to/your/project
-vouch init                          # creates .vouch/ with starter config
-vouch install-mcp claude-code       # wires capture hooks into Claude Code
+vouch install-mcp claude-code       # creates .vouch/ (if missing) + wires Claude Code
 ```
 
-`install-mcp` writes `.mcp.json` (the `kb.*` MCP tools), the `/vouch-*` slash commands, and three hooks — `PostToolUse` capture, `SessionEnd` rollup, `SessionStart` recall. Restart Claude Code so they load.
+`install-mcp` initialises the KB when no `.vouch/` is discoverable (pass `--no-init` to skip; `vouch init` still exists for KB-only setup), then writes `.mcp.json` (the `kb.*` MCP tools), the `/vouch-*` slash commands, and five hooks — `SessionStart` recall, `UserPromptSubmit` per-prompt recall, `PostToolUse` capture, `Stop` answer capture, `SessionEnd` rollup. Restart Claude Code so they load.
 
 **2. Point `compile` at an LLM** — the only step that needs a model. In `.vouch/config.yaml`:
 
@@ -145,43 +144,15 @@ compile:
 vouch review                    # walk pending proposals one at a time
 ```
 
-**Want a browser UI for reviewing and proposing?** The video shows the **vouch webapp** — chat, review queue, claims, and stats. You have four options:
+**Want a browser UI for reviewing and proposing?** The video shows the **vouch webapp** — chat, review queue, claims, and stats. Your options:
 
-- **No setup**: Use the Docker demo (recommended)
-- **pip, no clone**: `pipx install 'vouch-kb[web]'` then `vouch console` — serves the same React console from the installed package (Python only, no Docker, no node), open http://localhost:5173
-- **Local development**: Clone the repo, run `make console`, open http://localhost:5173
-- **CLI-only**: Use `vouch review`, `vouch show <id>`, `vouch approve <id>` commands instead
+- **No setup**: the Docker demo above
+- **pip, no clone**: `pipx install 'vouch-kb[web]'` then `vouch console` (Python only, no Docker, no node) — open http://localhost:5173
+- **Local development**: clone the repo, run `make console`
+- **Lighter built-in queue**: `vouch review-ui` (also in the `[web]` extra)
+- **CLI-only**: `vouch pending`, `vouch show <id>`, `vouch approve <id>`, `vouch reject <id> --reason "…"`
 
-**Point the webapp at your existing KB:**
-
-```bash
-# Terminal 1: start the vouch server pointing at your .vouch/
-cd /path/to/your/project
-vouch serve --transport http --port 8731
-
-# Terminal 2: run the Docker UI pointing at that server
-docker run --rm -p 127.0.0.1:5173:5173 \
-  -e VOUCH_TARGET=http://host.docker.internal:8731 \
-  ghcr.io/plind-junior/vouch-demo
-# then open http://localhost:5173
-```
-
-Or serve that same console with no Docker — `vouch console` in place of Terminal 2 (needs the `[web]` extra), then add the `:8731` backend in the connect dialog:
-
-```bash
-vouch console                   # http://localhost:5173, proxying to the server above
-```
-
-Or to skip the browser entirely and use the CLI tools:
-
-```bash
-vouch review                    # walk pending proposals
-vouch show <id>                 # inspect a claim or page
-vouch approve <id>              # approve a proposal
-vouch reject <id> --reason "…"  # reject with feedback
-```
-
-Both browser UIs ship with vouch under the `[web]` extra (`pipx install 'vouch-kb[web]'`): `vouch console` is the full React console shown in the video; `vouch review-ui` is a lighter built-in review queue. Or go piecemeal: `vouch pending`, `vouch show <id>`, `vouch approve <id>`, `vouch reject <id> --reason "…"`.
+To point any of them at an existing KB, start a backend in your project — `vouch serve --transport http --port 8731` — then connect the console to `:8731` (for the Docker demo, pass `-e VOUCH_TARGET=http://host.docker.internal:8731`).
 
 **5. Compile the wiki.**
 
