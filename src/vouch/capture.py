@@ -479,10 +479,12 @@ def capture_answer(
     Fires from a host Stop hook (the turn just finished). Extracts the last
     exchange, ingests the *answer* as a content-addressed source, files a
     receipt-backed claim per quotable span (``extract.extract_receipt_claims``),
-    and approves each one the review gate allows — self-approval clears under
+    and auto-approves each one — self-approval clears under
     ``review.approver_role: trusted-agent`` or, for these verbatim-quoting
-    claims, ``review.auto_approve_on_receipt``. With neither gate on the claims
-    stay pending: the review gate is honoured, never bypassed.
+    claims, ``review.auto_approve_on_receipt``. Passive capture is strictly
+    opt-in: with neither gate set it does nothing (returns ``gate-closed``), so
+    it never floods the review queue with a pending claim per answer. The gated
+    session-rollup path (``finalize``) is the review-first capture flow.
 
     Idempotent and quiet by design: an answer already ingested (same bytes) is
     skipped, and answers shorter than ``min_answer_chars`` (acknowledgements)
@@ -503,6 +505,16 @@ def capture_answer(
     cfg = config or load_config(store)
     if not cfg.enabled:
         return _answer_skip(session_id, "disabled")
+
+    # Passive answer-capture is strictly opt-in: with no auto-approve gate set it
+    # does nothing, rather than flood the review queue with a pending claim per
+    # answer. The gated session-rollup path handles review-first capture.
+    review = proposals_mod._review_config(store)
+    if not (
+        review.get("auto_approve_on_receipt")
+        or review.get("approver_role") == "trusted-agent"
+    ):
+        return _answer_skip(session_id, "gate-closed")
 
     exchange = last_exchange(transcript_path)
     if exchange is None:
@@ -538,7 +550,8 @@ def capture_answer(
             )
             approved += 1
         except ProposalError:
-            # gate closed (no trusted-agent, no receipt opt-in): leave pending.
+            # defensive: the gate is open (checked above), but a protected kind
+            # or a race could still block a single claim — leave it pending.
             pass
     return {
         "captured": True, "skipped": None, "session_id": session_id,

@@ -134,16 +134,16 @@ def test_capture_answer_approves_under_trusted_agent(store: KBStore, tmp_path: P
     assert res["approved"] == res["filed"] >= 3
 
 
-def test_capture_answer_leaves_pending_when_gate_off(store: KBStore, tmp_path: Path) -> None:
-    # default starter config: neither opt-in set.
+def test_capture_answer_skips_when_gate_off(store: KBStore, tmp_path: Path) -> None:
+    # default starter config: neither opt-in set. passive capture is opt-in, so
+    # it does NOTHING rather than flood the review queue with per-answer claims.
     tp = _transcript(tmp_path, [_user(QUESTION), _assistant(ANSWER)])
     res = cap.capture_answer(store, "sess-1", tp)
-    assert res["captured"] is True
-    assert res["filed"] >= 3
-    assert res["approved"] == 0
-    # the review gate is honoured — claims wait for a human.
-    pending = [p for p in store.list_proposals(ProposalStatus.PENDING)]
-    assert len(pending) >= 3
+    assert res["captured"] is False
+    assert res["skipped"] == "gate-closed"
+    assert res["filed"] == 0
+    # nothing was written — no source, no pending proposals.
+    assert store.list_proposals(ProposalStatus.PENDING) == []
 
 
 def test_capture_answer_skips_short_answer(store: KBStore, tmp_path: Path) -> None:
