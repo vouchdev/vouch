@@ -26,6 +26,7 @@ from typing import Any
 
 import yaml
 
+from .capture_filters import is_coding_answer
 from .models import ProposalStatus
 from .secrets import mask_secrets
 from .storage import KBStore
@@ -33,6 +34,7 @@ from .storage import KBStore
 DEFAULT_ENABLED = True
 DEFAULT_MIN_OBSERVATIONS = 3
 DEFAULT_DEDUP_WINDOW_SECONDS = 60.0
+DEFAULT_SKIP_CODING = False
 CAPTURE_ACTOR = "vouch-capture"
 CAPTURE_PAGE_TYPE = "session"
 
@@ -42,6 +44,7 @@ class CaptureConfig:
     enabled: bool = DEFAULT_ENABLED
     min_observations: int = DEFAULT_MIN_OBSERVATIONS
     dedup_window_seconds: float = DEFAULT_DEDUP_WINDOW_SECONDS
+    skip_coding: bool = DEFAULT_SKIP_CODING
 
 
 def load_config(store: KBStore) -> CaptureConfig:
@@ -61,6 +64,7 @@ def load_config(store: KBStore) -> CaptureConfig:
         dedup_window_seconds=float(
             raw.get("dedup_window_seconds", DEFAULT_DEDUP_WINDOW_SECONDS)
         ),
+        skip_coding=bool(raw.get("skip_coding", DEFAULT_SKIP_CODING)),
     )
 
 
@@ -510,6 +514,8 @@ def capture_answer(
     question, answer = exchange
     if len(answer) < min_answer_chars:
         return _answer_skip(session_id, "answer-too-short")
+    if cfg.skip_coding and is_coding_answer(question, answer):
+        return _answer_skip(session_id, "coding-content")
 
     content = answer.encode("utf-8")
     sid = sha256_hex(content)

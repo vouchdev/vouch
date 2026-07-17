@@ -210,3 +210,64 @@ def test_capture_answer_disabled_by_env(
     res = cap.capture_answer(store, "sess-1", tp)
     assert res["captured"] is False
     assert res["skipped"] == "disabled-env"
+
+
+# --- coding-content skip -------------------------------------------------
+
+CODING_ANSWER = (
+    "```python\n"
+    "def fib(n: int) -> int:\n"
+    "    a, b = 0, 1\n"
+    "    for _ in range(n):\n"
+    "        a, b = b, a + b\n"
+    "    return a\n"
+    "\n"
+    "def fact(n: int) -> int:\n"
+    "    total = 1\n"
+    "    for i in range(2, n + 1):\n"
+    "        total *= i\n"
+    "    return total\n"
+    "```"
+)  # purely fenced code, > 160 chars so it clears the too-short gate
+
+
+def test_capture_answer_skips_coding_when_enabled(store: KBStore, tmp_path: Path) -> None:
+    store.config_path.write_text("capture:\n  skip_coding: true\n", encoding="utf-8")
+    tp = _transcript(
+        tmp_path, [_user("write fib and factorial"), _assistant(CODING_ANSWER)]
+    )
+    res = cap.capture_answer(store, "sess-1", tp)
+    assert res["captured"] is False
+    assert res["skipped"] == "coding-content"
+    # nothing durable was written and no source was ingested.
+    assert cap.pending_count(store) == 0
+    assert list(store.list_claims()) == []
+
+
+def test_capture_answer_keeps_coding_when_default(store: KBStore, tmp_path: Path) -> None:
+    # regression guard: default config (skip_coding off) is unchanged.
+    tp = _transcript(
+        tmp_path, [_user("write fib and factorial"), _assistant(CODING_ANSWER)]
+    )
+    res = cap.capture_answer(store, "sess-1", tp)
+    assert res["skipped"] != "coding-content"
+    assert res["captured"] is True
+
+
+def test_capture_answer_keeps_decision_about_code(store: KBStore, tmp_path: Path) -> None:
+    # durable override: skip_coding on, but a decision *about* code is kept.
+    store.config_path.write_text(
+        "capture:\n  skip_coding: true\nreview:\n  auto_approve_on_receipt: true\n",
+        encoding="utf-8",
+    )
+    decision = (
+        "We chose an append-only jsonl audit log instead of a sql table "
+        "because plaintext diffs in pull requests are the whole point, and a "
+        "binary store would break that review property for every write."
+    )
+    tp = _transcript(
+        tmp_path, [_user("why jsonl for the audit log?"), _assistant(decision)]
+    )
+    res = cap.capture_answer(store, "sess-1", tp)
+    assert res["skipped"] != "coding-content"
+    assert res["captured"] is True
