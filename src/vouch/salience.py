@@ -35,7 +35,7 @@ DEFAULT_WINDOW = 8
 DEFAULT_TOP_K = 3
 _EXPIRY_SECONDS = 30 * 60
 
-# A superseded / archived / redacted claim is not live evidence, so it must
+# a superseded / archived / redacted claim is not live evidence, so it must
 # neither inflate an entity's claim_count nor surface as its top_claim_id
 # (consistent with issue #78, and with the same exclusion in context, graph,
 # digest, health and experts).
