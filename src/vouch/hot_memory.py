@@ -231,8 +231,20 @@ def _preview(text: str) -> str:
     return flat[: TEXT_PREVIEW_CHARS - 1] + "…"
 
 
+# the live statuses — the complement of the retired set (superseded / archived
+# / redacted). actionable belongs here: kb.confirm promotes a working claim to
+# actionable and bumps last_confirmed_at, so leaving it out dropped a claim
+# from the sidebar at the moment it became freshest.
+_ACTIVE_STATUSES = frozenset({
+    ClaimStatus.WORKING,
+    ClaimStatus.ACTIONABLE,
+    ClaimStatus.STABLE,
+    ClaimStatus.CONTESTED,
+})
+
+
 def _is_active(status: ClaimStatus) -> bool:
-    return status in {ClaimStatus.WORKING, ClaimStatus.STABLE, ClaimStatus.CONTESTED}
+    return status in _ACTIVE_STATUSES
 
 
 def query_bias_for_page(page: Page) -> str:

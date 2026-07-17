@@ -10,6 +10,7 @@ import pytest
 from vouch import hot_memory as hot_mod
 from vouch.capabilities import METHODS
 from vouch.jsonl_server import handle_request
+from vouch.lifecycle import confirm
 from vouch.models import ClaimStatus, Entity, EntityType, Page, PageType
 from vouch.proposals import approve, propose_claim
 from vouch.storage import KBStore
@@ -48,6 +49,21 @@ def test_recently_approved_claim_appears(store: KBStore) -> None:
     assert row["status"] == ClaimStatus.WORKING.value
     assert row["why_hot"] == "recent"
     assert "approved_at" in row
+
+
+def test_confirmed_claim_stays_in_sidebar(store: KBStore) -> None:
+    # kb.confirm promotes a working claim to actionable and bumps
+    # last_confirmed_at. the claim is at its freshest, so dropping it from the
+    # recency sidebar is backwards.
+    cid = _approved_claim(store, "the sky is blue today")
+    assert [r["id"] for r in hot_mod.compute_hot_memory(store, limit=5)] == [cid]
+
+    confirm(store, claim_id=cid, actor="reviewer")
+    hot_mod.reset_sidebar_cache()
+
+    rows = hot_mod.compute_hot_memory(store, limit=5)
+    assert [r["id"] for r in rows] == [cid]
+    assert rows[0]["status"] == ClaimStatus.ACTIONABLE.value
 
 
 def test_empty_kb_yields_empty_list(store: KBStore) -> None:
