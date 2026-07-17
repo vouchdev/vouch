@@ -15,6 +15,7 @@ import json
 import re
 import sys
 from collections.abc import Iterable, Mapping, Sequence
+from datetime import UTC, datetime
 from typing import Any
 
 # the review-gate core: writes here are the north star. mirrored verbatim in
@@ -54,6 +55,10 @@ CODERABBIT_LOGIN = "coderabbitai[bot]"
 # a contributor gets STRIKE_LIMIT rounds of "changes requested" from CodeRabbit
 # before the pr is auto-closed. the owner and bots are exempt (author_is_exempt).
 STRIKE_LIMIT = 3
+
+# a pr whose author leaves CodeRabbit's change request unaddressed (no new
+# commit) for STALE_DAYS is auto-closed by the scheduled stale-pr-reaper.
+STALE_DAYS = 2
 _EXEMPT_AUTHORS = frozenset({"plind-junior"}) | _BOT_ACTORS
 
 
@@ -162,6 +167,39 @@ def should_close(verdict: str, strikes: int, *, author: str,
             and strikes >= limit)
 
 
+def _iso_epoch(s: str) -> float:
+    """Epoch seconds for a github ISO8601 timestamp (e.g. 2026-07-15T10:20:30Z)."""
+    dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return dt.timestamp()
+
+
+def should_close_stale(reviews: Sequence[Mapping[str, Any]], *, head_sha: str,
+                       now_epoch: float, author: str, days: int = STALE_DAYS,
+                       login: str = CODERABBIT_LOGIN) -> bool:
+    """Auto-close a pr whose author left a CodeRabbit change request unaddressed.
+
+    Fires only when CodeRabbit's latest verdict *on the current head* is
+    "changes requested" and that review is >= ``days`` old — i.e. no new commit
+    has landed since (a push would move ``head_sha`` off the review's
+    ``commit_id``). the owner and bots are exempt.
+    """
+    if author_is_exempt(author):
+        return False
+    on_head = [r for r in reviews
+               if (r.get("user") or {}).get("login") == login
+               and r.get("commit_id") == head_sha
+               and str(r.get("state") or "").upper() in ("APPROVED", "CHANGES_REQUESTED")]
+    if not on_head or str(on_head[-1].get("state") or "").upper() != "CHANGES_REQUESTED":
+        return False
+    submitted = on_head[-1].get("submitted_at")
+    if not submitted:
+        return False
+    age_days = (now_epoch - _iso_epoch(str(submitted))) / 86400.0
+    return age_days >= days
+
+
 def _read_lines(path: str) -> list[str]:
     with open(path, encoding="utf-8") as fh:
         return [ln.strip() for ln in fh if ln.strip()]
@@ -197,6 +235,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     g.add_argument("--head-sha", required=True)
     g.add_argument("--author", required=True)
 
+    st = sub.add_parser("stale-check")
+    st.add_argument("--reviews-file", required=True)
+    st.add_argument("--head-sha", required=True)
+    st.add_argument("--author", required=True)
+    st.add_argument("--now-epoch", required=True, type=int)
+
     ns = p.parse_args(argv)
 
     if ns.cmd == "classify":
@@ -229,6 +273,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"strikes={strikes}\n"
             f"close={'true' if close else 'false'}\n")
         return 0
+    if ns.cmd == "stale-check":
+        with open(ns.reviews_file, encoding="utf-8") as fh:
+            loaded = json.load(fh)
+        reviews = loaded if isinstance(loaded, list) else []
+        stale = should_close_stale(reviews, head_sha=ns.head_sha,
+                                   now_epoch=ns.now_epoch, author=ns.author)
+        return 0 if stale else 1
     return 2
 
 

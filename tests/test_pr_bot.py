@@ -1,5 +1,6 @@
 import subprocess
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 from vouch import pr_bot
@@ -162,6 +163,65 @@ def test_should_close_never_when_approved():
 def test_should_close_exempts_owner_and_bots():
     assert pr_bot.should_close("changes", 9, author="plind-junior") is False
     assert pr_bot.should_close("changes", 9, author="dependabot[bot]") is False
+
+
+def _iso(epoch):
+    return datetime.fromtimestamp(epoch, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _review_ts(state, sha, epoch, login="coderabbitai[bot]"):
+    return {"user": {"login": login}, "state": state, "commit_id": sha,
+            "submitted_at": _iso(epoch)}
+
+
+_NOW = 1_700_000_000
+
+
+def test_stale_closes_after_two_days():
+    reviews = [_review_ts("CHANGES_REQUESTED", "head", _NOW - 3 * 86400)]
+    assert pr_bot.should_close_stale(
+        reviews, head_sha="head", now_epoch=_NOW, author="rando") is True
+
+
+def test_stale_not_within_two_days():
+    reviews = [_review_ts("CHANGES_REQUESTED", "head", _NOW - 1 * 86400)]
+    assert pr_bot.should_close_stale(
+        reviews, head_sha="head", now_epoch=_NOW, author="rando") is False
+
+
+def test_stale_ignored_when_author_pushed_a_new_commit():
+    # the change request is on an old commit; head moved on and has no review.
+    reviews = [_review_ts("CHANGES_REQUESTED", "old", _NOW - 5 * 86400)]
+    assert pr_bot.should_close_stale(
+        reviews, head_sha="new", now_epoch=_NOW, author="rando") is False
+
+
+def test_stale_never_when_approved_on_head():
+    reviews = [_review_ts("APPROVED", "head", _NOW - 5 * 86400)]
+    assert pr_bot.should_close_stale(
+        reviews, head_sha="head", now_epoch=_NOW, author="rando") is False
+
+
+def test_stale_exempts_owner_and_bots():
+    reviews = [_review_ts("CHANGES_REQUESTED", "head", _NOW - 9 * 86400)]
+    assert pr_bot.should_close_stale(
+        reviews, head_sha="head", now_epoch=_NOW, author="plind-junior") is False
+    assert pr_bot.should_close_stale(
+        reviews, head_sha="head", now_epoch=_NOW, author="dependabot[bot]") is False
+
+
+def test_cli_stale_check_exit_codes(tmp_path):
+    import json as _json
+    f = tmp_path / "reviews.json"
+    f.write_text(_json.dumps(
+        [_review_ts("CHANGES_REQUESTED", "head", _NOW - 3 * 86400)]), encoding="utf-8")
+    stale = subprocess.run(
+        [sys.executable, "-m", "vouch.pr_bot", "stale-check", "--reviews-file", str(f),
+         "--head-sha", "head", "--author", "rando", "--now-epoch", str(_NOW)])
+    fresh = subprocess.run(
+        [sys.executable, "-m", "vouch.pr_bot", "stale-check", "--reviews-file", str(f),
+         "--head-sha", "head", "--author", "rando", "--now-epoch", str(_NOW - 3 * 86400)])
+    assert stale.returncode == 0 and fresh.returncode == 1
 
 
 def test_cli_coderabbit_gate_outputs(tmp_path):
