@@ -125,6 +125,8 @@ vouch install-mcp claude-code       # creates .vouch/ (if missing) + wires Claud
 
 `install-mcp` initialises the KB when no `.vouch/` is discoverable (pass `--no-init` to skip; `vouch init` still exists for KB-only setup), then writes `.mcp.json` (the `kb.*` MCP tools), the `/vouch-*` slash commands, and five hooks — `SessionStart` recall, `UserPromptSubmit` per-prompt recall, `PostToolUse` capture, `Stop` answer capture, `SessionEnd` rollup. Restart Claude Code so they load.
 
+> **One-time approval.** Claude Code only loads a project's `.mcp.json` servers after a per-user approval. The terminal CLI prompts for it on the next `claude` launch — but the **VS Code extension never shows this prompt**, so the `kb.*` tools stay unavailable there while the hooks keep working (which makes it easy to think vouch is connected when it isn't). If `claude mcp list` run inside the project shows `vouch … ⏸ Pending approval`, either run `claude` in the project folder from any terminal and accept the prompt, or create `.claude/settings.local.json` (user-local, not committed) with `{"enabledMcpjsonServers": ["vouch"]}`. The same key in the committed `.claude/settings.json` is deliberately ignored — a repo can't approve its own servers — which is why `install-mcp` can't do this step for you. Verify with `claude mcp list` (`✔ Connected`), then reload the VS Code window.
+
 **2. Point `compile` at an LLM** — the only step that needs a model. In `.vouch/config.yaml`:
 
 ```yaml
