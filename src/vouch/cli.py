@@ -2419,8 +2419,9 @@ def capture_answer_cmd(session_id: str | None) -> None:
 
     The Stop hook emits {session_id, transcript_path} on stdin; the session's
     answer is ingested as a source and its receipt-backed claims are
-    auto-approved under the review opt-in (trusted-agent / auto_approve_on_receipt),
-    else left pending. Always exits 0 so a capture failure can never break the turn.
+    auto-approved when review.auto_approve_on_receipt is on (the
+    starter-config default) or under trusted-agent, else left pending.
+    Always exits 0 so a capture failure can never break the turn.
     """
     if sys.stdin.isatty():
         return

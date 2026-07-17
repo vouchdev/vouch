@@ -478,33 +478,74 @@ def _approval_block_reason(
     return None
 
 
+def resolve_pending_receipt_claim(
+    store: KBStore, proposal: Proposal, *, actor: str, reason: str
+) -> Claim | None:
+    """Mechanically decide one pending CLAIM proposal, honouring the gate.
+
+    Returns the durable Claim when self-approval clears — under
+    ``review.approver_role: trusted-agent``, or when the claim's byte-offset
+    receipts all verify under ``review.auto_approve_on_receipt``. Returns None
+    when the proposal stays pending (gate closed, receipts unverifiable, or
+    its id is held by a claim with *different* text — a real conflict, a human
+    call) or when it was rejected as a duplicate: re-deriving a claim whose
+    identical text is already durable adds nothing, so the proposal is closed
+    with a duplicate reason instead of piling up in the review queue.
+    """
+    if proposal.kind != ProposalKind.CLAIM:
+        return None
+    review_cfg = _review_config(store)
+    trusted = review_cfg.get("approver_role") == "trusted-agent"
+    receipted = bool(
+        review_cfg.get("auto_approve_on_receipt")
+    ) and _claim_receipts_verify(store, proposal)
+    if not (trusted or receipted):
+        return None
+    claim_id = str(proposal.payload.get("id", ""))
+    existing: Claim | None = None
+    if claim_id:
+        try:
+            existing = store.get_claim(claim_id)
+        except ArtifactNotFoundError:
+            existing = None
+    if existing is not None:
+        if existing.text == proposal.payload.get("text"):
+            reject(
+                store, proposal.id, rejected_by=actor,
+                reason="duplicate: identical claim already durable",
+            )
+        return None
+    result = approve(store, proposal.id, approved_by=actor, reason=reason)
+    assert isinstance(result, Claim)  # kind == CLAIM guaranteed above
+    return result
+
+
 def auto_approve_receipts(
     store: KBStore, *, actor: str | None = None
 ) -> list[Claim]:
     """Approve every pending receipt-verified claim, no human in the loop.
 
     The mechanical gate is the reviewer: a pending CLAIM whose citations all
-    carry receipts that verify by string comparison is approved; anything else
-    — a bare source id, a forged or missing receipt, a non-claim proposal — is
-    left pending for a human. This is the drain that makes "run vouch and it
-    just captures knowledge" real. No-op unless ``review.auto_approve_on_receipt``
-    is set, so the human-review gate is never silently bypassed.
+    carry receipts that verify by string comparison is approved; a duplicate
+    of an already-durable identical claim is rejected (see
+    ``resolve_pending_receipt_claim``); anything else — a bare source id, a
+    forged or missing receipt, a non-claim proposal, an id held by different
+    text — is left pending for a human. This is the drain that makes "run
+    vouch and it just captures knowledge" real. No-op unless
+    ``review.auto_approve_on_receipt`` is set, so the human-review gate is
+    never silently bypassed.
     """
     if not _review_config(store).get("auto_approve_on_receipt"):
         return []
     approved: list[Claim] = []
     for proposal in store.list_proposals(ProposalStatus.PENDING):
-        if proposal.kind != ProposalKind.CLAIM or not _claim_receipts_verify(
-            store, proposal
-        ):
-            continue
-        result = approve(
-            store, proposal.id,
-            approved_by=actor or proposal.proposed_by,
+        claim = resolve_pending_receipt_claim(
+            store, proposal,
+            actor=actor or proposal.proposed_by,
             reason="receipt verified — auto-approved",
         )
-        assert isinstance(result, Claim)  # kind == CLAIM guaranteed above
-        approved.append(result)
+        if claim is not None:
+            approved.append(claim)
     return approved
 
 

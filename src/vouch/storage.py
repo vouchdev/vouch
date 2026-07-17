@@ -77,13 +77,14 @@ def _starter_config() -> dict[str, Any]:
     return {
         "version": KB_FORMAT_VERSION,
         "review": {
-            "require_human_approval": True,
+            "require_human_approval": False,
             "expire_pending_after_days": 90,
             # phase d — the receipt is the reviewer. When true, a claim whose
             # byte-offset receipts all verify is auto-approved with no human;
-            # a claim that cannot quote its source is left pending. Opt-in:
-            # the human-review gate stays on by default.
-            "auto_approve_on_receipt": False,
+            # a claim that cannot quote its source is left pending, as is
+            # every page/entity/relation proposal. Set false to put every
+            # write behind `vouch review`.
+            "auto_approve_on_receipt": True,
         },
         "capture": {
             # auto-capture agent sessions into pending summaries.

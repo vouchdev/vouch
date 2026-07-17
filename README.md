@@ -144,6 +144,8 @@ compile:
 vouch review                    # walk pending proposals one at a time
 ```
 
+Receipt-verified claims skip the queue by default (`review.auto_approve_on_receipt: true` in the starter config): each session's captured answers become recallable memory with no review pass. What lands in `vouch review` is everything the mechanical check can't vouch for — session-summary pages, entities, relations, and claims that can't quote their source. Set the flag to `false` in `.vouch/config.yaml` to put every write behind the gate.
+
 **Want a browser UI for reviewing and proposing?** The video shows the **vouch webapp** — chat, review queue, claims, and stats. Your options:
 
 - **No setup**: the Docker demo above

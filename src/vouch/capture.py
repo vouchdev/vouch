@@ -481,8 +481,9 @@ def capture_answer(
     receipt-backed claim per quotable span (``extract.extract_receipt_claims``),
     and approves each one the review gate allows — self-approval clears under
     ``review.approver_role: trusted-agent`` or, for these verbatim-quoting
-    claims, ``review.auto_approve_on_receipt``. With neither gate on the claims
-    stay pending: the review gate is honoured, never bypassed.
+    claims, ``review.auto_approve_on_receipt`` (the starter-config default).
+    With neither gate on the claims stay pending: the review gate is
+    honoured, never bypassed.
 
     Idempotent and quiet by design: an answer already ingested (same bytes) is
     skipped, and answers shorter than ``min_answer_chars`` (acknowledgements)
@@ -493,7 +494,6 @@ def capture_answer(
 
     from . import extract as extract_mod
     from . import proposals as proposals_mod
-    from .proposals import ProposalError
     from .storage import ArtifactNotFoundError, sha256_hex
 
     # vouch's own LLM subprocesses set this so the agent session they spawn does
@@ -531,15 +531,14 @@ def capture_answer(
     )
     approved = 0
     for result in filed:
-        try:
-            proposals_mod.approve(
-                store, result.proposal.id, approved_by=ANSWER_ACTOR,
-                reason="auto-captured session answer (receipt verified)",
-            )
+        # approves under the gate, rejects duplicates of durable claims,
+        # leaves everything else pending — see resolve_pending_receipt_claim.
+        claim = proposals_mod.resolve_pending_receipt_claim(
+            store, result.proposal, actor=ANSWER_ACTOR,
+            reason="auto-captured session answer (receipt verified)",
+        )
+        if claim is not None:
             approved += 1
-        except ProposalError:
-            # gate closed (no trusted-agent, no receipt opt-in): leave pending.
-            pass
     return {
         "captured": True, "skipped": None, "session_id": session_id,
         "source": source.id, "filed": len(filed), "approved": approved,
@@ -568,6 +567,23 @@ def is_stale_buffer(
     return age > max_age_seconds
 
 
+def _drain_receipt_backlog(store: KBStore) -> int:
+    """Auto-approve pending receipt-verified claims; count them.
+
+    With ``review.auto_approve_on_receipt`` on (the starter-config default)
+    this clears any backlog of verifiable claims left pending while the gate
+    was off — e.g. a kb that flipped the flag after capturing. No-op when the
+    gate is off, and never fatal: it runs from a SessionStart hook that must
+    not break the session.
+    """
+    from . import proposals as proposals_mod
+
+    try:
+        return len(proposals_mod.auto_approve_receipts(store))
+    except Exception:
+        return 0
+
+
 def finalize_all_except(
     store: KBStore,
     current_session_id: str,
@@ -582,6 +598,7 @@ def finalize_all_except(
       - finalized: [session_id1, session_id2, ...]  session IDs that were finalized
       - skipped_recent: [id3, id4, ...]  sessions too recent to finalize
       - skipped_current: [id5]  the current session (always skipped)
+      - auto_approved: count of pending receipt-verified claims drained on the way
     """
     finalized: list[str] = []
     skipped_recent: list[str] = []
@@ -594,6 +611,7 @@ def finalize_all_except(
             "finalized": finalized,
             "skipped_recent": skipped_recent,
             "skipped_current": skipped_current,
+            "auto_approved": _drain_receipt_backlog(store),
         }
 
     for path in sorted(caps_dir.glob("*.jsonl")):
@@ -621,4 +639,5 @@ def finalize_all_except(
         "finalized": finalized,
         "skipped_recent": skipped_recent,
         "skipped_current": skipped_current,
+        "auto_approved": _drain_receipt_backlog(store),
     }
