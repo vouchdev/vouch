@@ -3924,6 +3924,15 @@ def pr_cache_show(repo: str, state: str, limit: int, as_json: bool, cache_dir: s
     help="Initialise a .vouch/ KB at the target when none is discoverable, "
     "so install-mcp is a one-command setup.",
 )
+@click.option(
+    "--approve/--no-approve",
+    "approve",
+    default=True,
+    show_default=True,
+    help="Register vouch as a local-scope MCP server in ~/.claude.json so the "
+    "Claude Code extension loads it without a manual approval it never prompts "
+    "for. --no-approve leaves only the project .mcp.json (needs manual approval).",
+)
 def install_mcp(
     host: str | None,
     list_hosts: bool,
@@ -3931,6 +3940,7 @@ def install_mcp(
     target_alias: str | None,
     tier: str,
     auto_init: bool,
+    approve: bool,
 ) -> None:
     """Install vouch into HOST (claude-code, cursor, …) idempotently.
 
@@ -4007,7 +4017,7 @@ def install_mcp(
             if kb_root != target:
                 click.echo(f"Using existing KB at {kb_root / '.vouch'}")
     try:
-        result = install_mod.install(host, target=target, tier=tier)
+        result = install_mod.install(host, target=target, tier=tier, approve=approve)
     except install_mod.AdapterError as e:
         raise click.ClickException(str(e)) from e
 
@@ -4017,6 +4027,8 @@ def install_mcp(
         click.echo(f"  ~ {f}  (appended fenced block)")
     for f in result.merged:
         click.echo(f"  ~ {f}  (merged into existing)")
+    for f in result.registered:
+        click.echo(f"  ⚑ {f}  (registered in ~/.claude.json)")
     for f in result.skipped:
         click.echo(f"  · {f}  (already present)")
     for f in result.failed:
@@ -4024,9 +4036,23 @@ def install_mcp(
     click.echo(
         f"Done — {len(result.written)} written, "
         f"{len(result.appended)} appended, {len(result.merged)} merged, "
+        f"{len(result.registered)} registered, "
         f"{len(result.skipped)} skipped, {len(result.failed)} failed "
         f"under {target}"
     )
+    if result.registered:
+        # the extension reads MCP servers once, at window start — a running
+        # window won't see the new registration until it reloads.
+        click.echo(
+            "Reload your editor window so it picks up the vouch MCP server "
+            "(VS Code: Developer: Reload Window)."
+        )
+    elif approve and host == "claude-code" and not result.failed:
+        # already registered on a prior run — still remind, harmlessly.
+        click.echo(
+            "vouch is registered for Claude Code. If the kb_* tools aren't "
+            "visible, reload your editor window."
+        )
     if result.failed:
         # a failed install is not a no-op: exit non-zero so scripts (and the
         # user) notice vouch was NOT wired into these files.

@@ -14,10 +14,12 @@ pipx install vouch-kb
 Make sure `vouch` is on the `PATH` Claude Code will see.
 
 The one-command path — `vouch install-mcp claude-code` from your project
-root — does everything below in one go, and initialises the `.vouch/` KB
+root — does everything below in one go, initialises the `.vouch/` KB
 first when the project doesn't have one yet (`vouch init` also does that
-on its own; `--no-init` skips it). The rest of this file is the manual
-equivalent.
+on its own; `--no-init` skips it), **and registers vouch in
+`~/.claude.json` so the VS Code extension loads it without a manual
+approval it never prompts for** (see step 2). The rest of this file is
+the manual equivalent.
 
 ## 2. Drop the MCP server into your project
 
@@ -38,7 +40,19 @@ contains `.vouch/` — created by `vouch init` if you're wiring by hand):
 }
 ```
 
-Claude Code will pick it up the next time you open the project.
+A `.mcp.json` server is *project*-scope: the terminal CLI prompts once to
+approve it, but **the VS Code extension never surfaces that prompt**, so on
+its own it sits at "pending approval" and the `kb_*` tools never appear (the
+hooks, which need no approval, keep working — easy to misread as connected).
+To load it in the extension, register the same server at *local* scope, which
+is trusted on sight:
+
+```bash
+claude mcp add vouch --env VOUCH_AGENT=claude-code -- vouch serve
+```
+
+(the one-command `install-mcp` above does this for you). Then reload the
+editor window. Confirm with `claude mcp list` — `vouch … ✔ Connected`.
 
 ## 3. Teach Claude about the gate
 
@@ -60,7 +74,10 @@ In a fresh session, ask Claude:
 
 > What knowledge-base tools do you have?
 
-It should enumerate `kb_search`, `kb_propose_claim`, etc. If not, run
+It should enumerate `kb_search`, `kb_propose_claim`, etc. If not, check
+`claude mcp list` first: `vouch … ⏸ Pending approval` means the local-scope
+registration from step 2 hasn't happened (`✔ Connected` once it has), and a
+running editor window needs a reload to pick it up. For anything else, run
 `claude --debug-mcp` to see why the server isn't loading.
 
 ## Session Capture & Auto-Proposal
