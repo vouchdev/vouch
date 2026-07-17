@@ -6,6 +6,14 @@ All notable changes to vouch are documented here. Format follows
 
 ## [Unreleased]
 
+### Fixed
+- the entity-salience reflex skipped the retired-claim exclusion every
+  other read surface applies, so a superseded, archived or redacted claim
+  still counted toward an entity's `claim_count` and could be handed back
+  as its `top_claim_id` — pointing an agent at redacted text the reviewer
+  had already pulled. `_meta.vouch_salience` now counts live claims only,
+  consistent with context, graph, digest, health and experts (#78).
+
 ## [1.4.0] — 2026-07-17
 
 ### Added
