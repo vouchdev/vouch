@@ -11,6 +11,7 @@ import getpass
 import io
 import json
 import os
+import shutil
 import sqlite3
 import sys
 from collections.abc import Iterator
@@ -55,6 +56,8 @@ from .models import Proposal, ProposalKind, ProposalStatus
 from .onboarding import (
     DEFAULT_TEMPLATE,
     TEMPLATES,
+    SeedResult,
+    StarterSeedResult,
     available_templates,
     seed_starter_kb,
 )
@@ -185,6 +188,25 @@ def cli() -> None:
 # --- bootstrap ------------------------------------------------------------
 
 
+def _bootstrap_kb(
+    root: Path, *, template: str = DEFAULT_TEMPLATE
+) -> tuple[KBStore, StarterSeedResult, SeedResult | None]:
+    """Create + seed a KB at ``root`` — the single init path.
+
+    Shared by `vouch init` and `vouch install-mcp`'s auto-init so the two
+    cannot drift: same starter seed, same index rebuild, same audit event.
+    """
+    root.mkdir(parents=True, exist_ok=True)
+    store = KBStore.init(root)
+    seed = seed_starter_kb(store, approved_by=_whoami())
+    template_result: SeedResult | None = None
+    if template != DEFAULT_TEMPLATE:
+        template_result = TEMPLATES[template](store, approved_by=_whoami())
+    health.rebuild_index(store)
+    audit_mod.log_event(store.kb_dir, event="kb.init", actor=_whoami())
+    return store, seed, template_result
+
+
 @cli.command()
 @click.option("--path", default=".", type=click.Path(file_okay=False), show_default=True)
 @click.option(
@@ -196,15 +218,9 @@ def cli() -> None:
 )
 def init(path: str, template: str) -> None:
     """Initialise a .vouch/ knowledge base at PATH."""
-    root = Path(path).resolve()
-    root.mkdir(parents=True, exist_ok=True)
-    store = KBStore.init(root)
-    seed = seed_starter_kb(store, approved_by=_whoami())
-    template_result = None
-    if template != DEFAULT_TEMPLATE:
-        template_result = TEMPLATES[template](store, approved_by=_whoami())
-    health.rebuild_index(store)
-    audit_mod.log_event(store.kb_dir, event="kb.init", actor=_whoami())
+    store, seed, template_result = _bootstrap_kb(
+        Path(path).resolve(), template=template
+    )
     click.echo(f"Initialised KB at {store.kb_dir}")
     if seed.created_anything:
         click.echo(f"Seeded starter claim: {seed.claim_id}")
@@ -3899,15 +3915,29 @@ def pr_cache_show(repo: str, state: str, limit: int, as_json: bool, cache_dir: s
     "T2 = +CLAUDE.md/AGENTS.md, T3 = +slash commands, "
     "T4 = +host hooks/settings. Tiers stack.",
 )
+@click.option(
+    "--init/--no-init",
+    "auto_init",
+    default=True,
+    show_default=True,
+    help="Initialise a .vouch/ KB at the target when none is discoverable, "
+    "so install-mcp is a one-command setup.",
+)
 def install_mcp(
-    host: str | None, list_hosts: bool, path: str, target_alias: str | None, tier: str
+    host: str | None,
+    list_hosts: bool,
+    path: str,
+    target_alias: str | None,
+    tier: str,
+    auto_init: bool,
 ) -> None:
     """Install vouch into HOST (claude-code, cursor, …) idempotently.
 
     \b
     Examples:
       vouch install-mcp --list              # show known hosts
-      vouch install-mcp claude-code         # write T1..T4 into cwd
+      vouch install-mcp claude-code         # one command: init .vouch/ if
+                                            # missing + write T1..T4 into cwd
       vouch install-mcp cursor --tier T2    # stop at AGENTS.md
       vouch install-mcp claude-desktop      # drop a paste-ready config
       vouch install-mcp windsurf --path /abs/path/to/project
@@ -3930,6 +3960,51 @@ def install_mcp(
         )
 
     target = Path(target_alias or path).resolve()
+    if host in hosts and install_mod.wants_kb_bootstrap(host):
+        # a wired host without a KB is worse than a failed install: every
+        # installed hook is `|| true` (silent no-op forever) and `vouch serve`
+        # exits 2, with nothing left to tell the user why. unknown hosts skip
+        # this so the AdapterError below stays the first and only error;
+        # staging-dir hosts (manifest `kb_bootstrap: false`) skip it because
+        # their target is not project wiring. the probe ignores VOUCH_KB_PATH:
+        # the question is what this tree resolves to, not this shell.
+        if os.environ.get("VOUCH_KB_PATH"):
+            click.echo(
+                "note: VOUCH_KB_PATH is set — it takes precedence over the "
+                "project KB wherever that variable is exported.",
+                err=True,
+            )
+        try:
+            kb_root = discover_root(target, respect_env=False)
+        except KBNotFoundError:
+            if auto_init:
+                try:
+                    store, seed, _tmpl = _bootstrap_kb(target)
+                except Exception as e:
+                    # cli boundary: a half-done setup must read as an error,
+                    # not a traceback. remove the partial kb (it did not exist
+                    # before this call — discover_root just said so), or a
+                    # rerun would find it and skip bootstrap forever.
+                    shutil.rmtree(target / ".vouch", ignore_errors=True)
+                    raise click.ClickException(
+                        f"could not initialise a KB at {target}: {e} — fix the "
+                        "cause and rerun, run `vouch init` yourself, or pass "
+                        "--no-init"
+                    ) from e
+                click.echo(f"No .vouch/ found — initialised KB at {store.kb_dir}")
+                if seed.created_anything:
+                    click.echo(f"Seeded starter claim: {seed.claim_id}")
+            else:
+                click.echo(
+                    f"warning: no .vouch/ at or above {target} — unless "
+                    "VOUCH_KB_PATH is exported at runtime, the installed hooks "
+                    "and MCP server will do nothing until you run `vouch init` "
+                    "there.",
+                    err=True,
+                )
+        else:
+            if kb_root != target:
+                click.echo(f"Using existing KB at {kb_root / '.vouch'}")
     try:
         result = install_mod.install(host, target=target, tier=tier)
     except install_mod.AdapterError as e:

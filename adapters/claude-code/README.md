@@ -7,16 +7,22 @@ Wires `vouch serve` (MCP, stdio) into [Claude Code][cc].
 ## 1. Install vouch
 
 ```bash
-pip install -e '/path/to/vouch[dev]'
-# or, once on PyPI: pipx install vouch
+pipx install vouch-kb
+# or, from a checkout: pip install -e '/path/to/vouch[dev]'
 ```
 
 Make sure `vouch` is on the `PATH` Claude Code will see.
 
+The one-command path — `vouch install-mcp claude-code` from your project
+root — does everything below in one go, and initialises the `.vouch/` KB
+first when the project doesn't have one yet (`vouch init` also does that
+on its own; `--no-init` skips it). The rest of this file is the manual
+equivalent.
+
 ## 2. Drop the MCP server into your project
 
 Add `.mcp.json` at the root of your project (the same directory that
-contains `.vouch/`):
+contains `.vouch/` — created by `vouch init` if you're wiring by hand):
 
 ```json
 {
