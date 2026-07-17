@@ -15,7 +15,7 @@ from vouch.storage import KBStore
 _SIMILAR_TEXT = "Auth uses JWTs in the Authorization header."
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture
 def _mock_embedder():
     # MockEmbedder requires numpy. Skip cleanly when CI installs only [dev].
     pytest.importorskip("numpy")
@@ -42,7 +42,7 @@ def store(tmp_path: Path) -> KBStore:
     return KBStore.init(tmp_path)
 
 
-def test_propose_warns_similar_approved_claim(store: KBStore) -> None:
+def test_propose_warns_similar_approved_claim(store: KBStore, _mock_embedder) -> None:
     src = store.put_source(b"e")
     store.put_claim(
         Claim(id="auth-jwt", text=_SIMILAR_TEXT, evidence=[src.id]),
@@ -59,7 +59,7 @@ def test_propose_warns_similar_approved_claim(store: KBStore) -> None:
     assert "auth-jwt" in ids
 
 
-def test_propose_warns_similar_pending_proposal(store: KBStore) -> None:
+def test_propose_warns_similar_pending_proposal(store: KBStore, _mock_embedder) -> None:
     src = store.put_source(b"e")
     first = propose_claim(
         store,
@@ -80,7 +80,7 @@ def test_propose_warns_similar_pending_proposal(store: KBStore) -> None:
     assert pending[0]["artifact_id"] == first.id
 
 
-def test_propose_no_warning_for_unrelated_text(store: KBStore) -> None:
+def test_propose_no_warning_for_unrelated_text(store: KBStore, _mock_embedder) -> None:
     src = store.put_source(b"e")
     store.put_claim(Claim(id="c1", text="apples and oranges", evidence=[src.id]))
     result = propose_claim(
@@ -92,7 +92,7 @@ def test_propose_no_warning_for_unrelated_text(store: KBStore) -> None:
     assert result.warnings == []
 
 
-def test_propose_similarity_on_dry_run(store: KBStore) -> None:
+def test_propose_similarity_on_dry_run(store: KBStore, _mock_embedder) -> None:
     src = store.put_source(b"e")
     store.put_claim(Claim(id="c1", text=_SIMILAR_TEXT, evidence=[src.id]))
     result = propose_claim(
@@ -109,6 +109,7 @@ def test_propose_similarity_on_dry_run(store: KBStore) -> None:
 def test_jsonl_propose_claim_includes_warnings(
     store: KBStore,
     monkeypatch: pytest.MonkeyPatch,
+    _mock_embedder,
 ) -> None:
     from vouch.jsonl_server import handle_request
 
@@ -127,7 +128,7 @@ def test_jsonl_propose_claim_includes_warnings(
             },
         }
     )
-    assert resp["ok"]
+    assert resp["ok"], resp.get("error")
     assert "warnings" in resp["result"]
     assert any(w["code"] == "similar_approved" for w in resp["result"]["warnings"])
 
