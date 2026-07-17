@@ -3960,12 +3960,12 @@ def install_mcp(
 
     target = Path(target_alias or path).resolve()
     if host in hosts and install_mod.wants_kb_bootstrap(host):
-        # A wired host without a KB is worse than a failed install: every
+        # a wired host without a KB is worse than a failed install: every
         # installed hook is `|| true` (silent no-op forever) and `vouch serve`
-        # exits 2, with nothing left to tell the user why. Unknown hosts skip
+        # exits 2, with nothing left to tell the user why. unknown hosts skip
         # this so the AdapterError below stays the first and only error;
         # staging-dir hosts (manifest `kb_bootstrap: false`) skip it because
-        # their target is not project wiring. The probe ignores VOUCH_KB_PATH:
+        # their target is not project wiring. the probe ignores VOUCH_KB_PATH:
         # the question is what this tree resolves to, not this shell.
         if os.environ.get("VOUCH_KB_PATH"):
             click.echo(
@@ -3980,7 +3980,7 @@ def install_mcp(
                 try:
                     store, seed, _tmpl = _bootstrap_kb(target)
                 except Exception as e:
-                    # CLI boundary: a half-done setup must read as an error,
+                    # cli boundary: a half-done setup must read as an error,
                     # not a traceback.
                     raise click.ClickException(
                         f"could not initialise a KB at {target}: {e} — fix the "

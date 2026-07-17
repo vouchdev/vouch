@@ -96,7 +96,7 @@ class _Manifest:
     tiers: dict[str, list[_FileEntry]]
     fence_begin: str = _DEFAULT_FENCE_BEGIN
     fence_end: str = _DEFAULT_FENCE_END
-    # False for hosts whose install target is a staging dir for user-global
+    # false for hosts whose install target is a staging dir for user-global
     # config (claude-desktop) rather than project wiring — a KB bootstrapped
     # at the target would land wherever the user happened to be standing.
     kb_bootstrap: bool = True

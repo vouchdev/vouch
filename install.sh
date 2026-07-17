@@ -310,7 +310,7 @@ main() {
 
     printf '\n'
     info "${C_BOLD}Next:${C_RESET}"
-    info "  ${C_BOLD}vouch install-mcp <host>${C_RESET}  # wire a host (creates .vouch/ if missing)"
+    info "  ${C_BOLD}vouch install-mcp <host>${C_RESET}  # wire a host (project hosts create .vouch/ if missing)"
     info "  ${C_BOLD}vouch init${C_RESET}              # KB-only setup, no host wiring"
     info "  ${C_BOLD}vouch serve${C_RESET}             # start the MCP server"
     info "  ${C_BOLD}vouch --help${C_RESET}            # the rest"
