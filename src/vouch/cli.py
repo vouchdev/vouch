@@ -11,6 +11,7 @@ import getpass
 import io
 import json
 import os
+import shutil
 import sqlite3
 import sys
 from collections.abc import Iterator
@@ -3981,7 +3982,10 @@ def install_mcp(
                     store, seed, _tmpl = _bootstrap_kb(target)
                 except Exception as e:
                     # cli boundary: a half-done setup must read as an error,
-                    # not a traceback.
+                    # not a traceback. remove the partial kb (it did not exist
+                    # before this call — discover_root just said so), or a
+                    # rerun would find it and skip bootstrap forever.
+                    shutil.rmtree(target / ".vouch", ignore_errors=True)
                     raise click.ClickException(
                         f"could not initialise a KB at {target}: {e} — fix the "
                         "cause and rerun, run `vouch init` yourself, or pass "
@@ -3992,9 +3996,10 @@ def install_mcp(
                     click.echo(f"Seeded starter claim: {seed.claim_id}")
             else:
                 click.echo(
-                    f"warning: no .vouch/ at or above {target} — the installed "
-                    "hooks and MCP server will do nothing until you run "
-                    "`vouch init` there.",
+                    f"warning: no .vouch/ at or above {target} — unless "
+                    "VOUCH_KB_PATH is exported at runtime, the installed hooks "
+                    "and MCP server will do nothing until you run `vouch init` "
+                    "there.",
                     err=True,
                 )
         else:

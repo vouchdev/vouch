@@ -973,6 +973,35 @@ def test_cli_install_mcp_bootstrap_failure_is_clean_error(
     assert "--no-init" in result.output
 
 
+def test_cli_install_mcp_partial_kb_is_removed_on_bootstrap_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A failure AFTER .vouch/ became discoverable (here: index rebuild) must
+    # not leave a half-created KB behind — a rerun would find it and skip
+    # bootstrap forever, which is the original silent-no-op bug reborn.
+    monkeypatch.delenv("VOUCH_KB_PATH", raising=False)
+    monkeypatch.setattr(
+        "vouch.cli.health.rebuild_index",
+        lambda store: (_ for _ in ()).throw(RuntimeError("index exploded")),
+    )
+    runner = CliRunner()
+    result = runner.invoke(
+        cli, ["install-mcp", "claude-code", "--path", str(tmp_path)]
+    )
+    assert result.exit_code != 0
+    assert "could not initialise" in result.output
+    assert not (tmp_path / ".vouch").exists()
+
+    # With the failure gone, the same command bootstraps from scratch.
+    monkeypatch.undo()
+    monkeypatch.delenv("VOUCH_KB_PATH", raising=False)
+    retry = runner.invoke(
+        cli, ["install-mcp", "claude-code", "--path", str(tmp_path)]
+    )
+    assert retry.exit_code == 0, retry.output
+    assert (tmp_path / ".vouch" / "config.yaml").is_file()
+
+
 def test_cli_install_mcp_existing_kb_is_untouched(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
