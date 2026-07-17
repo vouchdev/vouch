@@ -38,7 +38,21 @@ contains `.vouch/` — created by `vouch init` if you're wiring by hand):
 }
 ```
 
-Claude Code will pick it up the next time you open the project.
+Claude Code will pick it up the next time you open the project — after a
+one-time, per-user approval. The terminal CLI prompts for it on the next
+`claude` launch; the VS Code extension does **not** surface the prompt,
+so the server sits at "Pending approval" and the `kb.*` tools never
+appear (the hooks, which need no approval, keep working — easy to
+misread as "vouch is connected"). Approve either way:
+
+* run `claude` in the project folder from any terminal and accept the
+  MCP server prompt, or
+* create `.claude/settings.local.json` (user-local, keep it out of git)
+  containing `{"enabledMcpjsonServers": ["vouch"]}`.
+
+The same key in the committed `.claude/settings.json` is ignored — a
+repo can't approve its own servers. Reload the VS Code window
+afterwards.
 
 ## 3. Teach Claude about the gate
 
@@ -60,8 +74,11 @@ In a fresh session, ask Claude:
 
 > What knowledge-base tools do you have?
 
-It should enumerate `kb_search`, `kb_propose_claim`, etc. If not, run
-`claude --debug-mcp` to see why the server isn't loading.
+It should enumerate `kb_search`, `kb_propose_claim`, etc. If not, check
+`claude mcp list` first: `vouch: vouch serve - ⏸ Pending approval` means
+the one-time approval from step 2 hasn't happened yet (`✔ Connected`
+once it has). For anything else, run `claude --debug-mcp` to see why
+the server isn't loading.
 
 ## Session Capture & Auto-Proposal
 
