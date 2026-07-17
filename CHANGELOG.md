@@ -33,8 +33,10 @@ All notable changes to vouch are documented here. Format follows
   the `coderabbit-gate` workflow turns its verdict into the required
   `coderabbit-approved` status check — so a fresh push voids a prior approval,
   and a pr CodeRabbit requests changes on 3 times is auto-closed (owner and
-  bots exempt). no paid model in the loop. deterministic decision logic lives
-  in `src/vouch/pr_bot.py` (pure stdlib). repo guards (branch ruleset + labels)
+  bots exempt). a daily `stale-pr-reaper` also closes a pr whose author left a
+  CodeRabbit change request unaddressed (no new commit) for 2 days. no paid
+  model in the loop. deterministic decision logic lives in
+  `src/vouch/pr_bot.py` (pure stdlib). repo guards (branch ruleset + labels)
   are configured by `scripts/setup_repo_guards.sh`. workflow security is linted
   in ci with zizmor + actionlint.
 

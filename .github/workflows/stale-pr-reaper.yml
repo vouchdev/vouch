@@ -1,0 +1,51 @@
+name: stale-pr-reaper
+# daily reaper: closes a pr whose author left CodeRabbit's change request
+# unaddressed (no new commit) for 2 days. complements the 3-strikes close in
+# coderabbit-gate.yml — that fires when the author keeps pushing failing
+# commits, this fires when they go silent. scheduled workflows only run from the
+# default branch, so this activates once it is on `main`. it reads only api
+# metadata and runs from the trusted default branch — no pr head code is run.
+on:
+  schedule:
+    - cron: "17 6 * * *" # daily ~06:17 UTC
+  workflow_dispatch: {}
+permissions: {}
+concurrency:
+  group: stale-pr-reaper
+  cancel-in-progress: false
+jobs:
+  reap:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read        # checkout + run pr_bot
+      pull-requests: write  # comment + close
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - name: close prs stale for 2 days after a change request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          now=$(date -u +%s)
+          gh pr list --repo "$REPO" --state open --limit 100 \
+            --json number,headRefOid,author,isDraft \
+            --jq '.[] | select(.isDraft|not) | [.number, .headRefOid, .author.login] | @tsv' \
+            > prs.tsv
+          while IFS=$'\t' read -r num sha author; do
+            [ -z "$num" ] && continue
+            gh api "repos/$REPO/pulls/$num/reviews?per_page=100" > reviews.json
+            if PYTHONPATH=src python -m vouch.pr_bot stale-check \
+                 --reviews-file reviews.json --head-sha "$sha" \
+                 --author "$author" --now-epoch "$now"; then
+              echo "reaping #$num (stale after change request)"
+              gh pr merge "$num" --repo "$REPO" --disable-auto || true
+              gh pr edit "$num" --repo "$REPO" --remove-label auto-merge || true
+              gh pr close "$num" --repo "$REPO" --comment \
+                "closing automatically: CodeRabbit requested changes and this pr has had no new commits for 2 days. the feedback still stands — push a fix and reopen this pr (or open a fresh one) and it will be reviewed again."
+            fi
+          done < prs.tsv
