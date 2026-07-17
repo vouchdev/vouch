@@ -875,6 +875,152 @@ def test_cli_install_mcp_default_tier_is_t4(tmp_path: Path) -> None:
     assert (tmp_path / ".claude" / "settings.json").is_file()
 
 
+# --- one-command bootstrap (auto-init) -------------------------------------
+
+
+def test_cli_install_mcp_bootstraps_kb_when_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # install-mcp in a fresh project used to exit 0 with no .vouch/ and no
+    # warning; every installed hook then no-oped forever ('|| true') and the
+    # MCP server exited 2. One command must yield a working setup.
+    monkeypatch.delenv("VOUCH_KB_PATH", raising=False)
+    result = CliRunner().invoke(
+        cli, ["install-mcp", "claude-code", "--path", str(tmp_path)]
+    )
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / ".vouch" / "config.yaml").is_file()
+    assert "initialised KB" in result.output
+    # The real init path ran, not a bare mkdir: starter claim seeded.
+    assert list((tmp_path / ".vouch" / "claims").glob("*.yaml"))
+    assert "Seeded starter claim" in result.output
+
+
+def test_cli_install_mcp_no_init_warns_and_skips_kb(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("VOUCH_KB_PATH", raising=False)
+    result = CliRunner().invoke(
+        cli, ["install-mcp", "claude-code", "--path", str(tmp_path), "--no-init"]
+    )
+    assert result.exit_code == 0, result.output
+    assert not (tmp_path / ".vouch").exists()
+    # The warning must name the remedy, not fail silently like before.
+    assert "vouch init" in result.output
+
+
+def test_cli_install_mcp_target_alias_also_bootstraps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("VOUCH_KB_PATH", raising=False)
+    result = CliRunner().invoke(
+        cli, ["install-mcp", "claude-code", "--target", str(tmp_path)]
+    )
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / ".vouch" / "config.yaml").is_file()
+
+
+def test_cli_install_mcp_staging_host_never_bootstraps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # claude-desktop's target is a paste-ready staging dir, not project
+    # wiring; run from $HOME it must not plant a $HOME/.vouch that upward
+    # discovery would treat as every child project's KB.
+    monkeypatch.delenv("VOUCH_KB_PATH", raising=False)
+    result = CliRunner().invoke(
+        cli, ["install-mcp", "claude-desktop", "--path", str(tmp_path)]
+    )
+    assert result.exit_code == 0, result.output
+    assert not (tmp_path / ".vouch").exists()
+    assert "initialised KB" not in result.output
+
+
+def test_cli_install_mcp_ignores_vouch_kb_path_for_bootstrap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # An exported VOUCH_KB_PATH is a per-process override, not an ancestor
+    # KB: a fresh target must still get its own KB, with a note about the
+    # override instead of a bogus "Using existing KB".
+    other = tmp_path / "other"
+    assert CliRunner().invoke(cli, ["init", "--path", str(other)]).exit_code == 0
+    project = tmp_path / "project"
+    project.mkdir()
+    monkeypatch.setenv("VOUCH_KB_PATH", str(other / ".vouch"))
+    result = CliRunner().invoke(
+        cli, ["install-mcp", "claude-code", "--path", str(project)]
+    )
+    assert result.exit_code == 0, result.output
+    assert (project / ".vouch" / "config.yaml").is_file()
+    assert "Using existing KB" not in result.output
+    assert "VOUCH_KB_PATH" in result.output
+
+
+def test_cli_install_mcp_bootstrap_failure_is_clean_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("VOUCH_KB_PATH", raising=False)
+
+    def boom(root: Path, **kwargs: object) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr("vouch.cli._bootstrap_kb", boom)
+    result = CliRunner().invoke(
+        cli, ["install-mcp", "claude-code", "--path", str(tmp_path)]
+    )
+    assert result.exit_code != 0
+    assert "Traceback" not in result.output
+    assert "could not initialise" in result.output
+    assert "--no-init" in result.output
+
+
+def test_cli_install_mcp_existing_kb_is_untouched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("VOUCH_KB_PATH", raising=False)
+    runner = CliRunner()
+    assert runner.invoke(cli, ["init", "--path", str(tmp_path)]).exit_code == 0
+    before = sorted(p.name for p in (tmp_path / ".vouch" / "claims").glob("*"))
+    result = runner.invoke(
+        cli, ["install-mcp", "claude-code", "--path", str(tmp_path)]
+    )
+    assert result.exit_code == 0, result.output
+    after = sorted(p.name for p in (tmp_path / ".vouch" / "claims").glob("*"))
+    assert before == after
+    assert "initialised KB" not in result.output
+    # KB at exactly the target: no note either, the setup is simply right.
+    assert "Using existing KB" not in result.output
+
+
+def test_cli_install_mcp_ancestor_kb_is_noted_not_shadowed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A KB above the target (upward discovery) is what the hooks will use;
+    # surfacing it beats silently planting a second, shadowing KB.
+    monkeypatch.delenv("VOUCH_KB_PATH", raising=False)
+    runner = CliRunner()
+    assert runner.invoke(cli, ["init", "--path", str(tmp_path)]).exit_code == 0
+    project = tmp_path / "nested" / "proj"
+    project.mkdir(parents=True)
+    result = runner.invoke(
+        cli, ["install-mcp", "claude-code", "--path", str(project)]
+    )
+    assert result.exit_code == 0, result.output
+    assert not (project / ".vouch").exists()
+    assert "Using existing KB" in result.output
+
+
+def test_cli_install_mcp_unknown_host_does_not_bootstrap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("VOUCH_KB_PATH", raising=False)
+    result = CliRunner().invoke(
+        cli, ["install-mcp", "not-a-host", "--path", str(tmp_path)]
+    )
+    assert result.exit_code != 0
+    # A typo'd host must not plant a KB as a side effect.
+    assert not (tmp_path / ".vouch").exists()
+
+
 # --- packaging --------------------------------------------------------------
 
 

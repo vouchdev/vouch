@@ -7,6 +7,21 @@ All notable changes to vouch are documented here. Format follows
 ## [Unreleased]
 
 ### Added
+- `vouch install-mcp <host>` now bootstraps the KB when no `.vouch/` is
+  discoverable at or above the target, making install a one-command
+  setup. previously it exited 0 with "0 failed" in a fresh project while
+  every installed hook silently no-oped forever (`|| true`) and the mcp
+  server exited 2 — with nothing ever telling the user to run
+  `vouch init`. opt out with `--no-init` (a loud stderr warning then
+  names the remedy); an ancestor KB is reported ("Using existing KB
+  at …"), never shadowed by a second one; unknown hosts still fail
+  cleanly without planting a KB. staging-dir hosts opt out via a new
+  `kb_bootstrap: false` manifest key (claude-desktop does — its target
+  is a paste-ready staging dir, and a KB planted at an arbitrary cwd
+  would ambiently capture every child project). the preflight ignores
+  a shell-exported `VOUCH_KB_PATH` (it answers "what does this tree
+  resolve to", and notes the override on stderr instead). `vouch init`
+  and the auto-init share one code path so they cannot drift.
 - cli mirrors for the last five `kb.*` methods that had none —
   `vouch propose-delete`, `vouch source list`, `vouch session list`,
   `vouch session transcript`, `vouch session summarize` — and the

@@ -96,6 +96,10 @@ class _Manifest:
     tiers: dict[str, list[_FileEntry]]
     fence_begin: str = _DEFAULT_FENCE_BEGIN
     fence_end: str = _DEFAULT_FENCE_END
+    # False for hosts whose install target is a staging dir for user-global
+    # config (claude-desktop) rather than project wiring — a KB bootstrapped
+    # at the target would land wherever the user happened to be standing.
+    kb_bootstrap: bool = True
 
 
 def _load_manifest(host: str) -> _Manifest:
@@ -188,13 +192,31 @@ def _load_manifest(host: str) -> _Manifest:
         fence_begin = _DEFAULT_FENCE_BEGIN
         fence_end = _DEFAULT_FENCE_END
 
+    kb_bootstrap = data.get("kb_bootstrap", True)
+    if not isinstance(kb_bootstrap, bool):
+        raise AdapterError(
+            f"{host}: install.yaml `kb_bootstrap` must be a boolean, "
+            f"got {type(kb_bootstrap).__name__} ({kb_bootstrap!r})"
+        )
+
     return _Manifest(
         host=host,
         pretty=str(data.get("pretty") or host),
         tiers=parsed,
         fence_begin=fence_begin,
         fence_end=fence_end,
+        kb_bootstrap=kb_bootstrap,
     )
+
+
+def wants_kb_bootstrap(host: str) -> bool:
+    """Whether ``install-mcp`` may bootstrap a KB at this host's target.
+
+    Manifest-declared (`kb_bootstrap`, default true) so the knowledge lives
+    with the adapter: false for staging-dir hosts like claude-desktop whose
+    real config is user-global and whose target is not project wiring.
+    """
+    return _load_manifest(host).kb_bootstrap
 
 
 def available_adapters() -> list[str]:

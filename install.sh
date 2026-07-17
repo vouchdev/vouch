@@ -279,11 +279,10 @@ claude_code_nudge() {
     if [ -d "$HOME/.claude" ] || has_cmd claude; then
         printf '\n'
         info "${C_BOLD}Claude Code detected.${C_RESET}"
-        info "Wire vouch into a project (one-time, per repo):"
+        info "Wire vouch into a project (one command, one-time, per repo):"
         printf '\n'
         printf '    %scd /path/to/your/project%s\n' "$C_BOLD" "$C_RESET"
-        printf '    %svouch init%s\n' "$C_BOLD" "$C_RESET"
-        printf '    %svouch install-mcp claude-code%s\n' "$C_BOLD" "$C_RESET"
+        printf '    %svouch install-mcp claude-code%s   # creates .vouch/ if missing\n' "$C_BOLD" "$C_RESET"
         printf '\n'
         info "Then restart Claude Code — vouch's kb.* tools and slash commands"
         info "(/vouch-recall, /vouch-status, …) will be available."
@@ -311,7 +310,8 @@ main() {
 
     printf '\n'
     info "${C_BOLD}Next:${C_RESET}"
-    info "  ${C_BOLD}vouch init${C_RESET}              # create a .vouch/ KB in your project"
+    info "  ${C_BOLD}vouch install-mcp <host>${C_RESET}  # wire a host (creates .vouch/ if missing)"
+    info "  ${C_BOLD}vouch init${C_RESET}              # KB-only setup, no host wiring"
     info "  ${C_BOLD}vouch serve${C_RESET}             # start the MCP server"
     info "  ${C_BOLD}vouch --help${C_RESET}            # the rest"
     claude_code_nudge

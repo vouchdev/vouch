@@ -46,9 +46,14 @@ optional flags (all real — verified against `cli.py`):
 
 - `--tier T1|T2|T3|T4` — how much to install; tiers stack (default `T4`).
 - `--path <dir>` or `--target <dir>` — project root to write into (default `.`).
+- `--no-init` — do not bootstrap a KB when `.vouch/` is missing.
 
-re-runs are flat-noop: expect lines containing `written`, `appended`, `merged`,
-or `skipped`. you may run this command unconditionally on every session start.
+when no `.vouch/` is discoverable at or above the target, this command
+bootstraps one first (same path as `vouch init`; staging-dir hosts like
+`claude-desktop` are exempt) — expect a `No .vouch/ found — initialised KB
+at …` line in that case. re-runs are flat-noop: expect lines containing
+`written`, `appended`, `merged`, or `skipped`. you may run this command
+unconditionally on every session start.
 
 **assert:** exits 0; no `error:` lines.
 
@@ -72,7 +77,8 @@ see step 6.)
 
 ## 4. create or locate a kb
 
-if `.vouch/` is missing:
+step 2 already bootstraps the KB when it is missing, so normally there is
+nothing to create here. if you wired with `--no-init` (or skipped step 2):
 
 ```bash
 vouch init
