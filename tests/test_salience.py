@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from vouch import health, salience
-from vouch.models import Claim, Entity, EntityType
+from vouch.models import Claim, ClaimStatus, Entity, EntityType
 from vouch.storage import KBStore
 
 
@@ -41,6 +41,31 @@ def test_record_then_compute_highlights_entity(store: KBStore) -> None:
     assert out
     rec = out[0]
     assert rec["entity_id"] == "jwt"
+    assert rec["claim_count"] == 1
+    assert rec["top_claim_id"] == "c1"
+
+
+@pytest.mark.parametrize(
+    "status",
+    [ClaimStatus.SUPERSEDED, ClaimStatus.ARCHIVED, ClaimStatus.REDACTED],
+)
+def test_retired_claims_are_not_salient(store: KBStore, status: ClaimStatus) -> None:
+    # a retired claim is not live evidence: it must neither inflate claim_count
+    # nor surface as top_claim_id. "c0" sorts before the live "c1", so a
+    # retired claim that is still counted wins the top slot.
+    src = store.put_source(b"auth notes")
+    store.put_claim(
+        Claim(
+            id="c0",
+            text="auth used basic auth",
+            evidence=[src.id],
+            entities=["jwt"],
+            status=status,
+        )
+    )
+    for _ in range(3):
+        salience.record_query("sess-1", "jwt")
+    rec = salience.compute_salience(store, "sess-1")[0]
     assert rec["claim_count"] == 1
     assert rec["top_claim_id"] == "c1"
 

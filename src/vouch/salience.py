@@ -28,11 +28,22 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from . import index_db
+from .models import ClaimStatus
 from .storage import KBStore
 
 DEFAULT_WINDOW = 8
 DEFAULT_TOP_K = 3
 _EXPIRY_SECONDS = 30 * 60
+
+# a superseded / archived / redacted claim is not live evidence, so it must
+# neither inflate an entity's claim_count nor surface as its top_claim_id
+# (consistent with issue #78, and with the same exclusion in context, graph,
+# digest, health and experts).
+_RETIRED_CLAIM_STATUSES = frozenset({
+    ClaimStatus.SUPERSEDED,
+    ClaimStatus.ARCHIVED,
+    ClaimStatus.REDACTED,
+})
 
 
 @dataclass
@@ -141,6 +152,8 @@ def compute_salience(
     # Claims referencing each matched entity, by claim id (for stable picking).
     claims_by_entity: dict[str, list[str]] = {}
     for claim in store.list_claims():
+        if claim.status in _RETIRED_CLAIM_STATUSES:
+            continue
         for eid in claim.entities:
             if eid in scores:
                 claims_by_entity.setdefault(eid, []).append(claim.id)
