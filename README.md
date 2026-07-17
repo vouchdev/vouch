@@ -146,6 +146,8 @@ compile:
 vouch review                    # walk pending proposals one at a time
 ```
 
+Until you approve something, recall stays silent on purpose: the session-start digest and the per-prompt `[vouch memory]` injection draw only on **approved** knowledge. A fresh KB showing no memory in Claude Code isn't broken — it's waiting for your first `vouch review`.
+
 **Want a browser UI for reviewing and proposing?** The video shows the **vouch webapp** — chat, review queue, claims, and stats. Your options:
 
 - **No setup**: the Docker demo above
