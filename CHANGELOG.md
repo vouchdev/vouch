@@ -6,6 +6,14 @@ All notable changes to vouch are documented here. Format follows
 
 ## [Unreleased]
 
+### Fixed
+- `_meta.vouch_hot_memory` dropped `actionable` claims: the sidebar's live
+  set was `working` / `stable` / `contested`, so `kb.confirm` — which
+  promotes a working claim to `actionable` and bumps `last_confirmed_at` —
+  removed a claim from the recency sidebar at the moment it became the
+  freshest thing in the kb. the live set is now the complement of the
+  retired statuses, matching `vault_sync`.
+
 ## [1.4.0] — 2026-07-17
 
 ### Added
