@@ -1,6 +1,6 @@
 [project]
 name = "vouch-kb"
-version = "1.3.0"
+version = "1.4.0"
 description = "Git-native, review-gated knowledge base for LLM agents. MCP server + CLI."
 readme = "README.md"
 requires-python = ">=3.11"

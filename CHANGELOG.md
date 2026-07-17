@@ -6,6 +6,8 @@ All notable changes to vouch are documented here. Format follows
 
 ## [Unreleased]
 
+## [1.4.0] — 2026-07-17
+
 ### Added
 - `vouch install-mcp <host>` now bootstraps the KB when no `.vouch/` is
   discoverable at or above the target, making install a one-command
