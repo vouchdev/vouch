@@ -148,6 +148,8 @@ vouch review                    # walk pending proposals one at a time
 
 Until you approve something, recall stays silent on purpose: the session-start digest and the per-prompt `[vouch memory]` injection draw only on **approved** knowledge. A fresh KB showing no memory in Claude Code isn't broken — it's waiting for your first `vouch review`.
 
+Prefer no human in the loop? Set `review.auto_approve_on_receipt: true` in `.vouch/config.yaml`: captured claims whose quoted receipts verify byte-for-byte against their source are then approved mechanically, at capture time. Anything that can't quote its source — session-summary pages included — still waits for your review.
+
 **Want a browser UI for reviewing and proposing?** The video shows the **vouch webapp** — chat, review queue, claims, and stats. Your options:
 
 - **No setup**: the Docker demo above
