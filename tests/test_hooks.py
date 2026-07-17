@@ -57,6 +57,62 @@ def test_no_hits_injects_nothing(store: KBStore, monkeypatch: pytest.MonkeyPatch
     assert hooks.build_claude_prompt_hook(store, json.dumps({"prompt": "zzznomatch"})) == ""
 
 
+def test_conversational_prompt_with_no_informative_tokens_injects_nothing(
+    store: KBStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A prompt made of stopwords must inject zero tokens of context.
+
+    Regression for the «one»/«better» noise: FTS ORs every prompt token, so
+    conversational prompts matched claims on words like "one" and filled the
+    block with irrelevant snippets on every turn.
+    """
+    monkeypatch.setattr(
+        context.index_db,
+        "search",
+        lambda *a, **k: [("claim", "c1", "deploys run on «one» tuesday", 2.0)],
+    )
+    monkeypatch.setattr(context.index_db, "search_semantic", lambda *a, **k: [])
+    out = hooks.build_claude_prompt_hook(
+        store, json.dumps({"prompt": "honestly think, which one is better you think?"})
+    )
+    assert out == ""
+
+
+def test_stopwords_are_stripped_from_the_retrieval_query(
+    store: KBStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: dict[str, str] = {}
+
+    def _spy(*a: object, **k: object) -> dict[str, list[object]]:
+        seen["query"] = str(k["query"])
+        return {"items": []}
+
+    monkeypatch.setattr(hooks, "build_context_pack", _spy)
+    hooks.build_claude_prompt_hook(
+        store, json.dumps({"prompt": "when do the deploys run in ci?"})
+    )
+    assert seen["query"] == "deploys run ci"
+
+
+def test_claim_hits_render_full_text_not_snippet_windows(store: KBStore) -> None:
+    """The injected block carries the whole approved claim, not the FTS5
+    16-token «»-highlighted window — elided snippets are a search-UI
+    affordance and read as garbage in model context."""
+    long_text = (
+        "the release workflow pushes a version tag, waits for ci to go green, "
+        "and then publishes the wheel to pypi with trusted publishing enabled"
+    )
+    src = store.put_source(b"more evidence")
+    store.put_claim(Claim(id="c9", text=long_text, evidence=[src.id]))
+    health.rebuild_index(store)
+    out = hooks.build_claude_prompt_hook(
+        store, json.dumps({"prompt": "how does the release workflow publish to pypi"})
+    )
+    ctx = json.loads(out)["hookSpecificOutput"]["additionalContext"]
+    assert long_text in ctx
+    assert "«" not in ctx and "»" not in ctx
+
+
 def test_non_dict_json_payload_is_safe(store: KBStore) -> None:
     for raw in ("null", "42", "true", "[1,2,3]", '"a string"'):
         assert hooks.build_claude_prompt_hook(store, raw) == ""
@@ -69,7 +125,9 @@ def test_build_context_pack_exception_is_swallowed(
         raise RuntimeError("boom")
 
     monkeypatch.setattr(hooks, "build_context_pack", _boom)
-    assert hooks.build_claude_prompt_hook(store, json.dumps({"prompt": "x"})) == ""
+    # an informative prompt, so the call actually reaches build_context_pack
+    # (a stopword-only prompt would short-circuit before the exception path).
+    assert hooks.build_claude_prompt_hook(store, json.dumps({"prompt": "deploys"})) == ""
 
 
 def test_context_hook_cli_always_exits_zero_without_kb(

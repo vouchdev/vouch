@@ -48,6 +48,50 @@ def test_segment_source_drops_short_noise_and_dupes() -> None:
     assert all(any(c.isalpha() for c in s) for s in segs)  # no pure-symbol spans
 
 
+def test_segment_source_keeps_dotted_tokens_intact() -> None:
+    """Periods inside versions, filenames, and links are not sentence ends.
+
+    Regression for the fragment-claim factory: splitting "1.2.0" or
+    "cli.py:2550" on every dot minted approved claims like
+    "0`, and let release." — a boundary needs trailing whitespace.
+    """
+    text = (
+        "vouch 1.2.0 shipped to pypi yesterday afternoon. "
+        "the parser bug lives in src/vouch/cli.py:2550 near the top. "
+        "see [the changelog](https://github.com/vouchdev/vouch/blob/main/"
+        "CHANGELOG.md) for details on it."
+    )
+    segs = extract.segment_source(text)
+    assert "vouch 1.2.0 shipped to pypi yesterday afternoon." in segs
+    assert "the parser bug lives in src/vouch/cli.py:2550 near the top." in segs
+    assert (
+        "see [the changelog](https://github.com/vouchdev/vouch/blob/main/"
+        "CHANGELOG.md) for details on it." in segs
+    )
+    assert len(segs) == 3
+
+
+def test_segment_source_drops_unbalanced_markup_fragments() -> None:
+    """A span with dangling backticks or brackets is a shard, not a claim."""
+    text = (
+        "0`, and let release. "
+        "py:89](/tmp/wt/src/vouch/hooks. "
+        "real sentences survive the coherence gate just fine."
+    )
+    segs = extract.segment_source(text)
+    assert segs == ["real sentences survive the coherence gate just fine."]
+
+
+def test_segment_source_drops_punctuation_led_and_single_word_spans() -> None:
+    text = (
+        ", and the rest of a mangled sentence trails off here. "
+        "supercalifragilisticexpialidocious. "
+        "a full proposition stands on its own feet."
+    )
+    segs = extract.segment_source(text)
+    assert segs == ["a full proposition stands on its own feet."]
+
+
 def test_extract_receipt_claims_files_verifying_claims(store: KBStore) -> None:
     src = store.put_source(SOURCE)
     filed = extract.extract_receipt_claims(store, src.id, proposed_by="agent")

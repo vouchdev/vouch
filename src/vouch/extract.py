@@ -25,10 +25,11 @@ from .proposals import (
 )
 from .storage import KBStore
 
-# Split on newlines and sentence-ending punctuation. Each match is kept as an
-# exact substring of the source so its receipt verifies; only surrounding
-# whitespace is stripped (the inner run stays contiguous in the source).
-_SEGMENT_RE = re.compile(r"[^\n.!?]+[.!?]?")
+# A sentence boundary is punctuation followed by whitespace (or a newline).
+# A bare dot is NOT a boundary: periods inside "1.2.0", "cli.py:2550", or a
+# markdown link have no trailing whitespace, and splitting on them minted
+# mid-token shards like "0`, and let release." as claims.
+_BOUNDARY_RE = re.compile(r"[.!?]+(?=\s)|\n")
 
 DEFAULT_MIN_CHARS = 16
 DEFAULT_MAX_CHARS = 320
@@ -37,10 +38,43 @@ DEFAULT_MAX_CHARS = 320
 # the characters to be letters.
 _MIN_LETTER_RATIO = 0.5
 
+_OPENING_CHARS = "\"'`([{"
+_BRACKET_PAIRS = (("(", ")"), ("[", "]"), ("{", "}"))
+
+
+def _split_spans(text: str) -> list[str]:
+    """Slice text at sentence boundaries; every span is a verbatim substring."""
+    spans: list[str] = []
+    start = 0
+    for match in _BOUNDARY_RE.finditer(text):
+        spans.append(text[start:match.end()])
+        start = match.end()
+    if start < len(text):
+        spans.append(text[start:])
+    return spans
+
 
 def _is_noise(segment: str) -> bool:
     letters = sum(c.isalpha() for c in segment)
     return letters < len(segment) * _MIN_LETTER_RATIO
+
+
+def _is_claimworthy(segment: str) -> bool:
+    """A span must read as a proposition, not a shard of mangled markup.
+
+    Dangling backticks/brackets and punctuation-led starts are the signature
+    of a segment cut mid-construct; single- or two-word spans carry no
+    proposition. This gate is what keeps "receipt verifies" from being the
+    only bar a claim has to clear.
+    """
+    first = segment[0]
+    if not (first.isalnum() or first in _OPENING_CHARS):
+        return False
+    if segment.count("`") % 2:
+        return False
+    if any(segment.count(o) != segment.count(c) for o, c in _BRACKET_PAIRS):
+        return False
+    return len(segment.split()) >= 3
 
 
 def segment_source(
@@ -51,17 +85,18 @@ def segment_source(
 ) -> list[str]:
     """Deterministic split into candidate claim spans, each a verbatim substring.
 
-    Order-preserving and de-duplicated. Drops fragments that are too short, too
-    long, or mostly markup. Whitespace-stripping is safe for the receipt: the
-    stripped span is still a contiguous byte run in the source.
+    Order-preserving and de-duplicated. Drops fragments that are too short,
+    too long, mostly markup, or not claim-worthy (unbalanced markup,
+    punctuation-led, fewer than three words). Whitespace-stripping is safe for
+    the receipt: the stripped span is still a contiguous byte run in the source.
     """
     seen: set[str] = set()
     out: list[str] = []
-    for match in _SEGMENT_RE.finditer(text):
-        segment = match.group().strip()
-        if not (min_chars <= len(segment) <= max_chars):
+    for span in _split_spans(text):
+        segment = span.strip()
+        if not segment or not (min_chars <= len(segment) <= max_chars):
             continue
-        if _is_noise(segment) or segment in seen:
+        if _is_noise(segment) or not _is_claimworthy(segment) or segment in seen:
             continue
         seen.add(segment)
         out.append(segment)
