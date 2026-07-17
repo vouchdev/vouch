@@ -1,5 +1,6 @@
 import subprocess
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 from vouch import pr_bot
@@ -102,3 +103,140 @@ def test_codeowners_covers_every_core_glob():
     for glob in pr_bot.CORE_GLOBS:
         needle = "/" + glob.replace("/**", "/")
         assert needle in text, f"{glob} missing from .github/CODEOWNERS"
+
+
+def _review(state, sha, login="coderabbitai[bot]"):
+    return {"user": {"login": login}, "state": state, "commit_id": sha}
+
+
+def test_coderabbit_pending_when_no_review_on_head():
+    # approved an earlier commit, but head has no coderabbit review yet.
+    reviews = [_review("APPROVED", "old")]
+    assert pr_bot.coderabbit_verdict(reviews, head_sha="new") == ("pending", 0)
+
+
+def test_coderabbit_approved_on_head():
+    reviews = [_review("CHANGES_REQUESTED", "c1"), _review("APPROVED", "c2")]
+    assert pr_bot.coderabbit_verdict(reviews, head_sha="c2") == ("approved", 1)
+
+
+def test_coderabbit_changes_on_head():
+    reviews = [_review("CHANGES_REQUESTED", "c1")]
+    assert pr_bot.coderabbit_verdict(reviews, head_sha="c1") == ("changes", 1)
+
+
+def test_coderabbit_strikes_count_distinct_commits():
+    reviews = [
+        _review("CHANGES_REQUESTED", "c1"),
+        _review("CHANGES_REQUESTED", "c1"),  # same commit, still one strike
+        _review("CHANGES_REQUESTED", "c2"),
+        _review("CHANGES_REQUESTED", "c3"),
+    ]
+    verdict, strikes = pr_bot.coderabbit_verdict(reviews, head_sha="c3")
+    assert (verdict, strikes) == ("changes", 3)
+
+
+def test_coderabbit_ignores_other_reviewers_and_comments():
+    reviews = [
+        _review("APPROVED", "c1", login="rando"),      # not coderabbit
+        _review("COMMENTED", "c1"),                     # no verdict
+        _review("CHANGES_REQUESTED", "c1"),
+    ]
+    assert pr_bot.coderabbit_verdict(reviews, head_sha="c1") == ("changes", 1)
+
+
+def test_gate_status_maps_verdicts():
+    assert pr_bot.gate_status("approved") == "success"
+    assert pr_bot.gate_status("changes") == "failure"
+    assert pr_bot.gate_status("pending") == "pending"
+
+
+def test_should_close_after_three_strikes():
+    assert pr_bot.should_close("changes", 3, author="rando") is True
+    assert pr_bot.should_close("changes", 2, author="rando") is False
+
+
+def test_should_close_never_when_approved():
+    assert pr_bot.should_close("approved", 5, author="rando") is False
+
+
+def test_should_close_exempts_owner_and_bots():
+    assert pr_bot.should_close("changes", 9, author="plind-junior") is False
+    assert pr_bot.should_close("changes", 9, author="dependabot[bot]") is False
+
+
+def _iso(epoch):
+    return datetime.fromtimestamp(epoch, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _review_ts(state, sha, epoch, login="coderabbitai[bot]"):
+    return {"user": {"login": login}, "state": state, "commit_id": sha,
+            "submitted_at": _iso(epoch)}
+
+
+_NOW = 1_700_000_000
+
+
+def test_stale_closes_after_two_days():
+    reviews = [_review_ts("CHANGES_REQUESTED", "head", _NOW - 3 * 86400)]
+    assert pr_bot.should_close_stale(
+        reviews, head_sha="head", now_epoch=_NOW, author="rando") is True
+
+
+def test_stale_not_within_two_days():
+    reviews = [_review_ts("CHANGES_REQUESTED", "head", _NOW - 1 * 86400)]
+    assert pr_bot.should_close_stale(
+        reviews, head_sha="head", now_epoch=_NOW, author="rando") is False
+
+
+def test_stale_ignored_when_author_pushed_a_new_commit():
+    # the change request is on an old commit; head moved on and has no review.
+    reviews = [_review_ts("CHANGES_REQUESTED", "old", _NOW - 5 * 86400)]
+    assert pr_bot.should_close_stale(
+        reviews, head_sha="new", now_epoch=_NOW, author="rando") is False
+
+
+def test_stale_never_when_approved_on_head():
+    reviews = [_review_ts("APPROVED", "head", _NOW - 5 * 86400)]
+    assert pr_bot.should_close_stale(
+        reviews, head_sha="head", now_epoch=_NOW, author="rando") is False
+
+
+def test_stale_exempts_owner_and_bots():
+    reviews = [_review_ts("CHANGES_REQUESTED", "head", _NOW - 9 * 86400)]
+    assert pr_bot.should_close_stale(
+        reviews, head_sha="head", now_epoch=_NOW, author="plind-junior") is False
+    assert pr_bot.should_close_stale(
+        reviews, head_sha="head", now_epoch=_NOW, author="dependabot[bot]") is False
+
+
+def test_cli_stale_check_exit_codes(tmp_path):
+    import json as _json
+    f = tmp_path / "reviews.json"
+    f.write_text(_json.dumps(
+        [_review_ts("CHANGES_REQUESTED", "head", _NOW - 3 * 86400)]), encoding="utf-8")
+    stale = subprocess.run(
+        [sys.executable, "-m", "vouch.pr_bot", "stale-check", "--reviews-file", str(f),
+         "--head-sha", "head", "--author", "rando", "--now-epoch", str(_NOW)])
+    fresh = subprocess.run(
+        [sys.executable, "-m", "vouch.pr_bot", "stale-check", "--reviews-file", str(f),
+         "--head-sha", "head", "--author", "rando", "--now-epoch", str(_NOW - 3 * 86400)])
+    assert stale.returncode == 0 and fresh.returncode == 1
+
+
+def test_cli_coderabbit_gate_outputs(tmp_path):
+    import json as _json
+    f = tmp_path / "reviews.json"
+    f.write_text(_json.dumps([
+        _review("CHANGES_REQUESTED", "c1"),
+        _review("CHANGES_REQUESTED", "c2"),
+        _review("CHANGES_REQUESTED", "head"),
+    ]), encoding="utf-8")
+    out = subprocess.run(
+        [sys.executable, "-m", "vouch.pr_bot", "coderabbit-gate",
+         "--reviews-file", str(f), "--head-sha", "head", "--author", "rando"],
+        capture_output=True, text=True, check=True)
+    assert "state=failure" in out.stdout
+    assert "verdict=changes" in out.stdout
+    assert "strikes=3" in out.stdout
+    assert "close=true" in out.stdout

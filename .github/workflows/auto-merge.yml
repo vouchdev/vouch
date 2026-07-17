@@ -1,6 +1,6 @@
 name: auto-merge
 on:
-  pull_request_target: # zizmor: ignore[dangerous-triggers] no untrusted code runs here; verification is delegated to pr-verify.yml behind an environment approval gate
+  pull_request_target: # zizmor: ignore[dangerous-triggers] no untrusted code runs here; only metadata is read and native auto-merge is armed. review is done by CodeRabbit + ci.
     types: [labeled, synchronize]
 permissions: {}
 # a newer event for the same PR supersedes an in-flight run.
@@ -10,7 +10,7 @@ concurrency:
 jobs:
   # any push VOIDS prior authorization: disable auto-merge and drop the label.
   # never checks out or runs head code. re-authorize (label or /auto-merge) to
-  # re-verify the new head. closes the label-then-swap TOCTOU.
+  # re-arm on the new head. closes the label-then-swap TOCTOU.
   deauthorize-on-push:
     if: github.event.action == 'synchronize'
     runs-on: ubuntu-latest
@@ -29,11 +29,11 @@ jobs:
           if [ "$had_label" = "true" ]; then
             gh pr edit "$PR" --repo "$REPO" --remove-label auto-merge || true
             gh pr comment "$PR" --repo "$REPO" --body \
-              "new commits were pushed after authorization, so the prior verification no longer matches the head. auto-merge is disarmed and the label removed — re-authorize (add the auto-merge label or comment /auto-merge) to re-verify the new commits."
+              "new commits were pushed after authorization. auto-merge is disarmed and the label removed — re-add the auto-merge label (or comment /auto-merge) to re-arm on the new head."
           fi
 
   guard:
-    # only a FRESH label starts verification, and only from the trusted owner.
+    # only a FRESH label arms auto-merge, and only from the trusted owner.
     if: github.event.action == 'labeled' && github.event.label.name == 'auto-merge'
     runs-on: ubuntu-latest
     permissions:
@@ -72,16 +72,19 @@ jobs:
           klass=$(PYTHONPATH=src python -m vouch.pr_bot classify --files-file changed.txt --print-klass)
           echo "klass=$klass" >> "$GITHUB_OUTPUT"
 
-  call-verify:
+  arm:
     needs: guard
+    # core PRs are never armed — CODEOWNERS requires the owner's approval.
+    if: needs.guard.outputs.klass != 'core'
+    runs-on: ubuntu-latest
     permissions:
       contents: write
       pull-requests: write
-      checks: write
-    uses: ./.github/workflows/pr-verify.yml
-    with:
-      pr_number: ${{ github.event.pull_request.number }}
-      head_sha: ${{ github.event.pull_request.head.sha }}
-      klass: ${{ needs.guard.outputs.klass }}
-    secrets:
-      anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+    steps:
+      - name: arm native auto-merge (non-core)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          gh pr merge "$PR" --repo "$REPO" --auto --squash
