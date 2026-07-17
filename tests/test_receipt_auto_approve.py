@@ -35,6 +35,12 @@ def _enable_receipt_gate(store: KBStore) -> None:
     )
 
 
+def _disable_receipt_gate(store: KBStore) -> None:
+    store.config_path.write_text(
+        "review:\n  auto_approve_on_receipt: false\n", encoding="utf-8"
+    )
+
+
 def test_receipt_verified_claim_self_approves_when_gate_on(store: KBStore) -> None:
     _enable_receipt_gate(store)
     src = store.put_source(b"the sky is blue today")
@@ -61,8 +67,23 @@ def test_bare_source_claim_still_needs_human_when_gate_on(store: KBStore) -> Non
         approve(store, res.id, approved_by="agent-a")
 
 
+def test_receipt_gate_on_by_default(store: KBStore) -> None:
+    # the starter config ships with auto_approve_on_receipt: true -- a fresh
+    # kb lets a verifying receipt clear self-approval with no config edit.
+    src = store.put_source(b"the sky is blue today")
+    res = propose_quoted_claim(
+        store, text="the sky is blue", source_id=src.id,
+        quote="the sky is blue", proposed_by="agent-a",
+    )
+    assert res is not None
+    claim = approve(store, res.id, approved_by="agent-a")
+    assert store.get_proposal(res.id).status is ProposalStatus.APPROVED
+    assert store.get_claim(claim.id).text == "the sky is blue"
+
+
 def test_receipt_claim_blocked_when_gate_off(store: KBStore) -> None:
-    # default config: gate off -- a verifying receipt does not grant self-approval.
+    # gate explicitly off -- a verifying receipt does not grant self-approval.
+    _disable_receipt_gate(store)
     src = store.put_source(b"the sky is blue")
     res = propose_quoted_claim(
         store, text="the sky is blue", source_id=src.id,
@@ -108,9 +129,54 @@ def test_auto_approve_receipts_drains_verified_leaves_unverified(
 
 
 def test_auto_approve_receipts_noop_when_gate_off(store: KBStore) -> None:
+    _disable_receipt_gate(store)
     src = store.put_source(b"alpha beta")
     propose_quoted_claim(
         store, text="mentions beta", source_id=src.id, quote="beta",
         proposed_by="agent-a",
     )
     assert auto_approve_receipts(store) == []
+
+
+def test_auto_approve_receipts_rejects_duplicate_of_durable_claim(
+    store: KBStore,
+) -> None:
+    # a session re-deriving a fact that is already durable must not crash the
+    # drain or pile up in the queue -- the duplicate is closed mechanically.
+    src = store.put_source(b"alpha beta gamma")
+    first = propose_quoted_claim(
+        store, text="mentions beta", source_id=src.id, quote="beta",
+        proposed_by="agent-a",
+    )
+    assert first is not None
+    assert len(auto_approve_receipts(store)) == 1
+
+    again = propose_quoted_claim(
+        store, text="mentions beta", source_id=src.id, quote="beta",
+        proposed_by="agent-a",
+    )
+    assert again is not None
+    assert auto_approve_receipts(store) == []
+    decided = store.get_proposal(again.id)
+    assert decided.status is ProposalStatus.REJECTED
+    assert "duplicate" in (decided.decision_reason or "")
+
+
+def test_auto_approve_receipts_leaves_id_conflict_pending(store: KBStore) -> None:
+    # same claim id, different text: not a duplicate but a conflict -- the
+    # drain never overwrites or rejects it, a human decides.
+    src = store.put_source(b"alpha beta gamma")
+    first = propose_quoted_claim(
+        store, text="mentions beta", source_id=src.id, quote="beta",
+        proposed_by="agent-a", slug_hint="shared-id",
+    )
+    assert first is not None
+    assert len(auto_approve_receipts(store)) == 1
+
+    other = propose_quoted_claim(
+        store, text="mentions gamma", source_id=src.id, quote="gamma",
+        proposed_by="agent-a", slug_hint="shared-id",
+    )
+    assert other is not None
+    assert auto_approve_receipts(store) == []
+    assert store.get_proposal(other.id).status is ProposalStatus.PENDING

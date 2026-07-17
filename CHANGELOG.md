@@ -6,6 +6,27 @@ All notable changes to vouch are documented here. Format follows
 
 ## [Unreleased]
 
+### Changed
+- the starter config now ships `review.auto_approve_on_receipt: true`
+  (and `require_human_approval: false`, an advisory key no code path
+  reads): a fresh KB auto-approves captured claims whose byte-offset
+  receipts verify against their source, so recall works out of the box
+  with no `vouch review` pass. the gate is unchanged for everything
+  the receipt check cannot vouch for — pages (session summaries
+  included), entities, relations, and claims that cannot quote their
+  source still wait for a human. existing KBs keep whatever their
+  `.vouch/config.yaml` says; set `auto_approve_on_receipt: false` to
+  restore the fully human gate.
+- the receipt drain now runs at every session start (`capture
+  finalize-all`), so verifiable claims left pending while the gate was
+  off are approved instead of stranded, and it is duplicate-safe: a
+  claim re-deriving text that is already durable is mechanically
+  rejected ("duplicate: identical claim already durable") rather than
+  crashing the drain or piling up in the review queue. a claim id held
+  by *different* text is a real conflict and stays pending for a human.
+  the same resolution now backs `capture answer`, which previously left
+  re-captured duplicates pending forever.
+
 ## [1.4.0] — 2026-07-17
 
 ### Added
