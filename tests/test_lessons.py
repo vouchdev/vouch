@@ -173,6 +173,26 @@ def test_jsonl_mark_lesson_followed_end_to_end(store: KBStore, monkeypatch) -> N
     assert resp["result"]["followed"] is True
 
 
+def test_jsonl_mark_lesson_followed_missing_claim_returns_error(
+    store: KBStore, monkeypatch
+) -> None:
+    """A missing claim_id must come back as a clean ok:false error, not a
+    raw traceback -- preserving the request id like every other JSONL
+    error path (see handle_request's ArtifactNotFoundError branch)."""
+    monkeypatch.chdir(store.root)
+    resp = handle_request(
+        {
+            "id": "r2",
+            "method": "kb.mark_lesson_followed",
+            "params": {"claim_id": "ghost", "followed": True},
+        }
+    )
+    assert resp["id"] == "r2"
+    assert resp["ok"] is False
+    assert "error" in resp
+    assert "ghost" in resp["error"]["message"]
+
+
 def test_mcp_mark_lesson_followed(store: KBStore, monkeypatch) -> None:
     monkeypatch.chdir(store.root)
     _lesson(store)
