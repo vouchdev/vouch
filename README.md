@@ -123,7 +123,9 @@ cd /path/to/your/project
 vouch install-mcp claude-code       # creates .vouch/ (if missing) + wires Claude Code
 ```
 
-`install-mcp` initialises the KB when no `.vouch/` is discoverable (pass `--no-init` to skip; `vouch init` still exists for KB-only setup), then writes `.mcp.json` (the `kb.*` MCP tools), the `/vouch-*` slash commands, and five hooks — `SessionStart` recall, `UserPromptSubmit` per-prompt recall, `PostToolUse` capture, `Stop` answer capture, `SessionEnd` rollup. Restart Claude Code so they load.
+`install-mcp` initialises the KB when no `.vouch/` is discoverable (pass `--no-init` to skip; `vouch init` still exists for KB-only setup), then writes `.mcp.json` (the `kb.*` MCP tools), the `/vouch-*` slash commands, and five hooks — `SessionStart` recall, `UserPromptSubmit` per-prompt recall, `PostToolUse` capture, `Stop` answer capture, `SessionEnd` rollup. It also registers vouch as a local-scope MCP server in `~/.claude.json` (the `⚑` line in the output). **Reload your editor window** (VS Code: *Developer: Reload Window*) so it loads.
+
+> **Why the extra registration?** A committed `.mcp.json` is a *project*-scope server, and Claude Code only loads one after a per-user approval — which the **VS Code extension never prompts for**, so `.mcp.json` alone leaves the `kb_*` tools invisible in the extension (they sit at "pending approval", while the hooks quietly work — easy to misread as "connected"). The local-scope entry `install-mcp` writes is trusted on sight, so a fresh install just connects. Verify with `claude mcp list` (`vouch … ✔ Connected`). Pass `--no-approve` to skip it and approve `.mcp.json` yourself.
 
 **2. Point `compile` at an LLM** — the only step that needs a model. In `.vouch/config.yaml`:
 

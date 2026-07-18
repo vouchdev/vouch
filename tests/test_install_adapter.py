@@ -35,6 +35,20 @@ from vouch.install_adapter import (
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
+@pytest.fixture(autouse=True)
+def _sandbox_home(tmp_path_factory, monkeypatch):
+    """Redirect ``Path.home()`` to a throwaway dir for every test in this module.
+
+    ``install()`` now writes a local-scope MCP entry to ``~/.claude.json`` by
+    default (``approve=True``). Without this, the many tests (and CLI tests)
+    that call ``install("claude-code", …)`` with no explicit ``home`` would
+    scribble a ``projects[<tmp>]`` entry into the developer's real config.
+    """
+    fake_home = tmp_path_factory.mktemp("home")
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
+    return fake_home
+
+
 # --- catalogue ------------------------------------------------------------
 
 
@@ -1194,3 +1208,122 @@ def test_install_rejects_dst_escaping_target(
     with pytest.raises(AdapterError, match=r"escape|outside|traversal"):
         install("evil", target=target, tier="T1")
     assert not (tmp_path / "escape.txt").exists()
+
+
+# --- user_mcp: local-scope registration in ~/.claude.json ------------------
+#
+# The Claude Code VS Code extension will not load a project-scope `.mcp.json`
+# server until it is approved, and it never surfaces the approval prompt — so a
+# fresh install leaves the kb_* tools invisible. install-mcp also writes a
+# *local-scope* entry (projects[<abs>].mcpServers) which is trusted on sight,
+# exactly what `claude mcp add` does. These tests pin that behaviour with a
+# sandboxed `home` so the real ~/.claude.json is never touched.
+
+_WORKING_SPEC = {
+    "type": "stdio",
+    "command": "vouch",
+    "args": ["serve"],
+    "env": {"VOUCH_AGENT": "claude-code"},
+}
+
+
+def _claude_json(home: Path) -> dict:
+    return json.loads((home / ".claude.json").read_text(encoding="utf-8"))
+
+
+def test_install_registers_local_scope_mcp(tmp_path: Path) -> None:
+    target, home = tmp_path / "proj", tmp_path / "home"
+    target.mkdir()
+    home.mkdir()
+    result = install("claude-code", target=target, tier="T4", home=home)
+    assert any("mcp" in r for r in result.registered)
+    entry = _claude_json(home)["projects"][str(target.resolve())]["mcpServers"]["vouch"]
+    # byte-identical to the entry that is proven to load in the extension
+    assert entry == _WORKING_SPEC
+
+
+def test_install_mcp_registration_is_idempotent(tmp_path: Path) -> None:
+    target, home = tmp_path / "proj", tmp_path / "home"
+    target.mkdir()
+    home.mkdir()
+    install("claude-code", target=target, tier="T4", home=home)
+    before = (home / ".claude.json").read_text(encoding="utf-8")
+    second = install("claude-code", target=target, tier="T4", home=home)
+    after = (home / ".claude.json").read_text(encoding="utf-8")
+    assert second.registered == []                       # nothing new written
+    assert before == after                               # file untouched, no dup
+
+
+def test_no_approve_writes_nothing_to_claude_json(tmp_path: Path) -> None:
+    target, home = tmp_path / "proj", tmp_path / "home"
+    target.mkdir()
+    home.mkdir()
+    result = install("claude-code", target=target, tier="T4", approve=False, home=home)
+    assert result.registered == []
+    assert not (home / ".claude.json").exists()
+
+
+def test_registration_preserves_existing_claude_json(tmp_path: Path) -> None:
+    target, home = tmp_path / "proj", tmp_path / "home"
+    target.mkdir()
+    home.mkdir()
+    (home / ".claude.json").write_text(
+        json.dumps({"numStartups": 5, "projects": {"/other": {"mcpServers": {"x": {}}}}}),
+        encoding="utf-8",
+    )
+    install("claude-code", target=target, tier="T1", home=home)
+    data = _claude_json(home)
+    assert data["numStartups"] == 5                                  # untouched top-level
+    assert "x" in data["projects"]["/other"]["mcpServers"]           # untouched other project
+    assert "vouch" in data["projects"][str(target.resolve())]["mcpServers"]
+
+
+def test_registration_never_clobbers_user_server(tmp_path: Path) -> None:
+    target, home = tmp_path / "proj", tmp_path / "home"
+    target.mkdir()
+    home.mkdir()
+    mine = {"command": "my-own-vouch"}
+    (home / ".claude.json").write_text(
+        json.dumps({"projects": {str(target.resolve()): {"mcpServers": {"vouch": mine}}}}),
+        encoding="utf-8",
+    )
+    result = install("claude-code", target=target, tier="T1", home=home)
+    assert result.registered == []
+    kept = _claude_json(home)["projects"][str(target.resolve())]["mcpServers"]["vouch"]
+    assert kept == mine
+
+
+def test_malformed_claude_json_is_reported_not_raised(tmp_path: Path) -> None:
+    target, home = tmp_path / "proj", tmp_path / "home"
+    target.mkdir()
+    home.mkdir()
+    (home / ".claude.json").write_text("{ not valid json", encoding="utf-8")
+    result = install("claude-code", target=target, tier="T1", home=home)
+    # tier files still install; the bad config is surfaced as failed, not a crash
+    assert ".mcp.json" in result.written
+    assert any("mcp" in f for f in result.failed)
+
+
+def test_user_mcp_manifest_rejects_traversal_config(tmp_path: Path, monkeypatch) -> None:
+    import vouch.install_adapter as ia
+
+    adapters = tmp_path / "adapters"
+    (adapters / "evilmcp").mkdir(parents=True)
+    (adapters / "evilmcp" / "payload.txt").write_text("x", encoding="utf-8")
+    (adapters / "evilmcp" / "install.yaml").write_text(
+        "host: evilmcp\n"
+        "pretty: Evil\n"
+        "tiers:\n"
+        "  T1:\n"
+        "    - { src: payload.txt, dst: payload.txt }\n"
+        "user_mcp:\n"
+        "  config: ../../escape.json\n"
+        "  name: x\n"
+        "  spec: { command: x }\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(ia, "ADAPTERS_DIR", adapters)
+    target = tmp_path / "project"
+    target.mkdir()
+    with pytest.raises(AdapterError, match=r"bare filename"):
+        install("evilmcp", target=target, tier="T1", home=tmp_path / "home")
