@@ -542,6 +542,11 @@ def build_context_pack(
             if claim.status in _RETRACTED_CLAIM_STATUSES:
                 continue
             cites = list(claim.evidence)
+            # The FTS5 snippet is a «»-highlighted 16-token window — a
+            # search-UI affordance. Consumers of the pack (hook injection,
+            # kb_context) need the whole approved proposition; claims are
+            # length-capped, and the max_chars budget below still applies.
+            summary = claim.text
         summary = _enrich_summary(store, kind, hid, summary)
         items.append(
             ContextItem(
