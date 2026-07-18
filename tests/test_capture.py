@@ -40,6 +40,23 @@ def test_starter_config_has_capture_namespace() -> None:
     assert _starter_config()["capture"]["enabled"] is True
 
 
+def test_finalize_all_drains_receipt_backlog(store: KBStore) -> None:
+    # a verifiable claim left pending (e.g. filed while the gate was off) is
+    # drained on the next session start, not stranded in the queue forever.
+    from vouch.models import ProposalStatus
+    from vouch.proposals import propose_quoted_claim
+
+    src = store.put_source(b"the pipeline has four stages")
+    res = propose_quoted_claim(
+        store, text="the pipeline has four stages", source_id=src.id,
+        quote="the pipeline has four stages", proposed_by="agent-a",
+    )
+    assert res is not None
+    result = cap.finalize_all_except(store, "current-session")
+    assert result["auto_approved"] == 1
+    assert store.get_proposal(res.id).status is ProposalStatus.APPROVED
+
+
 def test_init_gitignores_captures(tmp_path: Path) -> None:
     kb = KBStore.init(tmp_path)
     assert "captures/" in (kb.kb_dir / ".gitignore").read_text()

@@ -71,6 +71,9 @@ def test_ingest_source_auto_approves_and_is_recallable(store: KBStore) -> None:
 
 
 def test_ingest_source_leaves_pending_when_gate_off(store: KBStore) -> None:
+    store.config_path.write_text(
+        "review:\n  auto_approve_on_receipt: false\n", encoding="utf-8"
+    )
     _src, approved = extract.ingest_source(store, SOURCE, proposed_by="agent")
     assert approved == []
     # proposed and receipt-backed, but still waiting for a human.

@@ -78,6 +78,26 @@ class InstallResult:
     # from ``skipped`` so "already installed" and "install failed" never look
     # the same to the caller / CLI.
     failed: list[str] = field(default_factory=list)
+    # user-scope MCP servers registered outside the target tree (in the host's
+    # user config, e.g. ~/.claude.json). Reported separately because the write
+    # lands outside `target` and, unlike the tier files, is a config the host
+    # engine reads on launch rather than a file the user edits.
+    registered: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class _UserMcp:
+    """A local-scope MCP registration declared by an adapter's manifest.
+
+    Written to ``<home>/<config>`` (e.g. ``~/.claude.json``). ``scope: project``
+    keys the server under ``projects[<abs target>].mcpServers``; ``scope: user``
+    puts it in the top-level ``mcpServers``. Idempotent: an existing server of
+    the same ``name`` is never overwritten.
+    """
+    config: str            # path relative to the user's home dir
+    scope: str             # "project" | "user"
+    name: str              # server key
+    spec: dict[str, Any]   # the server definition (command/args/env/…)
 
 
 @dataclass(frozen=True)
@@ -96,6 +116,7 @@ class _Manifest:
     tiers: dict[str, list[_FileEntry]]
     fence_begin: str = _DEFAULT_FENCE_BEGIN
     fence_end: str = _DEFAULT_FENCE_END
+    user_mcp: _UserMcp | None = None
     # false for hosts whose install target is a staging dir for user-global
     # config (claude-desktop) rather than project wiring — a KB bootstrapped
     # at the target would land wherever the user happened to be standing.
@@ -205,8 +226,38 @@ def _load_manifest(host: str) -> _Manifest:
         tiers=parsed,
         fence_begin=fence_begin,
         fence_end=fence_end,
+        user_mcp=_parse_user_mcp(host, data.get("user_mcp")),
         kb_bootstrap=kb_bootstrap,
     )
+
+
+def _parse_user_mcp(host: str, raw: Any) -> _UserMcp | None:
+    """Parse an optional ``user_mcp:`` manifest block, or return None."""
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise AdapterError(f"{host}: install.yaml `user_mcp:` must be a mapping")
+    config = raw.get("config")
+    if not isinstance(config, str) or not config.strip():
+        raise AdapterError(f"{host}: install.yaml user_mcp needs a non-empty `config`")
+    # `config` names a file in the user's home dir; a `..`/absolute value would
+    # let a manifest scribble anywhere on disk. Keep it a plain relative name.
+    if config != Path(config).name or config in {"", ".", ".."}:
+        raise AdapterError(
+            f"{host}: install.yaml user_mcp `config` must be a bare filename, got {config!r}"
+        )
+    scope = raw.get("scope", "project")
+    if scope not in {"project", "user"}:
+        raise AdapterError(
+            f"{host}: install.yaml user_mcp `scope` must be 'project' or 'user', got {scope!r}"
+        )
+    name = raw.get("name")
+    if not isinstance(name, str) or not name.strip():
+        raise AdapterError(f"{host}: install.yaml user_mcp needs a non-empty `name`")
+    spec = raw.get("spec")
+    if not isinstance(spec, dict):
+        raise AdapterError(f"{host}: install.yaml user_mcp `spec` must be a mapping")
+    return _UserMcp(config=config, scope=scope, name=name, spec=spec)
 
 
 def wants_kb_bootstrap(host: str) -> bool:
@@ -232,12 +283,26 @@ def available_adapters() -> list[str]:
     return sorted(out)
 
 
-def install(adapter: str, *, target: Path, tier: str = "T4") -> InstallResult:
+def install(
+    adapter: str,
+    *,
+    target: Path,
+    tier: str = "T4",
+    approve: bool = True,
+    home: Path | None = None,
+) -> InstallResult:
     """Install ``adapter``'s templates under ``target`` up to ``tier``.
 
     The call is idempotent: rerunning against a previously-installed tree
     produces an :class:`InstallResult` with everything in ``skipped`` and
     nothing in ``written`` / ``appended``.
+
+    When the adapter manifest declares a ``user_mcp:`` block and ``approve`` is
+    true, a local-scope MCP server is registered in the host's user config
+    (``home``/``<config>``, default ``~/.claude.json``). That is what makes a
+    fresh install connect in the Claude Code *extension*, whose engine ignores
+    an unapproved project ``.mcp.json``. Pass ``approve=False`` to skip it.
+    ``home`` overrides the user-config directory (tests point it at a tmp dir).
     """
     if tier not in _TIER_ORDER:
         raise AdapterError(
@@ -302,7 +367,69 @@ def install(adapter: str, *, target: Path, tier: str = "T4") -> InstallResult:
             shutil.copy2(src, dst)
             result.written.append(entry.dst)
 
+    if approve and manifest.user_mcp is not None:
+        _register_user_mcp(manifest.user_mcp, target=target, home=home, result=result)
+
     return result
+
+
+def _register_user_mcp(
+    reg: _UserMcp, *, target: Path, home: Path | None, result: InstallResult
+) -> None:
+    """Merge a local-scope MCP server into the host user config (idempotent).
+
+    Mirrors ``claude mcp add``: writes ``<home>/<reg.config>`` with the server
+    under ``projects[<abs target>].mcpServers`` (scope=project) or the top-level
+    ``mcpServers`` (scope=user). Every other key in the file is preserved and
+    the write is atomic. Failures are recorded (``result.failed``), never
+    raised — a config we can't safely rewrite must not abort a working install.
+    """
+    cfg_path = (home or Path.home()) / reg.config
+    label = f"{reg.config}:{reg.name} (mcp)"
+    try:
+        if cfg_path.exists():
+            raw = cfg_path.read_text(encoding="utf-8")
+            data = json.loads(raw) if raw.strip() else {}
+            if not isinstance(data, dict):
+                result.failed.append(label)
+                return
+        else:
+            data = {}
+
+        if reg.scope == "project":
+            projects = data.setdefault("projects", {})
+            if not isinstance(projects, dict):
+                result.failed.append(label)
+                return
+            container = projects.setdefault(str(target), {})
+        else:
+            container = data
+        if not isinstance(container, dict):
+            result.failed.append(label)
+            return
+        servers = container.setdefault("mcpServers", {})
+        if not isinstance(servers, dict):
+            result.failed.append(label)
+            return
+
+        if reg.name in servers:
+            # already registered — never clobber the user's own edits, and stay
+            # out of `result.skipped` (a file-path channel; this is a config
+            # entry, not a file). The CLI reminds the user to reload regardless.
+            return
+        servers[reg.name] = dict(reg.spec)
+
+        cfg_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = cfg_path.with_name(cfg_path.name + ".vouch-tmp")
+        tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+        if cfg_path.exists():
+            shutil.copymode(cfg_path, tmp)
+        tmp.replace(cfg_path)
+        result.registered.append(label)
+    except (OSError, ValueError):
+        # malformed json, unreadable/unwritable file — surface as failed, but
+        # the tier files are already installed, so don't unwind the whole run.
+        result.failed.append(label)
 
 
 def _install_fenced(

@@ -14,10 +14,12 @@ pipx install vouch-kb
 Make sure `vouch` is on the `PATH` Claude Code will see.
 
 The one-command path — `vouch install-mcp claude-code` from your project
-root — does everything below in one go, and initialises the `.vouch/` KB
+root — does everything below in one go, initialises the `.vouch/` KB
 first when the project doesn't have one yet (`vouch init` also does that
-on its own; `--no-init` skips it). The rest of this file is the manual
-equivalent.
+on its own; `--no-init` skips it), **and registers vouch in
+`~/.claude.json` so the VS Code extension loads it without a manual
+approval it never prompts for** (see step 2). The rest of this file is
+the manual equivalent.
 
 ## 2. Drop the MCP server into your project
 

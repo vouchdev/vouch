@@ -95,11 +95,16 @@ vouch approve prop-abc123 --reason "matches the meeting notes"
 The claim is now durable. The proposal moves to
 `.vouch/decided/prop-abc123.yaml` (committed, for audit).
 
-**Note on approval:** By default, vouch requires human approval and
-prevents self-approval (a proposer cannot approve their own proposal).
-For local testing, you can add `approver_role: trusted-agent` to 
-`.vouch/config.yaml`. Production deployments should keep the default
-`require_human_approval: true` to preserve the review gate.
+**Note on approval:** vouch prevents blanket self-approval (a proposer
+cannot approve their own proposal), with one mechanical exception that
+the starter config enables by default: a claim whose byte-offset
+receipts all verify against their source is auto-approved — the receipt
+is the reviewer (`review.auto_approve_on_receipt: true`). Everything
+else — pages, entities, relations, and any claim that cannot quote its
+source — still waits for a human. Set `auto_approve_on_receipt: false`
+in `.vouch/config.yaml` to put every write behind `vouch review`, or
+`approver_role: trusted-agent` to let an agent approve anything (local
+testing only).
 
 ```bash
 git add .vouch && git commit -m "kb: approve auth-uses-jwt"

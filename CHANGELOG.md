@@ -6,6 +6,43 @@ All notable changes to vouch are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+- `vouch install-mcp claude-code` now registers vouch as a **local-scope**
+  MCP server in `~/.claude.json` (`projects[<abs project>].mcpServers`),
+  the same thing `claude mcp add` does. a committed `.mcp.json` is a
+  *project*-scope server that Claude Code loads only after a per-user
+  approval — and the **VS Code extension never surfaces that approval
+  prompt**, so `.mcp.json` alone left the `kb_*` tools stuck at "pending
+  approval" in the extension while the hooks quietly ran (reads as
+  connected, isn't). the local-scope entry is trusted on sight, so a fresh
+  install now connects after a window reload with no manual step. verified
+  end-to-end: fresh project → `install-mcp` → `claude mcp list` reports
+  `✔ Connected` (was `⏸ Pending approval`). declared by a manifest
+  `user_mcp:` block (host-neutral core; only claude-code opts in);
+  idempotent and never clobbers a server you added yourself; opt out with
+  `--no-approve`.
+
+### Changed
+- the starter config now ships `review.auto_approve_on_receipt: true`
+  (and `require_human_approval: false`, an advisory key no code path
+  reads): a fresh KB auto-approves captured claims whose byte-offset
+  receipts verify against their source, so recall works out of the box
+  with no `vouch review` pass. the gate is unchanged for everything
+  the receipt check cannot vouch for — pages (session summaries
+  included), entities, relations, and claims that cannot quote their
+  source still wait for a human. existing KBs keep whatever their
+  `.vouch/config.yaml` says; set `auto_approve_on_receipt: false` to
+  restore the fully human gate.
+- the receipt drain now runs at every session start (`capture
+  finalize-all`), so verifiable claims left pending while the gate was
+  off are approved instead of stranded, and it is duplicate-safe: a
+  claim re-deriving text that is already durable is mechanically
+  rejected ("duplicate: identical claim already durable") rather than
+  crashing the drain or piling up in the review queue. a claim id held
+  by *different* text is a real conflict and stays pending for a human.
+  the same resolution now backs `capture answer`, which previously left
+  re-captured duplicates pending forever.
+
 ## [1.4.0] — 2026-07-17
 
 ### Added
