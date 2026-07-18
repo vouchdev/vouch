@@ -7,6 +7,15 @@ All notable changes to vouch are documented here. Format follows
 ## [Unreleased]
 
 ### Added
+- the per-prompt recall hook (`vouch context-hook`) is now instructional
+  and always visible: with relevant approved items it tells the model to
+  open its reply with **"From vouch memory:"** and ground in the cited
+  items; with no relevant items it says so explicitly ("Nothing in vouch
+  on this.") instead of injecting nothing — so recall can never be
+  silently mistaken for "vouch did nothing". an opt-in confidence
+  short-circuit (`retrieval.short_circuit.{enabled,min_confidence}`)
+  lets a high-confidence non-action lookup collapse to a verbatim
+  vouched answer; "do work" prompts never short-circuit.
 - `vouch install-mcp claude-code` now registers vouch as a **local-scope**
   MCP server in `~/.claude.json` (`projects[<abs project>].mcpServers`),
   the same thing `claude mcp add` does. a committed `.mcp.json` is a
