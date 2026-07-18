@@ -536,6 +536,7 @@ def test_adapter_settings_wires_capture_hooks() -> None:
     assert any("capture observe" in c for c in commands("PostToolUse"))
     assert any("capture finalize" in c for c in commands("SessionEnd"))
     assert any("capture banner" in c for c in commands("SessionStart"))
+    assert any("capture finalize-all" in c for c in commands("SessionStart"))
 
 
 def test_capture_finalize_all_cmd_with_old_buffers(tmp_path: Path, monkeypatch) -> None:
@@ -610,6 +611,58 @@ def test_capture_finalize_all_cmd_silent_on_no_kb(tmp_path: Path, monkeypatch) -
 
     # Should exit 0, not fail
     assert result.exit_code == 0
+
+
+def test_capture_finalize_all_cmd_reads_session_from_stdin_payload(store: KBStore) -> None:
+    """Regression for issue #492: the shipped SessionStart hook passes no
+    --session-id and sets no VOUCH_SESSION_ID env var, so the command must
+    read the session id off the stdin hook payload, the same way
+    `capture finalize` already does at SessionEnd."""
+    current_sess = "from-stdin"
+    curr_path = cap.buffer_path(store, current_sess)
+    curr_path.parent.mkdir(parents=True, exist_ok=True)
+    curr_path.write_text('{"ts": 1.0, "tool": "Read", "summary": "test"}\n')
+
+    payload = _json.dumps({"session_id": current_sess})
+    res = _run(store, ["capture", "finalize-all"], stdin=payload)
+
+    assert res.exit_code == 0
+    output = _json.loads(res.output)
+    assert current_sess in output["skipped_current"]
+
+
+def test_capture_finalize_all_cmd_session_id_option_overrides_stdin_payload(
+    store: KBStore,
+) -> None:
+    """--session-id stays authoritative over the stdin payload when both
+    are present, matching capture_finalize_cmd's own precedence."""
+    option_sess = "from-option"
+    payload_sess = "from-payload"
+    for sess in (option_sess, payload_sess):
+        p = cap.buffer_path(store, sess)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text('{"ts": 1.0, "tool": "Read", "summary": "test"}\n')
+
+    payload = _json.dumps({"session_id": payload_sess})
+    res = _run(
+        store, ["capture", "finalize-all", "--session-id", option_sess], stdin=payload
+    )
+
+    assert res.exit_code == 0
+    output = _json.loads(res.output)
+    assert option_sess in output["skipped_current"]
+    assert payload_sess not in output["skipped_current"]
+
+
+def test_capture_finalize_all_cmd_no_session_id_anywhere_is_noop(store: KBStore) -> None:
+    """No --session-id, no stdin payload, no env var: stays a silent no-op,
+    matching the pre-fix contract for genuinely session-less invocations."""
+    res = _run(store, ["capture", "finalize-all"], stdin="")
+    assert res.exit_code == 0
+    output = _json.loads(res.output)
+    assert output["finalized"] == []
+    assert output["skipped_recent"] == []
+    assert output["skipped_current"] == []
 
 
 def test_is_stale_buffer_with_recent_file(tmp_path):

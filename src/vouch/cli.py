@@ -2918,7 +2918,14 @@ def capture_answer_cmd(session_id: str | None) -> None:
 @click.option("--session-id", default=None, help="Current session id (else env VOUCH_SESSION_ID).")
 @click.option("--max-age-seconds", type=float, default=3600.0, help="Max age in seconds.")
 def capture_finalize_all_cmd(session_id: str | None, max_age_seconds: float) -> None:
-    """Finalize all capture buffers except current session (SessionStart cleanup)."""
+    """Finalize all capture buffers except current session (SessionStart cleanup).
+
+    The shipped SessionStart hook passes no --session-id and sets no
+    VOUCH_SESSION_ID, so the current session id has to come from the stdin
+    hook payload, the same way capture_finalize_cmd reads it at SessionEnd.
+    --session-id and VOUCH_SESSION_ID remain as fallbacks for direct/manual
+    invocation.
+    """
     payload = _read_hook_payload()
     sid = (
         session_id
