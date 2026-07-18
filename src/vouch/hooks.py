@@ -185,8 +185,9 @@ def build_claude_prompt_hook(store: KBStore, stdin_text: str) -> str:
         # was consulted, not silence that looks like vouch did nothing.
         return _envelope(
             "[vouch memory] I searched the project's vouch knowledge base for this "
-            'prompt and found nothing relevant. Open your reply with "Nothing in '
-            'vouch on this." then answer from your own knowledge.'
+            "prompt and found nothing relevant. Your final reply MUST open with "
+            'the exact words "Nothing in vouch on this." — even if you use tools '
+            "or explore the codebase first — then answer from your own knowledge."
         )
 
     sc_enabled, min_conf = short_circuit_cfg(cfg)
@@ -201,16 +202,24 @@ def build_claude_prompt_hook(store: KBStore, stdin_text: str) -> str:
             'prompt, reply with ONLY "From vouch memory:" then the relevant '
             "item(s) verbatim and their [ev-...] id(s), and STOP -- no extra "
             "reasoning, caveats, or tool calls. If they do NOT fully answer it, "
-            'continue normally: open with "From vouch memory:" and ground in them.'
+            "continue normally: ground in them, and your final reply MUST still "
+            'open with "From vouch memory:" even after tool use.'
             "\n\n" + body
         )
     else:
+        # The opener is a hard output contract, not a suggestion: models that
+        # explore with tools before answering routinely drop soft "open your
+        # reply with" phrasing from their final message (observed in the field
+        # on tool-heavy prompts), so state it as a MUST that survives tool use.
         block = (
             "[vouch memory] I searched the project's vouch knowledge base for this "
-            "prompt. Approved, cited items are below. Before you reason on your own: "
-            'open your reply with "From vouch memory:" and ground your answer in the '
-            "relevant item(s), citing each id in [brackets]. If none are actually "
-            'relevant, say "Nothing relevant in vouch on this" and then answer from '
+            "prompt. Approved, cited items are below — check them BEFORE reasoning "
+            "or exploring on your own, and ground your answer in the relevant "
+            "item(s), citing each id in [brackets]. Your final reply MUST open "
+            'with the exact words "From vouch memory:" — even if you use tools or '
+            "explore the codebase first, that opener comes before everything else "
+            "in your answer. If none of the items are actually relevant, open "
+            'with "Nothing relevant in vouch on this" instead and answer from '
             "your own knowledge.\n\n" + body
         )
     return _envelope(block)

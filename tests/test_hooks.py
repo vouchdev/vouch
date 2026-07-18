@@ -55,7 +55,7 @@ def test_relevant_prompt_banner_instructs_from_vouch_memory(
     out = hooks.build_claude_prompt_hook(store, json.dumps({"prompt": "when do deploys run"}))
     ctx = json.loads(out)["hookSpecificOutput"]["additionalContext"]
     assert ctx.startswith("[vouch memory]")
-    assert 'open your reply with "From vouch memory:"' in ctx
+    assert 'MUST open with the exact words "From vouch memory:"' in ctx
 
 
 def test_raw_non_json_stdin_is_tolerated(store: KBStore, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -117,7 +117,7 @@ def test_short_circuit_never_fires_for_action_prompts(
     out = hooks.build_claude_prompt_hook(store, json.dumps({"prompt": "fix the deploy pipeline"}))
     ctx = json.loads(out)["hookSpecificOutput"]["additionalContext"]
     assert "high-confidence match" not in ctx
-    assert 'open your reply with "From vouch memory:"' in ctx
+    assert 'MUST open with the exact words "From vouch memory:"' in ctx
 
 
 def test_short_circuit_off_by_default(
