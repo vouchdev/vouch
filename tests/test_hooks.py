@@ -56,6 +56,8 @@ def test_relevant_prompt_banner_instructs_from_vouch_memory(
     ctx = json.loads(out)["hookSpecificOutput"]["additionalContext"]
     assert ctx.startswith("[vouch memory]")
     assert 'MUST open with the exact words "From vouch memory:"' in ctx
+    # recalled facts must render visually distinct from the model's own words
+    assert "markdown blockquote" in ctx
 
 
 def test_raw_non_json_stdin_is_tolerated(store: KBStore, monkeypatch: pytest.MonkeyPatch) -> None:
