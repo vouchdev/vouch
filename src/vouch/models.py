@@ -376,6 +376,10 @@ class AuditEvent(BaseModel):
     dry_run: bool = False
     reversible: bool = True
     data: dict[str, Any] = Field(default_factory=dict)
+    # The instance id of the KB this event was written in (config.yaml `kb.id`).
+    # Events from one KB stay attributable after a bundle export lands them
+    # next to another KB's history; None on events predating kb identity.
+    kb_id: str | None = None
     prev_hash: str | None = None
     hash: str | None = None
 
