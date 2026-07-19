@@ -77,8 +77,14 @@ def _starter_config() -> dict[str, Any]:
     return {
         "version": KB_FORMAT_VERSION,
         "review": {
-            "require_human_approval": True,
+            "require_human_approval": False,
             "expire_pending_after_days": 90,
+            # phase d — the receipt is the reviewer. When true, a claim whose
+            # byte-offset receipts all verify is auto-approved with no human;
+            # a claim that cannot quote its source is left pending, as is
+            # every page/entity/relation proposal. Set false to put every
+            # write behind `vouch review`.
+            "auto_approve_on_receipt": True,
         },
         "capture": {
             # auto-capture agent sessions into pending summaries.
@@ -105,6 +111,14 @@ def _starter_config() -> dict[str, Any]:
             # embedding | fts5 | substring. See context._retrieve.
             "backend": "hybrid",
             "default_limit": 10,
+            # blend a half-life decay into context-pack scores so fresher
+            # knowledge outranks equally-relevant stale knowledge. new KBs
+            # get it on; existing KBs keep byte-identical ordering until
+            # they add this key.
+            "recency": {
+                "enabled": True,
+                "half_life_days": 90,
+            },
         },
         "agents": {
             "recommended_loop": [
@@ -130,15 +144,18 @@ def sha256_hex(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def discover_root(start: Path | None = None) -> Path:
+def discover_root(start: Path | None = None, *, respect_env: bool = True) -> Path:
     """Walk up from `start` looking for a `.vouch` directory.
 
     Mirrors how git locates its repo root. The walk can be skipped entirely
     by setting `VOUCH_KB_PATH=/abs/path/.vouch` (documented in
     `adapters/generic-mcp/README.md`) — useful when the host launches the
     server from a default cwd (e.g. Claude Desktop on macOS / Windows).
+    `respect_env=False` ignores that override and answers purely from the
+    filesystem walk — for callers asking "what would this tree resolve to",
+    not "what would this process resolve to".
     """
-    forced = os.environ.get("VOUCH_KB_PATH")
+    forced = os.environ.get("VOUCH_KB_PATH") if respect_env else None
     if forced:
         kb = Path(forced).resolve()
         if not kb.is_dir():

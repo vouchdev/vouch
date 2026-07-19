@@ -13,6 +13,11 @@
 # would conflict with both). The README walks through the copy step.
 host: claude-desktop
 pretty: Claude Desktop
+# The target is a review-and-copy staging dir, not project wiring: a KB
+# auto-bootstrapped there would land at whatever cwd the user ran the
+# command from (often $HOME for a user-global host) and, via upward
+# discovery, shadow every project beneath it.
+kb_bootstrap: false
 tiers:
   T1:
     - { src: claude_desktop_config.json, dst: claude-desktop/claude_desktop_config.json }

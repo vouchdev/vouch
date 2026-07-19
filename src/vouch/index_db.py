@@ -477,6 +477,25 @@ def search_embedding(
     return scored[:limit]
 
 
+def semantic_search_available() -> bool:
+    """True when the embeddings extra is installed and an embedder resolves.
+
+    Availability probe only — search_semantic already degrades to [] on its
+    own. Callers use this to *report* degradation (`retrieval.degraded`)
+    instead of silently serving lexical results under a semantic-capable
+    backend name.
+    """
+    try:
+        from .embeddings import get_embedder
+    except ImportError:
+        return False
+    try:
+        get_embedder()
+    except (KeyError, ImportError):
+        return False
+    return True
+
+
 def search_semantic(
     kb_dir: Path,
     query: str,

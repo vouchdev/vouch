@@ -9,11 +9,32 @@
 # T4 = `.claude/settings.json`: SessionStart (kb status + capture review banner +
 #      recall digest of approved knowledge), PostToolUse (capture observe),
 #      SessionEnd (capture finalize), plus read-only kb_* auto-allow.
+#
+# user_mcp = a local-scope MCP registration written to the user's
+#      `~/.claude.json` under `projects[<abs project>].mcpServers`. The `.mcp.json`
+#      from T1 is a *project*-scope server, and Claude Code only loads a
+#      project-scope server after a per-user approval — which the VS Code
+#      extension never surfaces a prompt for, so `.mcp.json` alone leaves the
+#      `kb_*` tools invisible in the extension (they sit at "pending approval").
+#      A local-scope entry is trusted on sight (no approval gate), so writing one
+#      is what makes a fresh install actually connect in the extension. This is
+#      exactly what `claude mcp add vouch -- vouch serve` does; install-mcp does
+#      it for you (opt out with `--no-approve`).
 host: claude-code
 pretty: Claude Code
 fence:
   begin: "<!-- BEGIN vouch -->"
   end: "<!-- END vouch -->"
+user_mcp:
+  config: .claude.json      # relative to the user's home directory
+  scope: project            # keyed under projects[<abs project>].mcpServers
+  name: vouch
+  spec:
+    type: stdio
+    command: vouch
+    args: ["serve"]
+    env:
+      VOUCH_AGENT: claude-code
 tiers:
   T1:
     - { src: .mcp.json, dst: .mcp.json }

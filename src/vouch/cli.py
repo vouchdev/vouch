@@ -11,6 +11,7 @@ import getpass
 import io
 import json
 import os
+import shutil
 import sqlite3
 import sys
 from collections.abc import Iterator
@@ -55,6 +56,8 @@ from .models import Proposal, ProposalKind, ProposalStatus
 from .onboarding import (
     DEFAULT_TEMPLATE,
     TEMPLATES,
+    SeedResult,
+    StarterSeedResult,
     available_templates,
     seed_starter_kb,
 )
@@ -66,6 +69,7 @@ from .proposals import (
     check_approvable,
     expire_pending,
     propose_claim,
+    propose_delete,
     propose_entity,
     propose_page,
     propose_relation,
@@ -184,6 +188,25 @@ def cli() -> None:
 # --- bootstrap ------------------------------------------------------------
 
 
+def _bootstrap_kb(
+    root: Path, *, template: str = DEFAULT_TEMPLATE
+) -> tuple[KBStore, StarterSeedResult, SeedResult | None]:
+    """Create + seed a KB at ``root`` — the single init path.
+
+    Shared by `vouch init` and `vouch install-mcp`'s auto-init so the two
+    cannot drift: same starter seed, same index rebuild, same audit event.
+    """
+    root.mkdir(parents=True, exist_ok=True)
+    store = KBStore.init(root)
+    seed = seed_starter_kb(store, approved_by=_whoami())
+    template_result: SeedResult | None = None
+    if template != DEFAULT_TEMPLATE:
+        template_result = TEMPLATES[template](store, approved_by=_whoami())
+    health.rebuild_index(store)
+    audit_mod.log_event(store.kb_dir, event="kb.init", actor=_whoami())
+    return store, seed, template_result
+
+
 @cli.command()
 @click.option("--path", default=".", type=click.Path(file_okay=False), show_default=True)
 @click.option(
@@ -195,15 +218,9 @@ def cli() -> None:
 )
 def init(path: str, template: str) -> None:
     """Initialise a .vouch/ knowledge base at PATH."""
-    root = Path(path).resolve()
-    root.mkdir(parents=True, exist_ok=True)
-    store = KBStore.init(root)
-    seed = seed_starter_kb(store, approved_by=_whoami())
-    template_result = None
-    if template != DEFAULT_TEMPLATE:
-        template_result = TEMPLATES[template](store, approved_by=_whoami())
-    health.rebuild_index(store)
-    audit_mod.log_event(store.kb_dir, event="kb.init", actor=_whoami())
+    store, seed, template_result = _bootstrap_kb(
+        Path(path).resolve(), template=template
+    )
     click.echo(f"Initialised KB at {store.kb_dir}")
     if seed.created_anything:
         click.echo(f"Seeded starter claim: {seed.claim_id}")
@@ -1368,6 +1385,54 @@ def propose_claim_cmd(
         _echo(_format_similarity_warning(w), err=True)
 
 
+@cli.command(name="ingest")
+@click.argument(
+    "path", type=click.Path(exists=True, dir_okay=False, path_type=Path)
+)
+@click.option(
+    "--title", default=None,
+    help="Human label for the source (default: the filename).",
+)
+@click.option(
+    "--no-approve", is_flag=True,
+    help="File the claims but never auto-approve, even if the receipt gate is on.",
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit source id + counts as json.")
+def ingest_cmd(
+    path: Path, title: str | None, no_approve: bool, as_json: bool
+) -> None:
+    """Ingest a file as a source and extract receipt-backed claims from it.
+
+    With review.auto_approve_on_receipt on, every claim whose quote verifies
+    against the source is approved with no human -- "run vouch on a doc and it
+    just captures the knowledge." Without the gate the claims are filed pending
+    for review; a claim that cannot quote its source is never rubber-stamped.
+    """
+    from . import extract as extract_mod
+
+    store = _load_store()
+    with _cli_errors():
+        source, approved = extract_mod.ingest_source(
+            store, path.read_bytes(),
+            proposed_by=_whoami(),
+            title=title or path.name,
+            auto_approve=not no_approve,
+        )
+    pending = sum(
+        1 for p in store.list_proposals(ProposalStatus.PENDING)
+        if p.kind == ProposalKind.CLAIM
+    )
+    if as_json:
+        _emit_json(
+            {"source": source.id, "approved": len(approved), "pending_claims": pending}
+        )
+    else:
+        click.echo(
+            f"ingested {source.id[:12]}… — {len(approved)} claim(s) "
+            f"auto-approved, {pending} pending review"
+        )
+
+
 @cli.command(name="propose-page")
 @click.option("--title", required=True)
 @click.option("--body", default="", help="Page body. Use `-` to read from stdin.")
@@ -1818,6 +1883,28 @@ def propose_relation_cmd(src: str, relation: str, target: str, confidence: float
     click.echo(pr.id)
 
 
+@cli.command(name="propose-delete")
+@click.argument("target_kind", type=click.Choice(["claim", "page", "entity", "relation"]))
+@click.argument("target_id")
+@click.option("--rationale", default=None)
+@click.option("--dry-run", is_flag=True, help="Validate without filing the proposal.")
+def propose_delete_cmd(
+    target_kind: str, target_id: str, rationale: str | None, dry_run: bool
+) -> None:
+    """File a review-gated request to hard-delete an artifact."""
+    store = _load_store()
+    with _cli_errors():
+        pr = propose_delete(
+            store,
+            target_kind=target_kind,
+            target_id=target_id,
+            rationale=rationale,
+            dry_run=dry_run,
+            proposed_by=_whoami(),
+        )
+    click.echo(pr.id)
+
+
 # --- sources --------------------------------------------------------------
 
 
@@ -1909,6 +1996,22 @@ def source_verify(fail_on_issue: bool) -> None:
         )
     if fail_on_issue and bad:
         sys.exit(1)
+
+
+@source.command("list")
+@click.option("--json", "as_json", is_flag=True)
+def source_list(as_json: bool) -> None:
+    """List all registered sources."""
+    store = _load_store()
+    sources = store.list_sources()
+    if as_json:
+        _emit_json([s.model_dump(mode="json") for s in sources])
+        return
+    if not sources:
+        click.echo("no sources found")
+        return
+    for src in sources:
+        click.echo(f"{src.id:66} {src.title or src.locator}")
 
 
 @cli.command(name="inbox")
@@ -2174,6 +2277,62 @@ def session_end_cmd(session_id: str, note: str | None) -> None:
     _emit_json({"session": sess.id, "proposals": sess.proposal_ids})
 
 
+@session.command("list")
+@click.option("--json", "as_json", is_flag=True)
+def session_list_cmd(as_json: bool) -> None:
+    """List captured sessions for the review pipeline."""
+    from . import session_split
+
+    store = _load_store()
+    rows = session_split.build_session_rows(store)
+    if as_json:
+        _emit_json({"sessions": rows})
+        return
+    if not rows:
+        click.echo("no sessions found")
+        return
+    for row in rows:
+        click.echo(
+            f"{row.get('session_id') or '?':40} "
+            f"{row.get('stage') or '?':10} "
+            f"summarized={'yes' if row.get('summarized') else 'no'}"
+        )
+
+
+@session.command("transcript")
+@click.argument("session_id")
+@click.option(
+    "--agent",
+    type=click.Choice(["claude", "codex"]),
+    default=None,
+    help="Pin the transcript source instead of auto-detecting.",
+)
+def session_transcript_cmd(session_id: str, agent: str | None) -> None:
+    """Emit the normalized transcript of a captured session as JSON."""
+    from . import transcript
+
+    store = _load_store()
+    with _cli_errors():
+        _emit_json(transcript.load_transcript(store, session_id, agent=agent))
+
+
+@session.command("summarize")
+@click.argument("session_id")
+@click.option(
+    "--mode",
+    type=click.Choice(["auto", "split", "mechanical"]),
+    default="auto",
+    show_default=True,
+)
+def session_summarize_cmd(session_id: str, mode: str) -> None:
+    """Roll a session buffer into pending page proposals. Never approves."""
+    from . import session_split
+
+    store = _load_store()
+    with _cli_errors():
+        _emit_json(session_split.summarize(store, session_id, mode=mode))
+
+
 @cli.group()
 def capture() -> None:
     """Automatic session capture (driven by claude code hooks)."""
@@ -2251,6 +2410,38 @@ def capture_finalize_cmd(session_id: str | None) -> None:
         transcript_path=transcript,
     )
     _emit_json(result)
+
+
+@capture.command("answer")
+@click.option("--session-id", default=None, help="Session id (else read from stdin payload).")
+def capture_answer_cmd(session_id: str | None) -> None:
+    """Save the latest Q&A as durable knowledge (Stop hook payload on stdin).
+
+    The Stop hook emits {session_id, transcript_path} on stdin; the session's
+    answer is ingested as a source and its receipt-backed claims are
+    auto-approved when review.auto_approve_on_receipt is on (the
+    starter-config default) or under trusted-agent, else left pending.
+    Always exits 0 so a capture failure can never break the turn.
+    """
+    if sys.stdin.isatty():
+        return
+    try:
+        raw = sys.stdin.read()
+        payload = json.loads(raw) if raw.strip() else {}
+        if not isinstance(payload, dict):
+            return
+        sid = session_id or str(payload.get("session_id") or "")
+        transcript_raw = payload.get("transcript_path")
+        if not sid or not transcript_raw:
+            return
+        store = _capture_store()
+        if store is None:
+            return
+        result = capture_mod.capture_answer(store, sid, Path(str(transcript_raw)))
+        _emit_json(result)
+    except Exception:
+        # a capture failure must never break the user's turn.
+        return
 
 
 @capture.command("finalize-all")
@@ -3725,15 +3916,39 @@ def pr_cache_show(repo: str, state: str, limit: int, as_json: bool, cache_dir: s
     "T2 = +CLAUDE.md/AGENTS.md, T3 = +slash commands, "
     "T4 = +host hooks/settings. Tiers stack.",
 )
+@click.option(
+    "--init/--no-init",
+    "auto_init",
+    default=True,
+    show_default=True,
+    help="Initialise a .vouch/ KB at the target when none is discoverable, "
+    "so install-mcp is a one-command setup.",
+)
+@click.option(
+    "--approve/--no-approve",
+    "approve",
+    default=True,
+    show_default=True,
+    help="Register vouch as a local-scope MCP server in ~/.claude.json so the "
+    "Claude Code extension loads it without a manual approval it never prompts "
+    "for. --no-approve leaves only the project .mcp.json (needs manual approval).",
+)
 def install_mcp(
-    host: str | None, list_hosts: bool, path: str, target_alias: str | None, tier: str
+    host: str | None,
+    list_hosts: bool,
+    path: str,
+    target_alias: str | None,
+    tier: str,
+    auto_init: bool,
+    approve: bool,
 ) -> None:
     """Install vouch into HOST (claude-code, cursor, …) idempotently.
 
     \b
     Examples:
       vouch install-mcp --list              # show known hosts
-      vouch install-mcp claude-code         # write T1..T4 into cwd
+      vouch install-mcp claude-code         # one command: init .vouch/ if
+                                            # missing + write T1..T4 into cwd
       vouch install-mcp cursor --tier T2    # stop at AGENTS.md
       vouch install-mcp claude-desktop      # drop a paste-ready config
       vouch install-mcp windsurf --path /abs/path/to/project
@@ -3756,8 +3971,53 @@ def install_mcp(
         )
 
     target = Path(target_alias or path).resolve()
+    if host in hosts and install_mod.wants_kb_bootstrap(host):
+        # a wired host without a KB is worse than a failed install: every
+        # installed hook is `|| true` (silent no-op forever) and `vouch serve`
+        # exits 2, with nothing left to tell the user why. unknown hosts skip
+        # this so the AdapterError below stays the first and only error;
+        # staging-dir hosts (manifest `kb_bootstrap: false`) skip it because
+        # their target is not project wiring. the probe ignores VOUCH_KB_PATH:
+        # the question is what this tree resolves to, not this shell.
+        if os.environ.get("VOUCH_KB_PATH"):
+            click.echo(
+                "note: VOUCH_KB_PATH is set — it takes precedence over the "
+                "project KB wherever that variable is exported.",
+                err=True,
+            )
+        try:
+            kb_root = discover_root(target, respect_env=False)
+        except KBNotFoundError:
+            if auto_init:
+                try:
+                    store, seed, _tmpl = _bootstrap_kb(target)
+                except Exception as e:
+                    # cli boundary: a half-done setup must read as an error,
+                    # not a traceback. remove the partial kb (it did not exist
+                    # before this call — discover_root just said so), or a
+                    # rerun would find it and skip bootstrap forever.
+                    shutil.rmtree(target / ".vouch", ignore_errors=True)
+                    raise click.ClickException(
+                        f"could not initialise a KB at {target}: {e} — fix the "
+                        "cause and rerun, run `vouch init` yourself, or pass "
+                        "--no-init"
+                    ) from e
+                click.echo(f"No .vouch/ found — initialised KB at {store.kb_dir}")
+                if seed.created_anything:
+                    click.echo(f"Seeded starter claim: {seed.claim_id}")
+            else:
+                click.echo(
+                    f"warning: no .vouch/ at or above {target} — unless "
+                    "VOUCH_KB_PATH is exported at runtime, the installed hooks "
+                    "and MCP server will do nothing until you run `vouch init` "
+                    "there.",
+                    err=True,
+                )
+        else:
+            if kb_root != target:
+                click.echo(f"Using existing KB at {kb_root / '.vouch'}")
     try:
-        result = install_mod.install(host, target=target, tier=tier)
+        result = install_mod.install(host, target=target, tier=tier, approve=approve)
     except install_mod.AdapterError as e:
         raise click.ClickException(str(e)) from e
 
@@ -3767,6 +4027,8 @@ def install_mcp(
         click.echo(f"  ~ {f}  (appended fenced block)")
     for f in result.merged:
         click.echo(f"  ~ {f}  (merged into existing)")
+    for f in result.registered:
+        click.echo(f"  ⚑ {f}  (registered in ~/.claude.json)")
     for f in result.skipped:
         click.echo(f"  · {f}  (already present)")
     for f in result.failed:
@@ -3774,9 +4036,23 @@ def install_mcp(
     click.echo(
         f"Done — {len(result.written)} written, "
         f"{len(result.appended)} appended, {len(result.merged)} merged, "
+        f"{len(result.registered)} registered, "
         f"{len(result.skipped)} skipped, {len(result.failed)} failed "
         f"under {target}"
     )
+    if result.registered:
+        # the extension reads MCP servers once, at window start — a running
+        # window won't see the new registration until it reloads.
+        click.echo(
+            "Reload your editor window so it picks up the vouch MCP server "
+            "(VS Code: Developer: Reload Window)."
+        )
+    elif approve and host == "claude-code" and not result.failed:
+        # already registered on a prior run — still remind, harmlessly.
+        click.echo(
+            "vouch is registered for Claude Code. If the kb_* tools aren't "
+            "visible, reload your editor window."
+        )
     if result.failed:
         # a failed install is not a no-op: exit non-zero so scripts (and the
         # user) notice vouch was NOT wired into these files.

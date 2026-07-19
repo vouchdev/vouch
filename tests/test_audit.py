@@ -170,3 +170,66 @@ def test_audit_lock_released_on_exception(
     # fsync raised. In either case the surviving entries chain forward.
     assert events[0].event == "x.first"
     assert events[-1].event == "x.third"
+
+
+# --- decision-before-move ordering ------------------------------------------
+#
+# The audit log is the authoritative history: a decision must be recorded
+# before the proposal file moves to decided/. A crash between the two leaves
+# a pending proposal WITH its decision event (recoverable, retry-visible),
+# never a decided proposal without one (forked history).
+
+
+def _pending_claim_proposal(store: KBStore) -> str:
+    from vouch.proposals import propose_claim
+
+    src = store.put_source(b"evidence-bytes")
+    return propose_claim(
+        store, text="ordering fact", evidence=[src.id], proposed_by="agent"
+    ).id
+
+
+def _crash_on_move(store: KBStore, monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom(proposal: object) -> None:
+        raise RuntimeError("simulated crash before decided-move")
+
+    monkeypatch.setattr(store, "move_proposal_to_decided", boom)
+
+
+def test_approve_audits_before_decided_move(
+    store: KBStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from vouch import proposals
+
+    pid = _pending_claim_proposal(store)
+    _crash_on_move(store, monkeypatch)
+    with pytest.raises(RuntimeError, match="simulated crash"):
+        proposals.approve(store, pid, approved_by="human")
+    events = [e.event for e in audit.read_events(store.kb_dir)]
+    assert "proposal.claim.approve" in events
+
+
+def test_reject_audits_before_decided_move(
+    store: KBStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from vouch import proposals
+
+    pid = _pending_claim_proposal(store)
+    _crash_on_move(store, monkeypatch)
+    with pytest.raises(RuntimeError, match="simulated crash"):
+        proposals.reject(store, pid, rejected_by="human", reason="not durable")
+    events = [e.event for e in audit.read_events(store.kb_dir)]
+    assert "proposal.claim.reject" in events
+
+
+def test_expire_audits_before_decided_move(
+    store: KBStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from vouch.proposals import expire_one
+
+    pid = _pending_claim_proposal(store)
+    _crash_on_move(store, monkeypatch)
+    with pytest.raises(RuntimeError, match="simulated crash"):
+        expire_one(store, pid)
+    events = [e.event for e in audit.read_events(store.kb_dir)]
+    assert "proposal.expire" in events
