@@ -200,10 +200,11 @@ def build_claude_prompt_hook(store: KBStore, stdin_text: str) -> str:
             "[vouch memory] A high-confidence match was found in the project's "
             "vouch knowledge base. If the cited item(s) below fully answer the "
             'prompt, reply with ONLY "From vouch memory:" then the relevant '
-            "item(s) verbatim and their [ev-...] id(s), and STOP -- no extra "
-            "reasoning, caveats, or tool calls. If they do NOT fully answer it, "
-            "continue normally: ground in them, and your final reply MUST still "
-            'open with "From vouch memory:" even after tool use.'
+            "item(s) verbatim, each as a markdown blockquote line ending in its "
+            "[ev-...] id, and STOP -- no extra reasoning, caveats, or tool "
+            "calls. If they do NOT fully answer it, continue normally: ground "
+            'in them, and your final reply MUST still open with "From vouch '
+            'memory:" even after tool use.'
             "\n\n" + body
         )
     else:
@@ -211,15 +212,20 @@ def build_claude_prompt_hook(store: KBStore, stdin_text: str) -> str:
         # explore with tools before answering routinely drop soft "open your
         # reply with" phrasing from their final message (observed in the field
         # on tool-heavy prompts), so state it as a MUST that survives tool use.
+        # Likewise the blockquote rule: recalled facts must be visually
+        # distinguishable from the model's own words in the rendered reply.
         block = (
             "[vouch memory] I searched the project's vouch knowledge base for this "
             "prompt. Approved, cited items are below — check them BEFORE reasoning "
             "or exploring on your own, and ground your answer in the relevant "
-            "item(s), citing each id in [brackets]. Your final reply MUST open "
-            'with the exact words "From vouch memory:" — even if you use tools or '
-            "explore the codebase first, that opener comes before everything else "
-            "in your answer. If none of the items are actually relevant, open "
-            'with "Nothing relevant in vouch on this" instead and answer from '
-            "your own knowledge.\n\n" + body
+            "item(s). Your final reply MUST open with the exact words "
+            '"From vouch memory:" — even if you use tools or explore the codebase '
+            "first, that opener comes before everything else. Render every fact "
+            "you take from memory as its own markdown blockquote line ending in "
+            'its id, formatted "> fact — [id]", so recalled knowledge is '
+            "visually distinct; anything you add beyond memory goes as normal "
+            "prose after the blockquotes. If none of the items are actually "
+            'relevant, open with "Nothing relevant in vouch on this" instead and '
+            "answer from your own knowledge.\n\n" + body
         )
     return _envelope(block)
