@@ -53,27 +53,10 @@ def _configured_backend(store: KBStore) -> str:
 
     Reads the singular `retrieval.backend` string. For KBs initialised
     before this knob existed, a legacy `retrieval.backends` list is honoured
-    by taking its first recognised entry. Anything unreadable or unrecognised
-    falls back to "auto".
+    by taking its first recognised entry. Anything unrecognised falls back to
+    "auto". Parsing + validation now lives in the typed `Config` model (#243).
     """
-    try:
-        loaded = yaml.safe_load(store.config_path.read_text(encoding="utf-8"))
-    except (OSError, yaml.YAMLError):
-        return "auto"
-    if not isinstance(loaded, dict):
-        return "auto"
-    retrieval = loaded.get("retrieval")
-    if not isinstance(retrieval, dict):
-        return "auto"
-    backend = retrieval.get("backend")
-    if isinstance(backend, str) and backend in _VALID_BACKENDS:
-        return backend
-    legacy = retrieval.get("backends")
-    if isinstance(legacy, list):
-        for entry in legacy:
-            if isinstance(entry, str) and entry in _VALID_BACKENDS:
-                return entry
-    return "auto"
+    return store.config.retrieval.resolved_backend()
 
 
 def _configured_rerank(store: KBStore, *, limit: int) -> tuple[bool, int]:

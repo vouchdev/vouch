@@ -17,7 +17,16 @@ from pydantic import ValidationError
 
 from . import index_db
 from .audit import count_events, verify_chain
-from .models import Claim, ClaimStatus, Entity, Page, ProposalKind, ProposalStatus, Source
+from .models import (
+    Claim,
+    ClaimStatus,
+    ConfigError,
+    Entity,
+    Page,
+    ProposalKind,
+    ProposalStatus,
+    Source,
+)
 from .storage import KBStore, _yaml_load, sha256_hex
 from .verify import verify_all
 
@@ -284,7 +293,9 @@ def doctor(store: KBStore) -> HealthReport:
                 )
             )
 
-    # Config sanity.
+    # Config sanity — a missing file is an error; otherwise a malformed value
+    # is an error and an unknown key is a likely typo (silently ignored before
+    # #243, now surfaced).
     if not store.config_path.exists():
         report.findings.append(
             Finding(
@@ -293,6 +304,17 @@ def doctor(store: KBStore) -> HealthReport:
                 "config.yaml is missing",
             )
         )
+    else:
+        try:
+            cfg = store.config
+        except ConfigError as e:
+            report.findings.append(Finding("error", "config_invalid", str(e)))
+        else:
+            for key in cfg.unknown_keys():
+                report.findings.append(Finding(
+                    "warning", "config_unknown_key",
+                    f"unknown config key {key!r} — possible typo, ignored",
+                ))
 
     # Index presence (warning only — the index is derivable).
     if not (store.kb_dir / index_db.DB_FILENAME).exists():

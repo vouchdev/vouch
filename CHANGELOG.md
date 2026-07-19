@@ -123,6 +123,15 @@ All notable changes to vouch are documented here. Format follows
 ## [1.3.0] — 2026-07-14
 
 ### Added
+- typed `Config` model for `.vouch/config.yaml`: the file is parsed once into a
+  validated pydantic `Config` (with nested `ReviewConfig` / `RetrievalConfig`)
+  exposed as `KBStore.config`, replacing the per-call-site untyped `dict` reads
+  in `proposals.py` and the retrieval backend selector. a malformed value
+  (e.g. `retrieval.default_limit: "ten"`) now fails fast with the offending key
+  path instead of silently falling back, and `vouch doctor` surfaces unknown
+  top-level keys as likely typos instead of dropping them. existing KBs with
+  partial or absent `retrieval:` / `review:` blocks load with the documented
+  defaults — no on-disk change (#243).
 - `vouch console`: serve the vendored React web console straight from the
   installed package — a same-origin `/proxy` bridge (loopback-guarded) to
   `vouch serve --transport http` backends, reimplementing the vite dev-proxy

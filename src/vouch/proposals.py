@@ -13,7 +13,6 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-import yaml
 from pydantic import ValidationError
 
 from . import audit, index_db
@@ -36,7 +35,6 @@ class ProposalError(RuntimeError):
 
 EXPIRE_REASON = "expired"
 EXPIRE_ACTOR = "vouch-expire"
-_DEFAULT_EXPIRE_PENDING_DAYS = 90
 
 
 @dataclass
@@ -411,19 +409,6 @@ def propose_delete(
 # --- decisions ------------------------------------------------------------
 
 
-def _review_config(store: KBStore) -> dict[str, Any]:
-    """The ``review:`` section of config.yaml, or {} if absent/unreadable."""
-    try:
-        loaded = yaml.safe_load(
-            (store.kb_dir / "config.yaml").read_text(encoding="utf-8")
-        )
-    except Exception:
-        return {}
-    if isinstance(loaded, dict) and isinstance(loaded.get("review"), dict):
-        return loaded["review"]
-    return {}
-
-
 def _claim_receipts_verify(store: KBStore, proposal: Proposal) -> bool:
     """True if this CLAIM proposal's citations all carry receipts that verify."""
     from . import receipts
@@ -455,9 +440,8 @@ def _approval_block_reason(
                     f"forbidden_self_approval: page kind '{page_type}' is protected — "
                     "it always requires a reviewer other than the proposer"
                 )
-        review_cfg = _review_config(store)
         # Blanket opt-out: trust the agent for everything.
-        if review_cfg.get("approver_role") == "trusted-agent":
+        if store.config.review.approver_role == "trusted-agent":
             return None
         # Phase D: the receipt is the reviewer. A claim whose byte-offset
         # receipts all verify needs no human — the mechanical check already
@@ -465,7 +449,7 @@ def _approval_block_reason(
         # its source (bare source id, forged or missing receipt) does not
         # qualify and still falls through to the human gate below.
         if (
-            review_cfg.get("auto_approve_on_receipt")
+            store.config.review.auto_approve_on_receipt
             and proposal.kind == ProposalKind.CLAIM
             and _claim_receipts_verify(store, proposal)
         ):
@@ -535,7 +519,7 @@ def auto_approve_receipts(
     ``review.auto_approve_on_receipt`` is set, so the human-review gate is
     never silently bypassed.
     """
-    if not _review_config(store).get("auto_approve_on_receipt"):
+    if not store.config.review.auto_approve_on_receipt:
         return []
     approved: list[Claim] = []
     for proposal in store.list_proposals(ProposalStatus.PENDING):
@@ -804,19 +788,7 @@ def expire_pending_after_days(store: KBStore, *, override: int | None = None) ->
     """Resolve GC threshold from config (`review.expire_pending_after_days`)."""
     if override is not None:
         return override
-    try:
-        loaded = yaml.safe_load(store.config_path.read_text(encoding="utf-8"))
-    except Exception:
-        return _DEFAULT_EXPIRE_PENDING_DAYS
-    if not isinstance(loaded, dict):
-        return _DEFAULT_EXPIRE_PENDING_DAYS
-    review_cfg = loaded.get("review")
-    if not isinstance(review_cfg, dict):
-        return _DEFAULT_EXPIRE_PENDING_DAYS
-    days = review_cfg.get("expire_pending_after_days")
-    if isinstance(days, int) and days >= 0:
-        return days
-    return _DEFAULT_EXPIRE_PENDING_DAYS
+    return store.config.review.expire_pending_after_days
 
 
 def _utc(dt: datetime) -> datetime:

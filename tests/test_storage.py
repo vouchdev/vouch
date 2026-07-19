@@ -11,6 +11,7 @@ from vouch import audit, lifecycle
 from vouch.models import (
     Claim,
     ClaimStatus,
+    ConfigError,
     Entity,
     EntityType,
     Evidence,
@@ -908,6 +909,39 @@ def test_cite_resolves_source_and_evidence(store: KBStore) -> None:
         for c in citations
     }
     assert "source" in kinds and "evidence" in kinds
+
+
+# --- typed config accessor (#243) -----------------------------------------
+
+
+def test_config_defaults_when_file_missing(store: KBStore) -> None:
+    store.config_path.unlink()
+    fresh = KBStore(store.root)
+    assert fresh.config.retrieval.resolved_backend() == "auto"
+    assert fresh.config.review.expire_pending_after_days == 90
+
+
+def test_config_round_trips_starter(store: KBStore) -> None:
+    assert store.config.unknown_keys() == []
+    assert store.config.review.expire_pending_after_days == 90
+
+
+def test_config_is_cached_per_instance(store: KBStore) -> None:
+    assert store.config is store.config
+
+
+def test_config_raises_on_malformed_value(store: KBStore) -> None:
+    store.config_path.write_text(_yaml_dump({"retrieval": {"default_limit": "ten"}}))
+    with pytest.raises(ConfigError):
+        _ = KBStore(store.root).config
+
+
+def test_config_raises_on_malformed_yaml_syntax(store: KBStore) -> None:
+    # Broken YAML *syntax* must surface as ConfigError, not an uncaught
+    # yaml.YAMLError that would crash callers like doctor().
+    store.config_path.write_text("retrieval: {backend: [unterminated\n")
+    with pytest.raises(ConfigError):
+        _ = KBStore(store.root).config
 
 
 # --- resilience: a single corrupt file must not break bulk listing --------

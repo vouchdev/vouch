@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 
 def utcnow() -> datetime:
@@ -524,3 +524,127 @@ class Capabilities(BaseModel):
         default_factory=dict,
         description="Hot-memory sidebar contract on read-side kb.* responses",
     )
+
+
+# --- config.yaml (issue #243) ---------------------------------------------
+#
+# `.vouch/config.yaml` used to be read as an untyped dict at each call site,
+# with nested `.get()` guards and silent `except: {}` fallbacks. That spread
+# the schema across the codebase and swallowed typos. These models are the
+# single source of truth for a valid config; `KBStore.config` parses the file
+# into a `Config` once, and malformed values fail fast with a per-field path.
+
+
+class ConfigError(ValueError):
+    """`.vouch/config.yaml` could not be parsed into a valid Config."""
+
+
+class ReviewConfig(BaseModel):
+    """`review:` block — the write-gate policy."""
+
+    model_config = ConfigDict(extra="allow")
+
+    require_human_approval: bool = True
+    expire_pending_after_days: int = Field(default=90, ge=0)
+    # "trusted-agent" lets an agent approve its own proposals; anything else
+    # (incl. unset) keeps the human-in-the-loop gate.
+    approver_role: str | None = None
+    # Phase D self-approval opt-in: a self-proposed CLAIM whose byte-offset
+    # receipts all verify is auto-approved without a human. Off by default —
+    # the human-review gate stays on.
+    auto_approve_on_receipt: bool = False
+
+
+class RetrievalConfig(BaseModel):
+    """`retrieval:` block — how kb.search / kb.context pick a backend."""
+
+    model_config = ConfigDict(extra="allow")
+
+    # Unset (None) means "not pinned" — resolution then consults the legacy
+    # list and finally defaults to "auto". The starter config sets "auto"
+    # explicitly. Keeping this optional is what lets a legacy `backends`-only
+    # KB still resolve via the list.
+    backend: str | None = None
+    default_limit: int = Field(default=10, ge=1)
+    # Legacy plural list, honoured for KBs created before `backend` existed.
+    backends: list[str] | None = None
+    # Optional retrieval stages owned by their own readers in `context.py`
+    # (`_configured_rerank` / `_configured_recency`). Declared here so a real
+    # `retrieval.rerank` / `retrieval.recency` block is not flagged as a typo.
+    rerank: dict[str, Any] | None = None
+    recency: dict[str, Any] | None = None
+
+    def resolved_backend(self) -> str:
+        """Effective backend, preserving pre-#243 fallback behaviour.
+
+        An explicit, recognised `backend` wins; else a legacy `backends` list
+        contributes its first recognised entry; else "auto". Unrecognised
+        values fall back to "auto". See `context._retrieve`.
+        """
+        valid = ("auto", "hybrid", "embedding", "fts5", "substring")
+        if self.backend is not None and self.backend in valid:
+            return self.backend
+        for entry in self.backends or []:
+            if entry in valid:
+                return entry
+        return "auto"
+
+
+class Config(BaseModel):
+    """Typed view of `.vouch/config.yaml`, parsed once at store-open.
+
+    Known top-level sections are validated; unknown ones are preserved (not
+    dropped) so `vouch doctor` can flag them as likely typos — see
+    `unknown_keys()`. Sections owned by their own readers (`serve`,
+    `volunteer`, `mcp`, `capture`, `recall`, `compile`, `triage`) are kept
+    loose here so they neither break nor trip the unknown-key check.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    version: int = 1
+    review: ReviewConfig = Field(default_factory=ReviewConfig)
+    retrieval: RetrievalConfig = Field(default_factory=RetrievalConfig)
+    agents: dict[str, Any] = Field(default_factory=dict)
+    page_kinds: dict[str, Any] = Field(default_factory=dict)
+    serve: dict[str, Any] | None = None
+    volunteer: dict[str, Any] | None = None
+    mcp: dict[str, Any] | None = None
+    capture: dict[str, Any] | None = None
+    recall: dict[str, Any] | None = None
+    compile: dict[str, Any] | None = None
+    triage: dict[str, Any] | None = None
+
+    @classmethod
+    def load(cls, raw: Any) -> Config:
+        """Parse a `yaml.safe_load` result into a Config.
+
+        `None` (empty file) and `{}` both yield all-defaults. A non-mapping
+        top level, or a per-field type error, raises `ConfigError` naming the
+        offending path.
+        """
+        if raw is None:
+            raw = {}
+        if not isinstance(raw, dict):
+            raise ConfigError(
+                f"config.yaml must be a mapping at the top level, "
+                f"got {type(raw).__name__}"
+            )
+        try:
+            return cls.model_validate(raw)
+        except ValidationError as e:
+            first = e.errors()[0]
+            loc = ".".join(str(p) for p in first["loc"]) or "<root>"
+            raise ConfigError(f"config.yaml: {loc}: {first['msg']}") from e
+
+    def unknown_keys(self) -> list[str]:
+        """Keys outside the known schema (likely typos), dotted for nesting.
+
+        Walks the top level plus the two validated nested blocks, so a typo
+        one level deep (`review.expier_pending_after_days`) is surfaced the
+        same way a top-level one is, rather than silently swallowed.
+        """
+        keys = set(self.__pydantic_extra__ or {})
+        keys |= {f"review.{k}" for k in (self.review.__pydantic_extra__ or {})}
+        keys |= {f"retrieval.{k}" for k in (self.retrieval.__pydantic_extra__ or {})}
+        return sorted(keys)
