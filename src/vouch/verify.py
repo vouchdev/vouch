@@ -9,6 +9,7 @@ warnings so the agent / human can re-evaluate the claims that cite it.
 from __future__ import annotations
 
 from dataclasses import dataclass
+
 from . import audit
 from .models import Source
 from .storage import ArtifactNotFoundError, KBStore, sha256_hex
