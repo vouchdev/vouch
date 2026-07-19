@@ -2679,13 +2679,29 @@ def capture_banner_cmd() -> None:
 @cli.command(name="recall")
 def recall_cmd() -> None:
     """Emit a digest of all approved knowledge for session-start injection."""
-    store = _capture_store()
+    # Read plane: like context-hook, the digest warns under the personal-role
+    # guard instead of going dark.
+    try:
+        store, warning = hub_mod.resolve_for_read()
+    except Exception:
+        store, warning = None, None
+    if warning:
+        click.echo(f"vouch: {warning}", err=True)
     if store is None:
         return
     cfg = recall_mod.load_config(store)
     if not cfg.enabled:
         return
-    digest = recall_mod.build_digest(store, max_chars=cfg.max_chars)
+    stats: dict[str, int] = {}
+    digest = recall_mod.build_digest(store, max_chars=cfg.max_chars, stats=stats)
+    if stats.get("hidden"):
+        # stderr only — stdout is injected into the host turn and must stay
+        # clean. Scope filtering must never be silent.
+        click.echo(
+            f"vouch: digest hid {stats['hidden']} artifact(s) outside this "
+            "KB's viewer scope (see retrieval.scope / VOUCH_PROJECT)",
+            err=True,
+        )
     if digest.strip():
         click.echo(digest)
 

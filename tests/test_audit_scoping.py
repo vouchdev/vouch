@@ -128,6 +128,46 @@ def test_proposal_events_respect_payload_scope(store: KBStore) -> None:
     assert not any(pr.proposal.id in e.object_ids for e in platform)
 
 
+def test_page_events_respect_scope(store: KBStore) -> None:
+    """Pages are scoped artifacts now: audit events referencing a scoped
+    page (or PAGE proposal) filter exactly like claim events do."""
+    from vouch.models import Page
+    from vouch.proposals import propose_page
+
+    store.put_page(Page(
+        id="billing-page", title="billing runbook",
+        scope={"visibility": "project", "project": "billing"},
+    ))
+    audit.log_event(
+        store.kb_dir, event="page.create", actor="agent",
+        object_ids=["billing-page"],
+    )
+    proposal = propose_page(
+        store, title="billing summary", body="numbers", proposed_by="agent",
+        scope={"visibility": "project", "project": "billing"},
+    )
+
+    billing_ids = {
+        oid
+        for e in audit.read_events(
+            store.kb_dir, store=store, viewer=ViewerContext(project="billing")
+        )
+        for oid in e.object_ids
+    }
+    assert "billing-page" in billing_ids
+    assert proposal.id in billing_ids
+
+    platform_ids = {
+        oid
+        for e in audit.read_events(
+            store.kb_dir, store=store, viewer=ViewerContext(project="platform")
+        )
+        for oid in e.object_ids
+    }
+    assert "billing-page" not in platform_ids
+    assert proposal.id not in platform_ids
+
+
 def test_private_claim_hidden_without_agent(store: KBStore) -> None:
     src = store.put_source(b"evidence")
     store.put_claim(Claim(
