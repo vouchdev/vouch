@@ -37,6 +37,7 @@ import yaml
 from pydantic import BaseModel, ValidationError
 
 from .models import (
+    ArtifactScope,
     Claim,
     Entity,
     Evidence,
@@ -513,6 +514,7 @@ class KBStore:
         media_type: str = "text/plain",
         tags: list[str] | None = None,
         metadata: dict[str, Any] | None = None,
+        scope: ArtifactScope | dict[str, Any] | str | None = None,
     ) -> Source:
         sid = sha256_hex(content)
         sdir = self._source_dir(sid)
@@ -533,6 +535,7 @@ class KBStore:
             media_type=media_type,
             tags=tags or [],
             metadata=metadata or {},
+            scope=scope if scope is not None else ArtifactScope(),  # type: ignore[arg-type]
         )
         meta_path.write_text(_yaml_dump(src.model_dump(mode="json")), encoding="utf-8")
         self._embed_and_store(kind="source", id=src.id, text=src.title or src.locator or "")

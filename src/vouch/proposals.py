@@ -18,6 +18,7 @@ from pydantic import ValidationError
 
 from . import audit, index_db
 from .models import (
+    ArtifactScope,
     Claim,
     Entity,
     Page,
@@ -25,8 +26,10 @@ from .models import (
     ProposalKind,
     ProposalStatus,
     Relation,
+    _coerce_artifact_scope,
 )
 from .page_kinds import PageKindError, load_page_kind_registry, validate_page
+from .scoping import viewer_from
 from .storage import ArtifactNotFoundError, KBStore
 
 
@@ -66,6 +69,48 @@ def new_proposal_id() -> str:
     # naturally show oldest pending first, which matches review intuition.
     ts = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
     return f"{ts}-{uuid.uuid4().hex[:8]}"
+
+
+def default_scope(store: KBStore) -> dict[str, str] | None:
+    """The stamp every new claim/page proposal carries: this KB's own project.
+
+    Scope cannot be retrofitted once KBs start sharing artifacts, so it is
+    recorded at write time. The stamp resolves through the SAME chain the
+    read-side viewer uses (``scoping.viewer_from``: VOUCH_PROJECT >
+    retrieval.scope > the durable ``kb.id``) so what a KB writes it can
+    always read back — including across a ``kb.name`` rename, which is why
+    the terminal fallback is the id, never the display name. None (no
+    stamp, today's behaviour) for KBs with no identity and no configured
+    scope.
+    """
+    project = viewer_from(config_path=store.config_path).project
+    if project is None:
+        return None
+    return {"visibility": "project", "project": project}
+
+
+def _stamp_scope(
+    store: KBStore, payload: dict[str, Any], scope: dict[str, Any] | str | None
+) -> None:
+    """Attach an explicit scope, or the KB's own default, to a payload.
+
+    An explicit scope is validated here, at the gate: a malformed one filed
+    into a payload would otherwise crash every audit read surface (which
+    resolves payload scopes for visibility) and escape ``approve()`` as a
+    raw pydantic error.
+    """
+    if scope is None:
+        stamp = default_scope(store)
+        if stamp is not None:
+            payload["scope"] = stamp
+        return
+    try:
+        coerced = _coerce_artifact_scope(scope)
+        validated = coerced if isinstance(coerced, ArtifactScope) \
+            else ArtifactScope.model_validate(coerced)
+    except (ValidationError, ValueError) as e:
+        raise ProposalError(f"invalid scope: {e}") from e
+    payload["scope"] = validated.model_dump(mode="json")
 
 
 def _file_proposal(
@@ -116,6 +161,7 @@ def propose_claim(
     slug_hint: str | None = None,
     session_id: str | None = None,
     dry_run: bool = False,
+    scope: dict[str, Any] | str | None = None,
 ) -> ProposeClaimResult:
     if not text.strip():
         raise ProposalError("claim text is empty")
@@ -140,6 +186,7 @@ def propose_claim(
         "entities": entities or [],
         "tags": tags or [],
     }
+    _stamp_scope(store, payload, scope)
     exclude_claim: str | None = None
     if (store.kb_dir / "claims" / f"{claim_id}.yaml").exists():
         exclude_claim = claim_id
@@ -177,6 +224,7 @@ def propose_quoted_claim(
     rationale: str | None = None,
     slug_hint: str | None = None,
     session_id: str | None = None,
+    scope: dict[str, Any] | str | None = None,
 ) -> ProposeClaimResult | None:
     """File a claim backed by a byte-offset receipt into ``source_id``, or drop.
 
@@ -203,7 +251,7 @@ def propose_quoted_claim(
         store, text=text, evidence=[evidence.id], proposed_by=proposed_by,
         claim_type=claim_type, confidence=confidence, entities=entities,
         tags=tags, rationale=rationale, slug_hint=slug_hint,
-        session_id=session_id,
+        session_id=session_id, scope=scope,
     )
 
 
@@ -223,6 +271,7 @@ def propose_page(
     slug_hint: str | None = None,
     session_id: str | None = None,
     dry_run: bool = False,
+    scope: dict[str, Any] | str | None = None,
 ) -> Proposal:
     if not title.strip():
         raise ProposalError("page title is empty")
@@ -269,6 +318,7 @@ def propose_page(
         "tags": tags or [],
         "metadata": meta,
     }
+    _stamp_scope(store, payload, scope)
     return _file_proposal(
         store, kind=ProposalKind.PAGE, payload=payload,
         proposed_by=proposed_by, session_id=session_id,

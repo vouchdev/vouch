@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 
 def utcnow() -> datetime:
@@ -338,6 +338,10 @@ class Page(BaseModel):
     claims: list[str] = Field(default_factory=list)
     entities: list[str] = Field(default_factory=list)
     sources: list[str] = Field(default_factory=list)
+    # Pages carry scope like claims/sources do: session summaries are as
+    # project-bound as the claims they aggregate, and an unscoped kind would
+    # be a cross-KB leak channel once multi-KB recall exists.
+    scope: ArtifactScope = Field(default_factory=ArtifactScope)
     tags: list[str] = Field(default_factory=list)
     # Per-kind frontmatter (e.g. a meeting-notes kind's `attendees`). Empty for
     # the built-in kinds; serialized into the on-disk YAML frontmatter.
@@ -360,6 +364,22 @@ class Page(BaseModel):
         # See Claim._text_non_empty — the propose_page check alone left
         # store.put_page and bundle import accepting title="" / whitespace.
         return _require_non_empty(v, "page title")
+
+    @field_validator("scope", mode="before")
+    @classmethod
+    def _coerce_scope(cls, v: object) -> object:
+        # Tolerant, unlike Claim: page frontmatter is hand-editable (vault
+        # mirrors, Obsidian), and a legacy stray `scope: whatever` key must
+        # not make get_page raise / list_pages skip the whole page. Write
+        # gates stay strict — proposals validate explicit scopes before a
+        # Page is ever constructed.
+        coerced = _coerce_artifact_scope(v)
+        if isinstance(coerced, ArtifactScope):
+            return coerced
+        try:
+            return ArtifactScope.model_validate(coerced)
+        except ValidationError:
+            return ArtifactScope()
 
 
 # --- audit + sessions -----------------------------------------------------

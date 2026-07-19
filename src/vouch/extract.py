@@ -21,6 +21,7 @@ from .models import Claim, Source
 from .proposals import (
     ProposeClaimResult,
     auto_approve_receipts,
+    default_scope,
     propose_quoted_claim,
 )
 from .storage import KBStore
@@ -112,7 +113,7 @@ def ingest_source(
     that became durable. With the gate off the claims are filed but left pending
     for a human — the review gate is never silently bypassed.
     """
-    source = store.put_source(content, title=title)
+    source = store.put_source(content, title=title, scope=default_scope(store))
     extract_receipt_claims(store, source.id, proposed_by=proposed_by)
     approved = auto_approve_receipts(store) if auto_approve else []
     return source, approved

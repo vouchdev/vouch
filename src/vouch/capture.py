@@ -525,6 +525,9 @@ def capture_answer(
         source_type="message",
         tags=["session-answer"],
         metadata={"session_id": session_id, "question": question},
+        # same stamp the extracted claims get at the propose gate: captured
+        # knowledge records its project at write time (unretrofittable later)
+        scope=proposals_mod.default_scope(store),
     )
     filed = extract_mod.extract_receipt_claims(
         store, source.id, proposed_by=ANSWER_ACTOR, limit=max_claims,

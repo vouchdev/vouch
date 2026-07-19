@@ -29,6 +29,27 @@ All notable changes to vouch are documented here. Format follows
   corrupt registry degrades to per-project behaviour. this is the
   substrate for global (install-once) vouch and the local seed of the
   vouchhub registry of connected KBs.
+- **scope stamped at write time**: every new claim and page proposal — and
+  every captured session-answer source — records the KB's own project scope
+  at the propose gate, so knowledge knows which project it belongs to
+  before KBs ever start sharing artifacts (scope cannot be retrofitted
+  later). the stamp and the read-side viewer resolve through ONE chain
+  (`VOUCH_PROJECT` > `retrieval.scope` > the durable `kb.id`), so what a KB
+  writes it can always read back — the mutable `kb.name` is never
+  load-bearing for visibility, and a rename cannot orphan stamped
+  knowledge. pages join claims and sources as scoped kinds, closing a
+  cross-KB leak channel (vault edits carry the durable page's scope
+  through, never a restamp; hand-edited legacy `scope:` frontmatter
+  degrades to unscoped instead of breaking the page). malformed explicit
+  scopes are refused at the gate, and a malformed scope already on disk
+  degrades to unscoped instead of crashing the audit read path. the
+  SessionStart digest (`vouch recall`) is viewer-filtered like every other
+  retrieval surface — it used to inject every live claim regardless of
+  scope — and reports on stderr how many artifacts scope filtering hid,
+  never filtering silently; the salience sidebar honours the same filter.
+  existing unscoped artifacts behave exactly as before. explicit `scope=`
+  overrides are accepted by `propose_claim` / `propose_quoted_claim` /
+  `propose_page`.
 - **hijack-proof KB resolution**: the upward `.vouch` walk never ascends
   past `$HOME` any more, so a stray home-directory KB can no longer
   silently capture every project below it (a recorded incident class).
