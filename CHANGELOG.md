@@ -7,6 +7,38 @@ All notable changes to vouch are documented here. Format follows
 ## [Unreleased]
 
 ### Added
+- **KB instance identity**: `vouch init` mints a durable id (uuid, stored
+  in `config.yaml` under `kb:` next to a display name) and stamps it onto
+  every new audit event and bundle manifest, so history and exported
+  artifacts stay attributable to the KB that produced them once knowledge
+  starts moving between KBs. existing KBs are backfilled on re-init or
+  `vouch hub register` (an additive `kb.identity` audit event — never a
+  history rewrite); pre-identity audit chains still verify. bundle
+  imports move settings, never identity: the destination's `kb:` block
+  survives even an overwrite-import, and same-settings configs no longer
+  read as conflicts just because ids differ (config.yaml is compared
+  structurally, modulo `kb:`, on both sides). compat note: a *pre-identity*
+  vouch importing a new bundle uses the old byte-compare and may report
+  config.yaml as a conflict — its default skip mode leaves the file
+  untouched, so nothing breaks; upgrade the importer to converge.
+- **machine registry** (`vouch hub register / list / unregister`): a
+  machine-local list of known KBs at `~/.config/vouch/registry.yaml`
+  (honours `XDG_CONFIG_HOME`; override with `VOUCH_REGISTRY_PATH`) with a
+  role per KB — `project`, `personal`, or `team`. advisory routing state
+  only: authority stays in each KB's own `.vouch/`, and a missing or
+  corrupt registry degrades to per-project behaviour. this is the
+  substrate for global (install-once) vouch and the local seed of the
+  vouchhub registry of connected KBs.
+- **hijack-proof KB resolution**: the upward `.vouch` walk never ascends
+  past `$HOME` any more, so a stray home-directory KB can no longer
+  silently capture every project below it (a recorded incident class).
+  starting *in* `$HOME` still resolves its KB; `VOUCH_KB_PATH` and a
+  `global: {allow_home_kb: true}` opt-in in the home KB's config remain
+  deliberate escape hatches. a registry entry with role `personal` adds a
+  second belt: ambient capture into it from another directory is refused
+  (reads warn). host adapters can now pin the walk's start with
+  `VOUCH_PROJECT_DIR`; `vouch discover` and `vouch status` report the
+  resolution chain (`why`) and the KB's id/name.
 - the per-prompt recall hook (`vouch context-hook`) is now instructional
   and always visible: with relevant approved items it tells the model to
   open its reply with **"From vouch memory:"** and ground in the cited
