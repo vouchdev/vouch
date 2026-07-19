@@ -277,7 +277,13 @@ def discover(path: str | None) -> None:
     """Print the KB root this process would resolve to, with the why-chain."""
     trace: list[str] = []
     try:
-        root = discover_root(Path(path) if path is not None else None, trace=trace)
+        # An explicit --path asks about that tree, so env overrides
+        # (VOUCH_KB_PATH / VOUCH_PROJECT_DIR) must not answer instead.
+        root = discover_root(
+            Path(path) if path is not None else None,
+            respect_env=path is None,
+            trace=trace,
+        )
         _emit_json({"root": str(root), "kb_dir": str(root / ".vouch"), "why": trace})
     except KBNotFoundError as e:
         click.echo(f"error: {e}", err=True)

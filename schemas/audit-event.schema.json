@@ -43,6 +43,18 @@
       "title": "Id",
       "type": "string"
     },
+    "kb_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Kb Id"
+    },
     "object_ids": {
       "items": {
         "type": "string"
