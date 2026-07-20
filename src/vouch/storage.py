@@ -432,6 +432,26 @@ class KBStore:
             raise KBNotFoundError(
                 f"{self.config_path} does not exist — run `vouch init` first"
             )
+        # Serialize the read-mint-write against concurrent init/backfill
+        # paths (two hooks racing on a legacy KB): without the lock both
+        # observe "no id", mint different ids, and every artifact stamped
+        # with the loser's id becomes unreachable under the winner's
+        # identity. The KB's existing cross-process lock (the audit
+        # sidecar) is reused so no new lockfile lands next to committed
+        # files; identity minting is rare and the critical section is
+        # tiny, so contention with audit appends is a non-issue.
+        from .audit import _audit_lock
+
+        with _audit_lock(self.kb_dir):
+            existing = self.identity()
+            if existing is not None:
+                # Lost the race — adopt the winner's id rather than minting
+                # a second one.
+                return existing
+            return self._mint_identity()
+
+    def _mint_identity(self) -> tuple[str, str]:
+        """The write half of ensure_identity — call only under the lock."""
         raw = self.config_path.read_text(encoding="utf-8")
         try:
             loaded = _yaml_load(raw)

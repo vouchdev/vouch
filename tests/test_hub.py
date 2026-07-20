@@ -45,6 +45,37 @@ def test_init_mints_identity(tmp_path: Path) -> None:
     assert cfg["review"]["auto_approve_on_receipt"] is True
 
 
+def test_concurrent_identity_minting_yields_one_id(tmp_path: Path) -> None:
+    """Two processes racing ensure_identity on a legacy KB must converge on
+    ONE id (flock-serialized read-mint-write) — a split mint would strand
+    every artifact stamped with the losing id."""
+    import concurrent.futures
+    import subprocess
+    import sys
+
+    store = KBStore.init(tmp_path)
+    cfg = yaml.safe_load(store.config_path.read_text(encoding="utf-8"))
+    del cfg["kb"]
+    store.config_path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+
+    code = (
+        "from pathlib import Path; from vouch.storage import KBStore; "
+        f"print(KBStore(Path({str(tmp_path)!r})).ensure_identity()[0])"
+    )
+
+    def _mint() -> str:
+        out = subprocess.run(
+            [sys.executable, "-c", code], capture_output=True, text=True, check=True
+        )
+        return out.stdout.strip()
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
+        ids = list(pool.map(lambda _i: _mint(), range(6)))
+    assert len(set(ids)) == 1, ids
+    assert store.identity() is not None
+    assert store.identity()[0] == ids[0]  # type: ignore[index]
+
+
 def test_ensure_identity_is_idempotent(tmp_path: Path) -> None:
     store = KBStore.init(tmp_path)
     first = store.ensure_identity()
