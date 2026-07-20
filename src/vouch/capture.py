@@ -486,6 +486,7 @@ def capture_answer(
     min_answer_chars: int = DEFAULT_MIN_ANSWER_CHARS,
     max_claims: int = DEFAULT_MAX_ANSWER_CLAIMS,
     config: CaptureConfig | None = None,
+    origin: Path | None = None,
 ) -> dict[str, Any]:
     """Turn a session's latest Q&A into durable, recallable knowledge.
 
@@ -502,6 +503,12 @@ def capture_answer(
     skipped, and answers shorter than ``min_answer_chars`` (acknowledgements)
     are ignored, so a Stop hook firing every turn does not fill the KB with
     noise or duplicates.
+
+    ``origin`` marks a personal-KB *fallback* capture: the session ran in a
+    folder with no project KB and ``store`` is the machine's personal
+    catch-all. The folder is recorded on the source
+    (``metadata.origin_path``, tag ``personal-fallback``) so `vouch adopt`
+    can later drain this knowledge into that folder's own KB.
     """
     import os
 
@@ -532,12 +539,17 @@ def capture_answer(
     except ArtifactNotFoundError:
         pass
 
+    tags = ["session-answer"]
+    metadata: dict[str, Any] = {"session_id": session_id, "question": question}
+    if origin is not None:
+        tags.append("personal-fallback")
+        metadata["origin_path"] = str(origin)
     source = store.put_source(
         content,
         title=question or f"session {session_id} answer",
         source_type="message",
-        tags=["session-answer"],
-        metadata={"session_id": session_id, "question": question},
+        tags=tags,
+        metadata=metadata,
         # same stamp the extracted claims get at the propose gate: captured
         # knowledge records its project at write time (unretrofittable later)
         scope=proposals_mod.default_scope(store),
