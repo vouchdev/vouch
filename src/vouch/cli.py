@@ -31,6 +31,7 @@ from . import codex_rollout as codex_rollout_mod
 from . import compile as compile_mod
 from . import digest as digest_mod
 from . import fetch as fetch_mod
+from . import hub as hub_mod
 from . import inbox as inbox_mod
 from . import install_adapter as install_mod
 from . import lifecycle as life
@@ -112,11 +113,20 @@ def _cli_errors() -> Iterator[None]:
 
 def _load_store(start: Path | None = None) -> KBStore:
     try:
-        return KBStore(discover_root(start))
+        root = discover_root(start)
     except KBNotFoundError as e:
         click.echo(f"error: {e}", err=True)
         click.echo("hint: run `vouch init` in your project root.", err=True)
         sys.exit(2)
+    # Reads proceed under the personal-role registry guard, but say so:
+    # stderr only, so JSON stdout stays parseable.
+    try:
+        res = hub_mod.resolve(start)
+        if res.guard is not None:
+            click.echo(f"vouch: {res.guard}", err=True)
+    except Exception:
+        pass
+    return KBStore(root)
 
 
 def _whoami() -> str:
@@ -197,12 +207,25 @@ def _bootstrap_kb(
     cannot drift: same starter seed, same index rebuild, same audit event.
     """
     root.mkdir(parents=True, exist_ok=True)
+    # Detect the legacy-backfill case BEFORE init mints silently — after,
+    # identity() can no longer tell a backfill from a pre-existing id.
+    config_existed = (root / ".vouch" / "config.yaml").exists()
+    backfill = config_existed and KBStore(root).identity() is None
     store = KBStore.init(root)
     seed = seed_starter_kb(store, approved_by=_whoami())
     template_result: SeedResult | None = None
     if template != DEFAULT_TEMPLATE:
         template_result = TEMPLATES[template](store, approved_by=_whoami())
     health.rebuild_index(store)
+    if backfill:
+        identity = store.identity()
+        if identity is not None:
+            # Additive event, mirroring hub.ensure_kb_identity: an existing
+            # KB acquiring its id is recorded history, never a rewrite.
+            audit_mod.log_event(
+                store.kb_dir, event="kb.identity", actor=_whoami(),
+                data={"kb_id": identity[0], "name": identity[1]},
+            )
     audit_mod.log_event(store.kb_dir, event="kb.init", actor=_whoami())
     return store, seed, template_result
 
@@ -218,9 +241,12 @@ def _bootstrap_kb(
 )
 def init(path: str, template: str) -> None:
     """Initialise a .vouch/ knowledge base at PATH."""
-    store, seed, template_result = _bootstrap_kb(
-        Path(path).resolve(), template=template
-    )
+    # _cli_errors so a refused identity mint (corrupt config.yaml) reads as
+    # a one-line error, not a traceback.
+    with _cli_errors():
+        store, seed, template_result = _bootstrap_kb(
+            Path(path).resolve(), template=template
+        )
     click.echo(f"Initialised KB at {store.kb_dir}")
     if seed.created_anything:
         click.echo(f"Seeded starter claim: {seed.claim_id}")
@@ -241,15 +267,101 @@ def init(path: str, template: str) -> None:
 
 
 @cli.command()
-@click.option("--path", default=".", show_default=True)
-def discover(path: str) -> None:
-    """Walk up from PATH and print the nearest .vouch/ root, or fail."""
+@click.option(
+    "--path",
+    default=None,
+    help="Start the walk here (pure filesystem semantics). Default: resolve "
+    "exactly as the servers and hooks do, env overrides included.",
+)
+def discover(path: str | None) -> None:
+    """Print the KB root this process would resolve to, with the why-chain."""
+    trace: list[str] = []
     try:
-        root = discover_root(Path(path))
-        _emit_json({"root": str(root), "kb_dir": str(root / ".vouch")})
+        # An explicit --path asks about that tree, so env overrides
+        # (VOUCH_KB_PATH / VOUCH_PROJECT_DIR) must not answer instead.
+        root = discover_root(
+            Path(path) if path is not None else None,
+            respect_env=path is None,
+            trace=trace,
+        )
+        _emit_json({"root": str(root), "kb_dir": str(root / ".vouch"), "why": trace})
     except KBNotFoundError as e:
         click.echo(f"error: {e}", err=True)
         sys.exit(2)
+
+
+# --- hub (machine registry of KBs) ----------------------------------------
+
+
+@cli.group()
+def hub() -> None:
+    """Machine-level registry of KBs (the substrate for global vouch).
+
+    The registry at ~/.config/vouch/registry.yaml is advisory routing
+    state — authority stays in each KB's own .vouch/. It is machine-local
+    and never committed.
+    """
+
+
+@hub.command("register")
+@click.option("--path", default=".", type=click.Path(file_okay=False), show_default=True)
+@click.option(
+    "--role",
+    default="project",
+    show_default=True,
+    type=click.Choice(hub_mod.ROLES),
+    help="How this KB participates: project (default), personal, or team.",
+)
+@click.option("--name", default=None, help="Display name (defaults to the KB's own name).")
+def hub_register(path: str, role: str, name: str | None) -> None:
+    """Add (or refresh) the KB at PATH in this machine's registry."""
+    with _cli_errors():
+        try:
+            entry = hub_mod.register_kb(
+                Path(path).resolve(), role=role, name=name, actor=_whoami()
+            )
+        except KBNotFoundError as e:
+            raise click.ClickException(str(e)) from e
+    click.echo(f"registered {entry.name} ({entry.kb_id}) role={entry.role} at {entry.path}")
+
+
+@hub.command("list")
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON instead of a table.")
+def hub_list(as_json: bool) -> None:
+    """List the KBs registered on this machine."""
+    entries = hub_mod.load_registry()
+    if as_json:
+        _emit_json(
+            {
+                "registry": str(hub_mod.registry_path()),
+                "kbs": [
+                    {
+                        "kb_id": e.kb_id,
+                        "name": e.name,
+                        "role": e.role,
+                        "path": e.path,
+                        "added_at": e.added_at,
+                    }
+                    for e in entries
+                ],
+            }
+        )
+        return
+    if not entries:
+        click.echo(f"no KBs registered (registry: {hub_mod.registry_path()})")
+        return
+    for e in entries:
+        click.echo(f"{e.name}  [{e.role}]  {e.path}  ({e.kb_id})")
+
+
+@hub.command("unregister")
+@click.argument("token")
+def hub_unregister(token: str) -> None:
+    """Remove a KB from the registry by kb id or path."""
+    removed = hub_mod.unregister_kb(token)
+    if removed is None:
+        raise click.ClickException(f"no registered KB matches {token!r}")
+    click.echo(f"unregistered {removed.name} ({removed.kb_id})")
 
 
 @cli.command()
@@ -312,6 +424,8 @@ def status(as_json: bool) -> None:
         _emit_json(s)
         return
     click.echo(f"KB at {s['kb_dir']}")
+    if s.get("kb_id"):
+        click.echo(f"  kb:      {s['kb_name']} ({s['kb_id']})")
     click.echo(
         f"  durable: {s['claims']} claims  •  {s['pages']} pages  •  "
         f"{s['sources']} sources  •  {s['entities']} entities  •  "
@@ -2340,11 +2454,23 @@ def capture() -> None:
 
 def _capture_store() -> KBStore | None:
     """Locate the KB without the sys.exit(2) that _load_store does — hooks
-    must never abort the host."""
+    must never abort the host.
+
+    Uses the hub resolver so ambient capture also respects the registry
+    guard: a KB registered as personal-role never absorbs another
+    directory's session (the write-plane half of the ~/.vouch hijack fix;
+    the $HOME walk-stop in discover_root is the structural half).
+    """
     try:
-        return KBStore(discover_root())
-    except KBNotFoundError:
+        res = hub_mod.resolve()
+    except Exception:
         return None
+    if res.root is None:
+        return None
+    if res.guard is not None:
+        click.echo(f"vouch: {res.guard}", err=True)
+        return None
+    return KBStore(res.root)
 
 
 @capture.command("observe")
@@ -2553,13 +2679,29 @@ def capture_banner_cmd() -> None:
 @cli.command(name="recall")
 def recall_cmd() -> None:
     """Emit a digest of all approved knowledge for session-start injection."""
-    store = _capture_store()
+    # Read plane: like context-hook, the digest warns under the personal-role
+    # guard instead of going dark.
+    try:
+        store, warning = hub_mod.resolve_for_read()
+    except Exception:
+        store, warning = None, None
+    if warning:
+        click.echo(f"vouch: {warning}", err=True)
     if store is None:
         return
     cfg = recall_mod.load_config(store)
     if not cfg.enabled:
         return
-    digest = recall_mod.build_digest(store, max_chars=cfg.max_chars)
+    stats: dict[str, int] = {}
+    digest = recall_mod.build_digest(store, max_chars=cfg.max_chars, stats=stats)
+    if stats.get("hidden"):
+        # stderr only — stdout is injected into the host turn and must stay
+        # clean. Scope filtering must never be silent.
+        click.echo(
+            f"vouch: digest hid {stats['hidden']} artifact(s) outside this "
+            "KB's viewer scope (see retrieval.scope / VOUCH_PROJECT)",
+            err=True,
+        )
     if digest.strip():
         click.echo(digest)
 
@@ -2833,7 +2975,15 @@ def context_hook() -> None:
     from . import hooks
 
     stdin_text = sys.stdin.read()
-    store = _capture_store()
+    # Read plane: recall must survive the personal-role guard (warn, don't
+    # go dark) — a silent context-hook is indistinguishable from vouch
+    # being broken. Capture commands stay on the refusing _capture_store.
+    try:
+        store, warning = hub_mod.resolve_for_read()
+    except Exception:
+        store, warning = None, None
+    if warning:
+        click.echo(f"vouch: {warning}", err=True)
     out = ""
     if store is not None:
         try:

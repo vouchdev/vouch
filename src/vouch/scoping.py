@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from .models import AuditEvent
     from .storage import KBStore
 
-_SCOPED_KINDS = frozenset({"claim", "source"})
+_SCOPED_KINDS = frozenset({"claim", "source", "page"})
 
 
 @dataclass(frozen=True)
@@ -52,7 +52,14 @@ def viewer_from(
     """Resolve viewer context: explicit param > env > ``config.yaml``.
 
     Precedence matches VEP-0005: request param, then ``VOUCH_PROJECT`` /
-    ``VOUCH_AGENT``, then ``retrieval.scope`` in config.
+    ``VOUCH_AGENT``, then ``retrieval.scope`` in config — and finally the
+    KB's own durable instance id (``kb.id``): reading a KB with no explicit
+    viewer means reading it *as that project*, so artifacts stamped with the
+    KB's own project scope stay visible in their own KB while stamps from
+    another KB do not leak in. The fallback is the id, not the display name,
+    because ``proposals.default_scope`` stamps through this same resolver —
+    the mutable ``kb.name`` must never be load-bearing for visibility (a
+    rename would orphan every previously stamped artifact).
     """
     resolved_project = _norm(project)
     resolved_agent = _norm(agent)
@@ -80,6 +87,12 @@ def viewer_from(
                         raw = scope_cfg.get("agent")
                         if isinstance(raw, str):
                             resolved_agent = _norm(raw)
+            if resolved_project is None:
+                kb_block = loaded.get("kb")
+                if isinstance(kb_block, dict):
+                    raw = kb_block.get("id")
+                    if isinstance(raw, str):
+                        resolved_project = _norm(raw)
 
     return ViewerContext(project=resolved_project, agent=resolved_agent)
 
@@ -135,6 +148,8 @@ def artifact_scope_for_hit(store: KBStore, kind: str, artifact_id: str) -> Artif
             return store.get_claim(artifact_id).scope
         if kind == "source":
             return store.get_source(artifact_id).scope
+        if kind == "page":
+            return store.get_page(artifact_id).scope
     except Exception:
         return None
     return None
@@ -187,15 +202,25 @@ def artifact_scope_for_object_id(store: KBStore, object_id: str) -> ArtifactScop
         pass
 
     try:
+        return store.get_page(object_id).scope
+    except Exception:
+        pass
+
+    try:
         proposal = store.get_proposal(object_id)
     except Exception:
         return None
 
-    if proposal.kind != ProposalKind.CLAIM:
+    if proposal.kind not in (ProposalKind.CLAIM, ProposalKind.PAGE):
         return None
 
-    raw = proposal.payload.get("scope")
-    return _parse_scope(raw)
+    # Defensive: a malformed scope in an on-disk payload (hand-edited or
+    # filed by an older writer) must degrade to "unscoped", never take down
+    # the whole audit read path with a validation error.
+    try:
+        return _parse_scope(proposal.payload.get("scope"))
+    except Exception:
+        return None
 
 
 def event_visible_to_viewer(

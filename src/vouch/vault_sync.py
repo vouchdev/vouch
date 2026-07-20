@@ -344,7 +344,7 @@ def vault_to_kb(
         # the page was deleted after the last backward sync; filing a proposal
         # for a ghost page would produce an unresolvable slug on approve.
         try:
-            store.get_page(page_id)
+            kb_page = store.get_page(page_id)
         except ArtifactNotFoundError:
             log.warning(
                 "vault sync: mirror file %s references page %r which no longer "
@@ -397,6 +397,11 @@ def vault_to_kb(
             proposed_by=actor,
             tags=list(edited.tags),
             slug_hint=page_id,
+            # A vault edit is a body edit, never a scope change: carry the
+            # durable page's own scope through, or the propose gate would
+            # restamp it with the KB default (silently widening/narrowing
+            # team/private/legacy-unscoped pages).
+            scope=kb_page.scope.model_dump(mode="json"),
         )
         result.pages_proposed.append(page_id)
 
