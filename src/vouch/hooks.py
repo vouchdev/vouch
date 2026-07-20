@@ -133,8 +133,26 @@ def _envelope(block: str) -> str:
     )
 
 
-def build_claude_prompt_hook(store: KBStore, stdin_text: str) -> str:
-    """Return the stdout a host should inject for this prompt, or "" for none."""
+def _whose_kb(personal: bool) -> str:
+    """How the injected block names the KB it just searched."""
+    if personal:
+        return (
+            "your machine-wide personal vouch knowledge base (this folder has "
+            "no project KB of its own, so items may come from other folders)"
+        )
+    return "the project's vouch knowledge base"
+
+
+def build_claude_prompt_hook(
+    store: KBStore, stdin_text: str, *, personal: bool = False
+) -> str:
+    """Return the stdout a host should inject for this prompt, or "" for none.
+
+    ``personal`` marks a read served by the machine-wide personal catch-all
+    KB (this folder has no project KB): the injected text must not call it
+    "the project's knowledge base", because the items may have been captured
+    while working in a different folder.
+    """
     try:
         payload = json.loads(stdin_text) if stdin_text.strip() else {}
     except json.JSONDecodeError:
@@ -184,7 +202,7 @@ def build_claude_prompt_hook(store: KBStore, stdin_text: str) -> str:
         # Say so explicitly even when empty — the user wants to see that vouch
         # was consulted, not silence that looks like vouch did nothing.
         return _envelope(
-            "[vouch memory] I searched the project's vouch knowledge base for this "
+            f"[vouch memory] I searched {_whose_kb(personal)} for this "
             "prompt and found nothing relevant. Your final reply MUST open with "
             'the exact words "Nothing in vouch on this." — even if you use tools '
             "or explore the codebase first — then answer from your own knowledge."
@@ -215,7 +233,7 @@ def build_claude_prompt_hook(store: KBStore, stdin_text: str) -> str:
         # Likewise the blockquote rule: recalled facts must be visually
         # distinguishable from the model's own words in the rendered reply.
         block = (
-            "[vouch memory] I searched the project's vouch knowledge base for this "
+            f"[vouch memory] I searched {_whose_kb(personal)} for this "
             "prompt. Approved, cited items are below — check them BEFORE reasoning "
             "or exploring on your own, and ground your answer in the relevant "
             "item(s). Your final reply MUST open with the exact words "

@@ -55,6 +55,11 @@ class AdoptReport:
     claims_pending: list[str] = field(default_factory=list)
     claims_skipped: list[str] = field(default_factory=list)
     retired: list[str] = field(default_factory=list)
+    # Session-summary page proposals still pending in the personal KB for this
+    # origin. Adoption moves durable knowledge (sources + claims); a summary
+    # that no human has reviewed yet is not knowledge yet, so it stays where
+    # it was filed — reported, never silently left behind.
+    pages_pending_in_personal: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -67,6 +72,7 @@ class AdoptReport:
             "claims_pending": self.claims_pending,
             "claims_skipped": self.claims_skipped,
             "retired": self.retired,
+            "pages_pending_in_personal": self.pages_pending_in_personal,
         }
 
 
@@ -141,7 +147,7 @@ def adopt(
     re-proposal that decodes to an identical durable claim is mechanically
     rejected by the receipt resolver. ``dry_run`` reports without writing.
     """
-    root = match_root.resolve()
+    root = Path(match_root).resolve()
     personal_identity = personal.identity()
     project_identity = project.identity()
     report = AdoptReport(
@@ -150,6 +156,7 @@ def adopt(
         to_kb=project_identity[0] if project_identity else None,
         dry_run=dry_run,
     )
+    report.pages_pending_in_personal = _pending_pages_for_origin(personal, root)
     sources = find_adoptable_sources(personal, root)
     if not sources:
         return report
@@ -160,11 +167,16 @@ def adopt(
         report.sources = sorted(
             sid for sid in source_ids if not _source_exists(project, sid)
         )
+        queued = _pending_payload_ids(project)
+        # Predict against the PROJECT's real gate — a dry run that promises
+        # durable claims a closed gate will leave pending is worse than no
+        # preview at all.
+        gate_open = _receipts_auto_approve(project)
         for claim, receipt in pairs:
-            if _already_durable(project, claim):
+            if _already_durable(project, claim) or claim.id in queued:
                 report.claims_skipped.append(claim.id)
-            elif receipt is not None:
-                report.claims_durable.append(claim.id)  # candidate, gate decides
+            elif receipt is not None and gate_open:
+                report.claims_durable.append(claim.id)
             else:
                 report.claims_pending.append(claim.id)
         return report
@@ -189,9 +201,18 @@ def adopt(
         )
         report.sources.append(src.id)
 
-    adopted_claim_ids: list[str] = []
+    # Under a human-only gate adopted claims land PENDING, not durable — so
+    # "already here" must also mean "already queued", or every re-run files
+    # another copy of the same claim into the review queue.
+    queued = _pending_payload_ids(project)
+    # Only claims that actually landed DURABLE in the project may be retired
+    # from the personal KB. Archiving one that is merely pending would strand
+    # it: reject or expire the proposal and the knowledge is live in neither
+    # KB, with no unarchive path and no second adopt pass (archived claims are
+    # skipped as dead).
+    landed_durable: list[str] = []
     for claim, receipt in pairs:
-        if _already_durable(project, claim):
+        if _already_durable(project, claim) or claim.id in queued:
             report.claims_skipped.append(claim.id)
             continue
         rationale = (
@@ -224,7 +245,7 @@ def adopt(
             )
             if durable is not None:
                 report.claims_durable.append(durable.id)
-                adopted_claim_ids.append(claim.id)
+                landed_durable.append(claim.id)
             else:
                 try:
                     filed = project.get_proposal(result.proposal.id)
@@ -232,7 +253,6 @@ def adopt(
                     filed = None
                 if filed is not None and filed.status == ProposalStatus.PENDING:
                     report.claims_pending.append(claim.id)
-                    adopted_claim_ids.append(claim.id)
                 else:
                     # Rejected as a duplicate of an already-durable claim.
                     report.claims_skipped.append(claim.id)
@@ -253,10 +273,9 @@ def adopt(
                 slug_hint=claim.id,
             )
             report.claims_pending.append(claim.id)
-            adopted_claim_ids.append(claim.id)
 
     if retire:
-        for claim_id in adopted_claim_ids:
+        for claim_id in landed_durable:
             try:
                 lifecycle.archive(personal, claim_id=claim_id, actor=actor)
             except Exception:
@@ -295,6 +314,39 @@ def _already_durable(project: KBStore, claim: Claim) -> bool:
     except ArtifactNotFoundError:
         return False
     return True
+
+
+def _pending_pages_for_origin(personal: KBStore, match_root: Path) -> list[str]:
+    """Ids of PENDING page proposals captured in ``match_root`` (or below)."""
+    out: list[str] = []
+    for proposal in personal.list_proposals(ProposalStatus.PENDING):
+        meta = proposal.payload.get("metadata")
+        if not isinstance(meta, dict):
+            continue
+        origin_path = meta.get("origin_path")
+        if isinstance(origin_path, str) and origin_path and _origin_matches(
+            origin_path, match_root
+        ):
+            out.append(proposal.id)
+    return out
+
+
+def _receipts_auto_approve(project: KBStore) -> bool:
+    """Whether this KB's gate lets a verified receipt land durable by itself."""
+    cfg = proposals_mod._review_config(project)
+    return bool(cfg.get("auto_approve_on_receipt")) or (
+        cfg.get("approver_role") == "trusted-agent"
+    )
+
+
+def _pending_payload_ids(project: KBStore) -> set[str]:
+    """Claim ids already waiting in the project's review queue."""
+    out: set[str] = set()
+    for proposal in project.list_proposals(ProposalStatus.PENDING):
+        payload_id = proposal.payload.get("id")
+        if isinstance(payload_id, str) and payload_id:
+            out.add(payload_id)
+    return out
 
 
 def _source_exists(project: KBStore, source_id: str) -> bool:

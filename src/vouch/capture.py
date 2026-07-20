@@ -446,6 +446,7 @@ def finalize(
     transcript_path: Path | None = None,
     mode: str = "auto",
     config: CaptureConfig | None = None,
+    origin: Path | None = None,
 ) -> dict[str, Any]:
     """Roll a session buffer into PENDING summary proposal(s). No approve().
 
@@ -455,6 +456,10 @@ def finalize(
     If cwd is None (e.g., finalizing orphaned buffers of unknown origin), git
     changes are not included; transcript_path (from the SessionEnd hook payload)
     supplies the human's first prompt for the summary title when present.
+
+    ``origin`` marks a personal-KB fallback rollup (see ``capture_answer``):
+    the filed summary records the folder the session ran in, so a shared
+    personal KB's review queue says which folder each summary is about.
     """
     from . import session_split  # deferred: breaks the capture<->session_split cycle
     intent = (
@@ -462,7 +467,7 @@ def finalize(
     )
     return session_split.summarize(
         store, session_id, intent=intent, cwd=cwd, project=project,
-        generated_at=generated_at, mode=mode, config=config,
+        generated_at=generated_at, mode=mode, config=config, origin=origin,
     )
 
 

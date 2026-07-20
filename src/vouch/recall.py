@@ -56,6 +56,7 @@ def build_digest(
     max_chars: int = DEFAULT_MAX_CHARS,
     viewer: ViewerContext | None = None,
     stats: dict[str, int] | None = None,
+    personal: bool = False,
 ) -> str:
     """Return an injectable digest of every live approved claim + page title.
 
@@ -68,6 +69,11 @@ def build_digest(
     ``stats``, when given, receives ``{"hidden": n}`` — how many live
     artifacts the scope filter dropped — so CLI callers can say so on
     stderr instead of filtering silently.
+
+    ``personal`` labels the digest as the machine-wide personal catch-all
+    rather than "this repo". A KB-less folder's session reads the personal
+    KB *whole* — that is what a catch-all is — so the header must not claim
+    the knowledge belongs to the current folder.
     """
     if viewer is None:
         viewer = viewer_from(config_path=store.config_path)
@@ -80,9 +86,15 @@ def build_digest(
     if not claims and not pages:
         return ""
 
+    whose = (
+        "in your machine-wide personal vouch KB (this folder has no project "
+        "KB; knowledge here is shared across every KB-less folder you work in)"
+        if personal
+        else "for this repo"
+    )
     lines: list[str] = [
         _OPEN_TAG,
-        f"# approved KB knowledge for this repo — {len(claims)} claim(s), "
+        f"# approved KB knowledge {whose} — {len(claims)} claim(s), "
         f"{len(pages)} page(s). reviewed, cited, durable. use kb_read_page / "
         "kb_search for detail; kb_propose_* (human-approved) to add more.",
     ]

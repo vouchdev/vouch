@@ -342,12 +342,27 @@ def personal_kb_root() -> Path | None:
     return home / ".local" / "share" / "vouch" / "personal"
 
 
+def personal_entries(*, path: Path | None = None) -> list[RegistryEntry]:
+    """Every personal-role row, live ones (a real ``.vouch/`` on disk) first.
+
+    More than one row can exist — a personal KB moved, or a second one
+    registered under ``VOUCH_PERSONAL_KB``. Ordering is what makes the
+    ambiguity harmless rather than silent: a stale row left behind by a
+    deleted KB must never shadow the live one and switch fallback off.
+    """
+    rows = [e for e in load_registry(path) if e.role == "personal"]
+    live = [e for e in rows if (Path(e.path).expanduser() / KB_DIRNAME).is_dir()]
+    dead = [e for e in rows if e not in live]
+    # Among live rows the most recently registered wins — "the one I just set
+    # up" is the least surprising answer.
+    live.sort(key=lambda e: e.added_at, reverse=True)
+    return live + dead
+
+
 def personal_entry(*, path: Path | None = None) -> RegistryEntry | None:
-    """The registry's personal-role row (first match), or None."""
-    for e in load_registry(path):
-        if e.role == "personal":
-            return e
-    return None
+    """The registry's personal-role row, or None. See ``personal_entries``."""
+    rows = personal_entries(path=path)
+    return rows[0] if rows else None
 
 
 def personal_fallback_enabled(root: Path) -> bool:
@@ -374,8 +389,17 @@ def set_personal_fallback(root: Path, enabled: bool) -> None:
 
     Textual edits where possible (mirroring ``KBStore._mint_identity``) so
     hand-written comments survive; a config that is not a yaml mapping is
-    refused untouched.
+    refused untouched. Serialized on the KB's own cross-process lock — the
+    same one identity minting uses — because this is a read-modify-write of
+    the file that also carries `kb:` and `review:`, and a concurrent minter
+    or flag-flipper would otherwise write back a stale copy of the whole
+    config.
     """
+    with audit_mod._audit_lock(root / KB_DIRNAME):
+        _set_personal_fallback_locked(root, enabled)
+
+
+def _set_personal_fallback_locked(root: Path, enabled: bool) -> None:
     cfg_path = root / KB_DIRNAME / "config.yaml"
     text = cfg_path.read_text(encoding="utf-8")
     try:
