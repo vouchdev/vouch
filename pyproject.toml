@@ -35,7 +35,7 @@ web = [
     "uvicorn>=0.30,<1",
     # uvicorn needs a websockets implementation to serve the /ws realtime
     # channel; without it the WebSocket handshake 500s at runtime.
-    "websockets>=12,<16",
+    "websockets>=12,<17",
 ]
 dev = [
     "pytest>=9.0.3,<10",
