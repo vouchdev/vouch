@@ -6,6 +6,32 @@ All notable changes to vouch are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+- **personal catch-all KB + `vouch adopt`** (global vouch, phase 3):
+  `vouch hub init-personal` creates and registers a personal KB at
+  `~/.local/share/vouch/personal` (`XDG_DATA_HOME` honoured;
+  `VOUCH_PERSONAL_KB` overrides). with its opt-in flag on
+  (`personal.fallback_capture` in the KB's own config — one question at
+  `install-mcp --global`, or `--personal-fallback`, or `vouch hub
+  fallback on`), sessions in folders WITHOUT a project KB capture into
+  it instead of nowhere: every captured source records the folder it
+  came from (`metadata.origin_path`), the session-start banner announces
+  the routing, and per-prompt recall in those folders reads the same KB
+  back. strictly double-opt-in (registry role `personal` + the KB's own
+  config flag) and fail-closed: no personal KB, no flag, a corrupt
+  registry, or a guard refusal (discovery landing on a personal KB from
+  below — the hijack shape) all mean capture stays off exactly as
+  before. `vouch adopt`, run inside a project that now has its own KB,
+  drains those captures home THROUGH the project's review gate: sources
+  copy byte-identically (content-addressed ids are stable across KBs),
+  each live personal claim is re-proposed against the copied source, its
+  byte-offset receipt re-verifies mechanically, and the project's own
+  review config decides durability — auto-approve on receipt where
+  enabled, pending for a human otherwise; adoption never bypasses
+  review. idempotent; `--dry-run` previews; `--from-path` adopts a
+  moved project's captures; `--retire` archives the personal copies;
+  both KBs log a `kb.adopt` audit event carrying the other side's id.
+
 ## [1.5.0] — 2026-07-20
 
 ### Added
