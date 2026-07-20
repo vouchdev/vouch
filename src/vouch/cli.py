@@ -7,6 +7,7 @@ same storage + audit + index layer.
 
 from __future__ import annotations
 
+import contextlib
 import getpass
 import io
 import json
@@ -25,6 +26,7 @@ import click
 import yaml
 
 from . import __version__, bundle, health, volunteer_context
+from . import adopt as adopt_mod
 from . import audit as audit_mod
 from . import capture as capture_mod
 from . import codex_rollout as codex_rollout_mod
@@ -116,6 +118,19 @@ def _load_store(start: Path | None = None) -> KBStore:
         root = discover_root(start)
     except KBNotFoundError as e:
         click.echo(f"error: {e}", err=True)
+        # A KB-less folder under an opted-in personal fallback is NOT inert —
+        # its sessions capture into the personal KB. Saying only "run vouch
+        # init" here would hide where this folder's knowledge is going.
+        fallback = None
+        with contextlib.suppress(Exception):
+            fallback = hub_mod.personal_fallback_store()
+        if fallback is not None:
+            click.echo(
+                f"note: sessions in this folder capture into your personal KB "
+                f"({fallback.root}). `vouch init` here, then `vouch adopt`, "
+                "moves that knowledge into this project.",
+                err=True,
+            )
         click.echo("hint: run `vouch init` in your project root.", err=True)
         sys.exit(2)
     # Reads proceed under the personal-role registry guard, but say so:
@@ -362,6 +377,233 @@ def hub_unregister(token: str) -> None:
     if removed is None:
         raise click.ClickException(f"no registered KB matches {token!r}")
     click.echo(f"unregistered {removed.name} ({removed.kb_id})")
+
+
+def _init_personal_kb(fallback: bool | None) -> Path:
+    """Create + register the personal catch-all KB; shared by the two entry
+    points (`vouch hub init-personal` and `install-mcp --global`'s opt-in)
+    so they cannot drift.
+
+    ``fallback`` None means "don't touch the flag": a fresh KB starts off
+    (capture into it stays opt-in), an existing KB keeps whatever it says.
+    """
+    root = hub_mod.personal_kb_root()
+    if root is None:
+        raise click.ClickException(
+            "cannot determine a home directory for the personal KB — "
+            "set VOUCH_PERSONAL_KB to a writable folder"
+        )
+    created = not (root / ".vouch").is_dir()
+    if created:
+        try:
+            _bootstrap_kb(root)
+        except Exception as e:
+            # cli boundary: an unwritable XDG path (or any other OSError) must
+            # read as an error with a remedy, not a traceback — and must not
+            # leave half a KB that a rerun would mistake for a finished one.
+            shutil.rmtree(root / ".vouch", ignore_errors=True)
+            raise click.ClickException(
+                f"could not initialise the personal KB at {root}: {e} — fix "
+                "the cause and rerun, or set VOUCH_PERSONAL_KB to a writable "
+                "folder"
+            ) from e
+        click.echo(f"Initialised personal KB at {root / '.vouch'}")
+    else:
+        click.echo(f"Personal KB already present at {root / '.vouch'}")
+    # A personal row pointing somewhere else is a routing hazard: capture
+    # would follow one KB while `hub fallback` flips another. Retire the
+    # stale rows instead of leaving the choice to ordering.
+    for stale in hub_mod.personal_entries():
+        if Path(stale.path).expanduser().resolve() != root.resolve():
+            hub_mod.unregister_kb(stale.kb_id)
+            click.echo(
+                f"note: unregistered a previous personal KB row ({stale.path})",
+                err=True,
+            )
+    try:
+        entry = hub_mod.register_kb(
+            root, role="personal", name="personal", actor=_whoami()
+        )
+    except Exception as e:
+        raise click.ClickException(
+            f"could not register the personal KB at {root}: {e}"
+        ) from e
+    click.echo(f"Registered in the machine registry: {entry.name} ({entry.kb_id})")
+    if fallback is not None:
+        try:
+            hub_mod.set_personal_fallback(root, fallback)
+        except (OSError, ValueError) as e:
+            raise click.ClickException(str(e)) from e
+    enabled = hub_mod.personal_fallback_enabled(root)
+    if enabled:
+        click.echo(
+            "Fallback capture: on — sessions in folders WITHOUT a project KB "
+            "capture here, and recall in those folders reads this whole KB "
+            "(one store shared by all of them). `vouch init` + `vouch adopt` "
+            "moves a folder's share into its own project KB."
+        )
+    else:
+        click.echo(
+            "Fallback capture: off — folders without a project KB capture "
+            "nowhere (enable with `vouch hub fallback on`)."
+        )
+    return root
+
+
+@hub.command("init-personal")
+@click.option(
+    "--fallback/--no-fallback",
+    "fallback",
+    default=None,
+    help="Also opt in (or out of) capturing KB-less folders' sessions into "
+    "this KB. Without the flag: a prompt on a terminal, otherwise off.",
+)
+def hub_init_personal(fallback: bool | None) -> None:
+    """Create + register this machine's personal catch-all KB.
+
+    Lives at ~/.local/share/vouch/personal (XDG_DATA_HOME honoured;
+    override with VOUCH_PERSONAL_KB). Idempotent: re-running refreshes the
+    registry row and leaves the fallback flag alone unless you pass one.
+    """
+    created = True
+    root = hub_mod.personal_kb_root()
+    if root is not None and (root / ".vouch").is_dir():
+        created = False
+    if fallback is None and created and sys.stdin.isatty():
+        fallback = click.confirm(
+            "Capture sessions in folders WITHOUT a project KB into this "
+            "personal KB? It is one shared store: what you capture in any "
+            "KB-less folder is recalled in all of them (adopt a folder's "
+            "share into a project KB later)",
+            default=False,
+        )
+    _init_personal_kb(fallback)
+
+
+@hub.command("fallback")
+@click.argument(
+    "state", required=False, type=click.Choice(["on", "off", "status"])
+)
+def hub_fallback(state: str | None) -> None:
+    """Show or flip fallback capture on the registered personal KB."""
+    entry = hub_mod.personal_entry()
+    if entry is None:
+        raise click.ClickException(
+            "no personal KB registered — create one with `vouch hub init-personal`"
+        )
+    root = Path(entry.path)
+    if not (root / ".vouch").is_dir():
+        raise click.ClickException(
+            f"registered personal KB at {root} has no .vouch/ — re-run "
+            "`vouch hub init-personal` (or `vouch hub unregister` the stale row)"
+        )
+    if state in (None, "status"):
+        enabled = hub_mod.personal_fallback_enabled(root)
+        click.echo(f"fallback capture: {'on' if enabled else 'off'}  ({root})")
+        return
+    try:
+        hub_mod.set_personal_fallback(root, state == "on")
+    except (OSError, ValueError) as e:
+        raise click.ClickException(str(e)) from e
+    click.echo(f"fallback capture: {state}  ({root})")
+
+
+@cli.command()
+@click.option(
+    "--from-path",
+    "from_path",
+    default=None,
+    type=click.Path(file_okay=False),
+    help="Adopt captures whose origin is this folder instead of the project "
+    "root (for a project that moved since its sessions were captured).",
+)
+@click.option(
+    "--retire",
+    is_flag=True,
+    help="Archive the adopted claims in the personal KB so they stop "
+    "surfacing in personal recall (sources and audit history stay).",
+)
+@click.option("--dry-run", is_flag=True, help="Report what would move; write nothing.")
+@click.option("--json", "as_json", is_flag=True, help="Emit the report as JSON.")
+def adopt(
+    from_path: str | None, retire: bool, dry_run: bool, as_json: bool
+) -> None:
+    """Bring this folder's personal-KB captures into the project KB.
+
+    Sessions that ran here before `vouch init` (under a --global install
+    with the personal fallback on) captured into the machine's personal
+    KB, stamped with this folder as their origin. Adopt copies those
+    sources in and re-proposes their claims through THIS KB's own review
+    gate — receipts re-verify mechanically, so under the starter config
+    they land durable; under a human-only gate they land pending.
+    """
+    store = _load_store()
+    entry = hub_mod.personal_entry()
+    if entry is None:
+        raise click.ClickException(
+            "no personal KB registered on this machine — nothing to adopt "
+            "(see `vouch hub init-personal`)"
+        )
+    personal_root = Path(entry.path)
+    if not (personal_root / ".vouch").is_dir():
+        raise click.ClickException(
+            f"registered personal KB at {personal_root} has no .vouch/ — "
+            "re-run `vouch hub init-personal`"
+        )
+    personal = KBStore(personal_root)
+    if personal.kb_dir.resolve() == store.kb_dir.resolve():
+        raise click.ClickException(
+            "this folder IS the personal KB — adopt runs inside a project "
+            "with its own `.vouch/`"
+        )
+    match_root = Path(from_path).resolve() if from_path else store.root.resolve()
+    with _cli_errors():
+        report = adopt_mod.adopt(
+            store,
+            personal,
+            match_root=match_root,
+            actor=_whoami(),
+            retire=retire,
+            dry_run=dry_run,
+        )
+    if as_json:
+        _emit_json(report.as_dict())
+        return
+    verb = "would adopt" if dry_run else "adopted"
+    if not (
+        report.sources
+        or report.claims_durable
+        or report.claims_pending
+        or report.claims_skipped
+        or report.pages_pending_in_personal
+    ):
+        click.echo(
+            f"nothing to adopt: no personal-KB captures originate under "
+            f"{match_root} (personal KB: {personal_root})"
+        )
+        return
+    click.echo(
+        f"{verb} from personal KB {entry.name} ({entry.kb_id[:8]}…), "
+        f"origin {match_root}:"
+    )
+    click.echo(f"  sources copied:   {len(report.sources)}")
+    click.echo(f"  claims durable:   {len(report.claims_durable)}")
+    click.echo(f"  claims pending:   {len(report.claims_pending)}")
+    click.echo(f"  claims skipped:   {len(report.claims_skipped)}  (already here)")
+    if retire:
+        click.echo(
+            f"  retired (personal): {len(report.retired)}  "
+            "(only claims that landed durable here)"
+        )
+    if report.pages_pending_in_personal:
+        click.echo(
+            f"  session summaries captured here that are still pending in the "
+            f"personal KB: {len(report.pages_pending_in_personal)} — review "
+            f"them there (`cd {personal_root} && vouch review`); adopt moves "
+            "sources and claims, not unreviewed pages."
+        )
+    if report.claims_pending and not dry_run:
+        click.echo("review the pending ones with `vouch review`.")
 
 
 @cli.command()
@@ -2452,14 +2694,15 @@ def capture() -> None:
     """Automatic session capture (driven by claude code hooks)."""
 
 
-def _capture_store(start: Path | None = None) -> KBStore | None:
-    """Locate the KB without the sys.exit(2) that _load_store does — hooks
-    must never abort the host.
+def _capture_target(start: Path | None = None) -> hub_mod.CaptureTarget:
+    """Locate the capture target without the sys.exit(2) that _load_store
+    does — hooks must never abort the host.
 
-    Uses the hub resolver so ambient capture also respects the registry
-    guard: a KB registered as personal-role never absorbs another
-    directory's session (the write-plane half of the ~/.vouch hijack fix;
-    the $HOME walk-stop in discover_root is the structural half).
+    Uses the hub resolver so ambient capture respects the registry guard
+    (a personal-role KB never absorbs another directory's session via
+    discovery) AND the personal fallback: a folder with no project KB
+    captures into the opted-in personal catch-all, origin recorded, or
+    nowhere at all.
 
     ``start`` pins the resolution to the host-reported project directory
     (the hook payload's ``cwd``) — under a machine-wide install the hook
@@ -2467,15 +2710,21 @@ def _capture_store(start: Path | None = None) -> KBStore | None:
     cwd, is what names the session's project.
     """
     try:
-        res = hub_mod.resolve(start)
+        target = hub_mod.capture_target(start)
     except Exception:
-        return None
-    if res.root is None:
-        return None
-    if res.guard is not None:
-        click.echo(f"vouch: {res.guard}", err=True)
-        return None
-    return KBStore(res.root)
+        return hub_mod.CaptureTarget(store=None)
+    if target.store is None and target.note:
+        # A guard refusal must be loud; quiet fallback routing is announced
+        # once per session by `capture banner`, not per hook invocation.
+        click.echo(f"vouch: {target.note}", err=True)
+    return target
+
+
+def _capture_store(start: Path | None = None) -> KBStore | None:
+    """The store half of :func:`_capture_target` for callers that don't
+    need the fallback origin (buffers, summaries — origin rides on the
+    captured *sources*, stamped in `capture answer`)."""
+    return _capture_target(start).store
 
 
 def _read_hook_payload() -> dict[str, Any]:
@@ -2572,16 +2821,17 @@ def capture_finalize_cmd(session_id: str | None) -> None:
     start, ok = _hook_start(payload)
     if not ok:
         return
-    store = _capture_store(start)
-    if store is None:
+    target = _capture_target(start)
+    if target.store is None:
         return
     cwd = Path(str(payload.get("cwd") or ".")).resolve()
     transcript_raw = payload.get("transcript_path")
     transcript = Path(str(transcript_raw)) if transcript_raw else None
     result = capture_mod.finalize(
-        store, sid, cwd=cwd, project=cwd.name,
+        target.store, sid, cwd=cwd, project=cwd.name,
         generated_at=datetime.now(UTC).isoformat(),
         transcript_path=transcript,
+        origin=target.origin if target.fallback else None,
     )
     _emit_json(result)
 
@@ -2611,10 +2861,13 @@ def capture_answer_cmd(session_id: str | None) -> None:
         start, ok = _hook_start(payload)
         if not ok:
             return
-        store = _capture_store(start)
-        if store is None:
+        target = _capture_target(start)
+        if target.store is None:
             return
-        result = capture_mod.capture_answer(store, sid, Path(str(transcript_raw)))
+        result = capture_mod.capture_answer(
+            target.store, sid, Path(str(transcript_raw)),
+            origin=target.origin if target.fallback else None,
+        )
         _emit_json(result)
     except Exception:
         # a capture failure must never break the user's turn.
@@ -2732,7 +2985,8 @@ def capture_banner_cmd() -> None:
     """Emit a SessionStart nudge if captured summaries await review."""
     payload = _read_hook_payload()
     start, _ok = _hook_start(payload)
-    store = _capture_store(start)
+    target = _capture_target(start)
+    store = target.store
     if store is None:
         # SessionStart stdout becomes session context — this is the one
         # channel where the promised "run `vouch init`" hint is actually
@@ -2742,6 +2996,17 @@ def capture_banner_cmd() -> None:
             "`vouch init` here to enable durable memory."
         )
         return
+    if target.fallback:
+        # Sessions must never capture somewhere the user can't see: this
+        # line is the per-session announcement of the personal fallback,
+        # including that the store is shared with every other KB-less folder.
+        click.echo(
+            "vouch: no project KB in this folder — this session captures to "
+            f"your personal KB ({store.root}), one store shared by every "
+            "KB-less folder, so recall here can surface knowledge captured "
+            "elsewhere. Run `vouch init` here, then `vouch adopt`, to give "
+            "this folder its own KB."
+        )
     n = capture_mod.pending_count(store)
     if n:
         click.echo(
@@ -2754,12 +3019,15 @@ def capture_banner_cmd() -> None:
 def recall_cmd() -> None:
     """Emit a digest of all approved knowledge for session-start injection."""
     # Read plane: like context-hook, the digest warns under the personal-role
-    # guard instead of going dark. Resolution starts at the hook payload's
-    # cwd when given (machine-wide installs run this from anywhere).
+    # guard instead of going dark, and follows capture into the personal
+    # fallback (a KB-less folder that captures personally recalls personally).
+    # Resolution starts at the hook payload's cwd when given (machine-wide
+    # installs run this from anywhere).
     payload = _read_hook_payload()
     start, _ok = _hook_start(payload)
+    fallback = False
     try:
-        store, warning = hub_mod.resolve_for_read(start)
+        store, warning, fallback = hub_mod.read_target(start)
     except Exception:
         store, warning = None, None
     if warning:
@@ -2770,7 +3038,9 @@ def recall_cmd() -> None:
     if not cfg.enabled:
         return
     stats: dict[str, int] = {}
-    digest = recall_mod.build_digest(store, max_chars=cfg.max_chars, stats=stats)
+    digest = recall_mod.build_digest(
+        store, max_chars=cfg.max_chars, stats=stats, personal=fallback
+    )
     if stats.get("hidden"):
         # stderr only — stdout is injected into the host turn and must stay
         # clean. Scope filtering must never be silent.
@@ -3054,9 +3324,11 @@ def context_hook() -> None:
     stdin_text = sys.stdin.read()
     # Read plane: recall must survive the personal-role guard (warn, don't
     # go dark) — a silent context-hook is indistinguishable from vouch
-    # being broken. Capture commands stay on the refusing _capture_store.
-    # Resolution starts at the payload's cwd when given: under a global
-    # install the hook process cwd is not guaranteed to be the project.
+    # being broken — and follows capture into the personal fallback so a
+    # KB-less folder recalls the knowledge it captures. Capture commands
+    # stay on the refusing _capture_target. Resolution starts at the
+    # payload's cwd when given: under a global install the hook process
+    # cwd is not guaranteed to be the project.
     start: Path | None = None
     try:
         loaded = json.loads(stdin_text) if stdin_text.strip() else {}
@@ -3064,8 +3336,9 @@ def context_hook() -> None:
             start, _ok = _hook_start(loaded)
     except json.JSONDecodeError:
         start = None
+    fallback = False
     try:
-        store, warning = hub_mod.resolve_for_read(start)
+        store, warning, fallback = hub_mod.read_target(start)
     except Exception:
         store, warning = None, None
     if warning:
@@ -3073,7 +3346,9 @@ def context_hook() -> None:
     out = ""
     if store is not None:
         try:
-            out = hooks.build_claude_prompt_hook(store, stdin_text)
+            out = hooks.build_claude_prompt_hook(
+                store, stdin_text, personal=fallback
+            )
         except Exception:
             out = ""
     if out:
@@ -4141,12 +4416,73 @@ def pr_cache_show(repo: str, state: str, limit: int, as_json: bool, cache_dir: s
 # --- install-mcp: drop the right adapter files into a project tree --------
 
 
-def _install_mcp_global(host: str, *, tier: str, approve: bool) -> None:
+def _offer_personal_fallback(personal_fallback: bool | None) -> None:
+    """The one-question opt-in after a --global install.
+
+    An already-registered personal KB is reported (and re-flagged only when
+    a flag was passed explicitly). Otherwise: an explicit flag decides; a
+    terminal gets ONE question (default no); non-interactive installs stay
+    off with a hint. Failures here never fail the install — the global
+    wiring already landed.
+    """
+    try:
+        entry = hub_mod.personal_entry()
+    except Exception:
+        entry = None
+    if entry is not None and (Path(entry.path) / ".vouch").is_dir():
+        root = Path(entry.path)
+        if personal_fallback is not None:
+            try:
+                hub_mod.set_personal_fallback(root, personal_fallback)
+            except (OSError, ValueError) as e:
+                click.echo(f"warning: could not update fallback flag: {e}", err=True)
+        state = "on" if hub_mod.personal_fallback_enabled(root) else "off"
+        click.echo(f"Personal KB: {entry.path} (fallback capture {state})")
+        return
+    wanted = personal_fallback
+    if wanted is None:
+        if sys.stdin.isatty():
+            wanted = click.confirm(
+                "Folders without a project KB currently don't capture at all. "
+                "Create a personal catch-all KB so they do? It is ONE store "
+                "shared by every KB-less folder — its knowledge is recalled in "
+                "all of them (`vouch adopt` moves a folder's share into a "
+                "project KB later)",
+                default=False,
+            )
+        else:
+            click.echo(
+                "Optional: `vouch hub init-personal --fallback` adds a "
+                "personal catch-all KB for folders without a project KB."
+            )
+            return
+    if not wanted:
+        return
+    try:
+        _init_personal_kb(True)
+    except Exception as e:
+        # The machine-wide wiring already landed and is what the command is
+        # for; a personal-KB failure is a warning with a retry, never a
+        # non-zero exit that reads as "the install failed".
+        message = e.message if isinstance(e, click.ClickException) else str(e)
+        click.echo(
+            f"warning: could not set up the personal KB: {message} — "
+            "the global install itself is complete; retry with "
+            "`vouch hub init-personal --fallback`.",
+            err=True,
+        )
+
+
+def _install_mcp_global(
+    host: str, *, tier: str, approve: bool, personal_fallback: bool | None = None
+) -> None:
     """The --global path: user-level wiring once, no project target at all.
 
-    Deliberately no KB bootstrap — there is no project here. Each session
-    resolves its own project's `.vouch` (run `vouch init` once per project);
-    a folder without one no-ops with a hint instead of capturing anywhere.
+    Deliberately no project-KB bootstrap — there is no project here. Each
+    session resolves its own project's `.vouch` (run `vouch init` once per
+    project); a folder without one no-ops with a hint — or, after the
+    one-question personal opt-in below, captures into the personal
+    catch-all KB instead.
     """
     try:
         result, target = install_mod.install_global(host, tier=tier, approve=approve)
@@ -4188,6 +4524,7 @@ def _install_mcp_global(host: str, *, tier: str, approve: bool) -> None:
             f"{len(result.failed)} file(s) could not be installed: "
             + ", ".join(result.failed)
         )
+    _offer_personal_fallback(personal_fallback)
 
 
 @cli.command(name="install-mcp", context_settings={"ignore_unknown_options": False})
@@ -4244,6 +4581,15 @@ def _install_mcp_global(host: str, *, tier: str, approve: bool) -> None:
     "(run `vouch init` once per project). Coexists safely with per-project "
     "installs.",
 )
+@click.option(
+    "--personal-fallback/--no-personal-fallback",
+    "personal_fallback",
+    default=None,
+    help="With --global: also create the personal catch-all KB so folders "
+    "without a project KB capture into it (adopt into a project later with "
+    "`vouch adopt`). Without either flag: one question on a terminal, "
+    "otherwise off.",
+)
 def install_mcp(
     host: str | None,
     list_hosts: bool,
@@ -4253,6 +4599,7 @@ def install_mcp(
     auto_init: bool,
     approve: bool,
     global_install: bool,
+    personal_fallback: bool | None,
 ) -> None:
     """Install vouch into HOST (claude-code, cursor, …) idempotently.
 
@@ -4289,8 +4636,16 @@ def install_mcp(
                 "--global is machine-wide; --path/--target do not apply "
                 "(each project's KB comes from `vouch init` in that project)"
             )
-        _install_mcp_global(host, tier=tier, approve=approve)
+        _install_mcp_global(
+            host, tier=tier, approve=approve, personal_fallback=personal_fallback
+        )
         return
+
+    if personal_fallback is not None:
+        raise click.UsageError(
+            "--personal-fallback/--no-personal-fallback only applies with "
+            "--global (per-project installs capture into the project KB)"
+        )
 
     target = Path(target_alias or path).resolve()
     if host in hosts and install_mod.wants_kb_bootstrap(host):

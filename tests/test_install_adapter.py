@@ -1508,3 +1508,89 @@ def test_install_global_coexists_with_project_install(tmp_path: Path) -> None:
     cfg = json.loads((home / ".claude.json").read_text(encoding="utf-8"))
     assert cfg["mcpServers"]["vouch"]["command"] == "vouch"
     assert str(project.resolve()) in cfg["projects"]  # untouched
+
+
+# --- --global + the personal-fallback opt-in (phase 3) ---------------------
+
+
+@pytest.fixture()
+def _personal_env(_sandbox_home: Path, monkeypatch):
+    """Pin the registry + personal paths inside the sandbox home."""
+    from vouch import hub
+
+    monkeypatch.setenv(hub.REGISTRY_ENV, str(_sandbox_home / "registry.yaml"))
+    monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+    monkeypatch.delenv(hub.PERSONAL_KB_ENV, raising=False)
+    return _sandbox_home
+
+
+def test_install_global_personal_fallback_flag(
+    tmp_path: Path, monkeypatch, _personal_env: Path
+) -> None:
+    """--personal-fallback sets up the opted-in personal KB in one command."""
+    from vouch import hub
+
+    workdir = tmp_path / "w"
+    workdir.mkdir()
+    monkeypatch.chdir(workdir)
+    result = CliRunner().invoke(
+        cli, ["install-mcp", "claude-code", "--global", "--personal-fallback"]
+    )
+    assert result.exit_code == 0, result.output
+    root = hub.personal_kb_root()
+    assert root is not None and (root / ".vouch").is_dir()
+    assert hub.personal_fallback_enabled(root) is True
+    entry = hub.personal_entry()
+    assert entry is not None and entry.role == "personal"
+    # re-running reports the existing KB instead of re-asking
+    again = CliRunner().invoke(
+        cli, ["install-mcp", "claude-code", "--global"]
+    )
+    assert again.exit_code == 0, again.output
+    assert "Personal KB:" in again.output
+    assert "fallback capture on" in again.output
+
+
+def test_install_global_no_personal_fallback_stays_off(
+    tmp_path: Path, monkeypatch, _personal_env: Path
+) -> None:
+    from vouch import hub
+
+    workdir = tmp_path / "w"
+    workdir.mkdir()
+    monkeypatch.chdir(workdir)
+    result = CliRunner().invoke(
+        cli, ["install-mcp", "claude-code", "--global", "--no-personal-fallback"]
+    )
+    assert result.exit_code == 0, result.output
+    root = hub.personal_kb_root()
+    assert root is not None and not (root / ".vouch").exists()
+    assert hub.personal_entry() is None
+
+
+def test_install_global_non_tty_defaults_to_hint(
+    tmp_path: Path, monkeypatch, _personal_env: Path
+) -> None:
+    """No flag + no terminal: nothing is created, the hint names the command."""
+    from vouch import hub
+
+    workdir = tmp_path / "w"
+    workdir.mkdir()
+    monkeypatch.chdir(workdir)
+    result = CliRunner().invoke(cli, ["install-mcp", "claude-code", "--global"])
+    assert result.exit_code == 0, result.output
+    assert "hub init-personal --fallback" in result.output
+    root = hub.personal_kb_root()
+    assert root is not None and not (root / ".vouch").exists()
+    assert hub.personal_entry() is None
+
+
+def test_personal_fallback_flag_requires_global(tmp_path: Path, monkeypatch) -> None:
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    monkeypatch.chdir(proj)
+    result = CliRunner().invoke(
+        cli, ["install-mcp", "claude-code", "--personal-fallback"]
+    )
+    assert result.exit_code != 0
+    assert "--global" in result.output

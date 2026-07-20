@@ -833,3 +833,152 @@ def test_capture_e2e_sessionstart_cleanup_then_finalize(tmp_path):
 
     # Total proposals: old + new
     assert len(pending_after) >= 2
+
+
+# --- personal-KB fallback capture through the hook CLI (phase 3) -----------
+
+
+@pytest.fixture()
+def _fallback_machine(tmp_path_factory, monkeypatch):
+    """Fake home + registry + an opted-in personal KB; returns its store."""
+    from vouch import hub
+
+    fake_home = tmp_path_factory.mktemp("fbhome")
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
+    monkeypatch.setenv(hub.REGISTRY_ENV, str(fake_home / "registry.yaml"))
+    monkeypatch.delenv("VOUCH_KB_PATH", raising=False)
+    monkeypatch.delenv("VOUCH_PROJECT_DIR", raising=False)
+    monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+    monkeypatch.delenv(hub.PERSONAL_KB_ENV, raising=False)
+    root = hub.personal_kb_root()
+    assert root is not None
+    personal = KBStore.init(root)
+    hub.register_kb(root, role="personal", actor="t")
+    hub.set_personal_fallback(root, True)
+    return personal
+
+
+def _long_transcript(tmp_path: Path) -> Path:
+    transcript = tmp_path / "fb-transcript.jsonl"
+    answer = (
+        "The deploy cadence for this service is every second Tuesday. "
+        "The staging environment refreshes nightly at 02:00 UTC. "
+        "Rollbacks use the blue-green switch, never an old tag."
+    )
+    lines = [
+        {"type": "user", "message": {"role": "user", "content": [
+            {"type": "text", "text": "deploy cadence?"}]}},
+        {"type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "text", "text": answer}]}},
+    ]
+    transcript.write_text(
+        "\n".join(_json.dumps(entry) for entry in lines), encoding="utf-8"
+    )
+    return transcript
+
+
+def test_answer_cli_falls_back_to_personal_kb(
+    _fallback_machine: KBStore, tmp_path: Path, monkeypatch
+) -> None:
+    """A Stop hook firing in a KB-less folder captures into the personal KB,
+    origin recorded — the whole point of the phase 3 fallback."""
+    personal = _fallback_machine
+    nowhere = tmp_path / "no-kb-project"
+    nowhere.mkdir()
+    monkeypatch.chdir(nowhere)
+    transcript = _long_transcript(tmp_path)
+    payload = _json.dumps({
+        "session_id": "fb-1",
+        "transcript_path": str(transcript),
+        "cwd": str(nowhere),
+    })
+    result = CliRunner().invoke(cli, ["capture", "answer"], input=payload)
+    assert result.exit_code == 0, result.output
+    out = _json.loads(result.output)
+    assert out["captured"] is True
+    src = personal.get_source(out["source"])
+    assert src.metadata["origin_path"] == str(nowhere)
+    assert "personal-fallback" in src.tags
+
+
+def test_answer_cli_project_kb_capture_has_no_origin(
+    _fallback_machine: KBStore, tmp_path: Path, monkeypatch
+) -> None:
+    """A project-KB capture is NOT a fallback: no origin stamp, no tag."""
+    proj = tmp_path / "realproj"
+    store = KBStore.init(proj)
+    monkeypatch.chdir(proj)
+    transcript = _long_transcript(tmp_path)
+    payload = _json.dumps({
+        "session_id": "fb-2",
+        "transcript_path": str(transcript),
+        "cwd": str(proj),
+    })
+    result = CliRunner().invoke(cli, ["capture", "answer"], input=payload)
+    assert result.exit_code == 0, result.output
+    out = _json.loads(result.output)
+    src = store.get_source(out["source"])
+    assert "origin_path" not in src.metadata
+    assert "personal-fallback" not in src.tags
+
+
+def test_banner_cli_announces_fallback(
+    _fallback_machine: KBStore, tmp_path: Path, monkeypatch
+) -> None:
+    nowhere = tmp_path / "no-kb-project"
+    nowhere.mkdir()
+    monkeypatch.chdir(nowhere)
+    payload = _json.dumps({"session_id": "fb-3", "cwd": str(nowhere)})
+    result = CliRunner().invoke(cli, ["capture", "banner"], input=payload)
+    assert result.exit_code == 0, result.output
+    assert "personal KB" in result.output
+    assert "vouch adopt" in result.output
+
+
+def test_observe_cli_buffers_in_personal_kb_on_fallback(
+    _fallback_machine: KBStore, tmp_path: Path, monkeypatch
+) -> None:
+    personal = _fallback_machine
+    nowhere = tmp_path / "no-kb-project"
+    nowhere.mkdir()
+    monkeypatch.chdir(nowhere)
+    payload = _json.dumps({
+        "session_id": "fb-4",
+        "cwd": str(nowhere),
+        "tool_name": "Edit",
+        "tool_input": {"file_path": str(nowhere / "a.py")},
+        "tool_response": "ok",
+    })
+    result = CliRunner().invoke(cli, ["capture", "observe"], input=payload)
+    assert result.exit_code == 0, result.output
+    assert cap.buffer_path(personal, "fb-4").exists()
+
+
+def test_fallback_off_captures_nowhere(
+    _fallback_machine: KBStore, tmp_path: Path, monkeypatch
+) -> None:
+    from vouch import hub
+
+    personal = _fallback_machine
+    hub.set_personal_fallback(personal.root, False)
+    nowhere = tmp_path / "no-kb-project"
+    nowhere.mkdir()
+    monkeypatch.chdir(nowhere)
+    transcript = _long_transcript(tmp_path)
+    payload = _json.dumps({
+        "session_id": "fb-5",
+        "transcript_path": str(transcript),
+        "cwd": str(nowhere),
+    })
+    result = CliRunner().invoke(cli, ["capture", "answer"], input=payload)
+    assert result.exit_code == 0
+    assert result.output.strip() == ""  # no capture happened anywhere
+    assert not list((personal.kb_dir / "sources").glob("*/meta.yaml")) or all(
+        "origin_path" not in s.metadata for s in personal.list_sources()
+    )
+    # and the banner shows the plain no-KB hint, not the fallback line
+    banner = CliRunner().invoke(
+        cli, ["capture", "banner"],
+        input=_json.dumps({"session_id": "fb-5", "cwd": str(nowhere)}),
+    )
+    assert "run `vouch init` here to enable durable memory" in banner.output

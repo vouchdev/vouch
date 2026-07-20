@@ -6,6 +6,42 @@ All notable changes to vouch are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+- **personal catch-all KB + `vouch adopt`** (global vouch, phase 3):
+  `vouch hub init-personal` creates and registers a personal KB at
+  `~/.local/share/vouch/personal` (`XDG_DATA_HOME` honoured;
+  `VOUCH_PERSONAL_KB` overrides). with its opt-in flag on
+  (`personal.fallback_capture` in the KB's own config — one question at
+  `install-mcp --global`, or `--personal-fallback`, or `vouch hub
+  fallback on`), sessions in folders WITHOUT a project KB capture into
+  it instead of nowhere: every captured source records the folder it
+  came from (`metadata.origin_path`), the session-start banner announces
+  the routing, and per-prompt recall in those folders reads the same KB
+  back. strictly double-opt-in (registry role `personal` + the KB's own
+  config flag) and fail-closed: no personal KB, no flag, a corrupt
+  registry, or a guard refusal (discovery landing on a personal KB from
+  below — the hijack shape) all mean capture stays off exactly as
+  before. `vouch adopt`, run inside a project that now has its own KB,
+  drains those captures home THROUGH the project's review gate: sources
+  copy byte-identically (content-addressed ids are stable across KBs),
+  each live personal claim is re-proposed against the copied source, its
+  byte-offset receipt re-verifies mechanically, and the project's own
+  review config decides durability — auto-approve on receipt where
+  enabled, pending for a human otherwise; adoption never bypasses
+  review. idempotent in both directions (a claim already durable *or*
+  already queued in the project is skipped, so re-running never doubles
+  the review queue); `--dry-run` previews against the project's real
+  gate; `--from-path` adopts a moved project's captures; `--retire`
+  archives only the personal copies that actually landed durable —
+  retiring a merely-pending one would strand it if the proposal is
+  later rejected or expires; session rollups are reported, not moved
+  (an unreviewed summary is not knowledge yet, so it stays where it was
+  filed); both KBs log a `kb.adopt` audit event carrying the other
+  side's id. the personal KB is ONE store shared by every KB-less
+  folder — recall there reads all of it, and the digest header, the
+  per-prompt block, the session banner, `vouch status` and the opt-in
+  question all say so rather than calling it "this repo's" knowledge.
+
 ## [1.5.0] — 2026-07-20
 
 ### Added
