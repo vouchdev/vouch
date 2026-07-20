@@ -95,10 +95,87 @@ def test_observe_dedups_within_window(store: KBStore) -> None:
     assert len(cap.buffer_path(store, "s1").read_text().splitlines()) == 2
 
 
+def test_observe_dedups_on_tool_use_id(store: KBStore) -> None:
+    """Event-identity dedup: the same PostToolUse event delivered twice
+    (user-level AND legacy project-level hooks under a global install) is
+    recorded once — exact and window-free, however the summaries drift."""
+    assert cap.observe(
+        store, "s1", tool="Read", summary="Read a.py",
+        now=100.0, tool_use_id="toolu_abc",
+    )
+    # same event id, different summary, far outside the text-dedup window
+    assert cap.observe(
+        store, "s1", tool="Read", summary="Read a.py (drifted wording)",
+        now=999.0, tool_use_id="toolu_abc",
+    ) is False
+    # a different event id still records
+    assert cap.observe(
+        store, "s1", tool="Read", summary="Read b.py",
+        now=999.0, tool_use_id="toolu_def",
+    )
+    lines = cap.buffer_path(store, "s1").read_text().splitlines()
+    assert len(lines) == 2
+
+
+def test_observe_without_tool_use_id_keeps_window_dedup(store: KBStore) -> None:
+    """Hosts that don't send an event id keep the legacy text+window dedup."""
+    assert cap.observe(store, "s1", tool="Read", summary="Read a.py", now=100.0)
+    assert cap.observe(store, "s1", tool="Read", summary="Read a.py", now=130.0) is False
+
+
 def test_observe_noop_when_disabled(store: KBStore) -> None:
     store.config_path.write_text("capture:\n  enabled: false\n")
     assert cap.observe(store, "s1", tool="Edit", summary="x") is False
     assert not cap.buffer_path(store, "s1").exists()
+
+
+def test_observe_cli_routes_by_payload_cwd(
+    store: KBStore, tmp_path: Path, monkeypatch
+) -> None:
+    """Under a global install the hook process may run from anywhere: the
+    payload's cwd, not the process cwd, names the session's project."""
+    import json as _json
+
+    from click.testing import CliRunner
+
+    from vouch.cli import cli
+
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    payload = {
+        "session_id": "s-routed",
+        "cwd": str(store.root),
+        "tool_use_id": "toolu_route",
+        "tool_name": "Read",
+        "tool_input": {"file_path": str(store.root / "a.py")},
+    }
+    result = CliRunner().invoke(cli, ["capture", "observe"], input=_json.dumps(payload))
+    assert result.exit_code == 0
+    assert cap.buffer_path(store, "s-routed").exists()
+
+
+def test_observe_cli_refuses_invalid_payload_cwd(
+    store: KBStore, monkeypatch
+) -> None:
+    """A payload naming a cwd that doesn't exist must REFUSE capture, not
+    fall back to the process cwd and land in whatever KB is there."""
+    import json as _json
+
+    from click.testing import CliRunner
+
+    from vouch.cli import cli
+
+    monkeypatch.chdir(store.root)  # a valid KB is right here — the trap
+    payload = {
+        "session_id": "s-invalid",
+        "cwd": str(store.root / "does-not-exist"),
+        "tool_name": "Read",
+        "tool_input": {"file_path": "a.py"},
+    }
+    result = CliRunner().invoke(cli, ["capture", "observe"], input=_json.dumps(payload))
+    assert result.exit_code == 0
+    assert not cap.buffer_path(store, "s-invalid").exists()
 
 
 def test_summarize_tool_skips_unobserved() -> None:

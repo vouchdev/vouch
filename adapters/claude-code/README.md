@@ -21,6 +21,19 @@ on its own; `--no-init` skips it), **and registers vouch in
 approval it never prompts for** (see step 2). The rest of this file is
 the manual equivalent.
 
+The machine-wide path — `vouch install-mcp claude-code --global` — wires
+vouch **once for every project**: hooks + `/vouch-*` commands under
+`~/.claude/`, plus a *user-scope* MCP server (top-level `mcpServers` in
+`~/.claude.json`; `vouch serve` starts even where no KB exists, so the
+server never shows as failed in non-vouch folders). Each session still
+uses the nearest project `.vouch/`, so knowledge stays per project; run
+`vouch init` once in any project you want vouch in. A folder with no KB
+never captures anywhere — its session-start banner says "run
+`vouch init` to enable durable memory here". This coexists safely with
+per-project installs: the settings template is byte-identical (Claude
+Code collapses duplicate hook commands) and capture additionally dedups
+on the event's `tool_use_id`.
+
 ## 2. Drop the MCP server into your project
 
 Add `.mcp.json` at the root of your project (the same directory that

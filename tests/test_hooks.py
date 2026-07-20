@@ -180,6 +180,24 @@ def test_context_hook_cli_always_exits_zero_without_kb(
     assert result.exit_code == 0
 
 
+def test_context_hook_cli_uses_payload_cwd(
+    store: KBStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Under a global install the hook process may run from anywhere: the
+    payload's cwd names the project whose KB recall must read."""
+    from click.testing import CliRunner
+
+    from vouch.cli import cli
+
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)  # no .vouch here — only the payload points home
+    payload = json.dumps({"prompt": "when do deploys run", "cwd": str(store.root)})
+    result = CliRunner().invoke(cli, ["context-hook"], input=payload)
+    assert result.exit_code == 0
+    assert "vouch memory" in result.output
+
+
 def test_prompt_with_session_id_feeds_salience_reflex(
     store: KBStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
