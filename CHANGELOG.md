@@ -6,6 +6,8 @@ All notable changes to vouch are documented here. Format follows
 
 ## [Unreleased]
 
+## [1.5.0] — 2026-07-20
+
 ### Added
 - **`vouch install-mcp claude-code --global`** — install once for the
   whole machine. writes user-level hooks, `/vouch-*` commands, and a
