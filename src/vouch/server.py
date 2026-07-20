@@ -651,18 +651,29 @@ def kb_list_sessions() -> dict[str, Any]:
 
 
 @mcp.tool()
-def kb_session_transcript(session_id: str, agent: str | None = None) -> dict[str, Any]:
+def kb_session_transcript(
+    session_id: str,
+    agent: str | None = None,
+    grade: bool = False,
+    regrade: bool = False,
+) -> dict[str, Any]:
     """Render a captured session's full transcript from its raw agent JSONL.
 
     Read-only. Locates the raw Claude Code / Codex file on disk and normalizes
     it into message blocks (text, thinking, tool_use with paired results).
+    Injected scaffolding (system reminders, hook payloads, command output)
+    arrives tagged with a ``noise`` kind so clients can collapse it.
     ``agent`` restricts the search ("claude" | "codex"); omit to try both.
+    ``grade=True`` adds cached LLM review-relevance annotations via
+    ``compile.llm_cmd`` (``regrade=True`` bypasses the cache).
     Degrades to compact capture observations when the raw file is unavailable.
     """
     from . import transcript
     if agent is not None and agent not in ("claude", "codex"):
         raise ValueError(f"unknown agent: {agent!r} (expected 'claude' or 'codex')")
-    return transcript.load_transcript(_store(), session_id, agent=agent)
+    return transcript.load_transcript(
+        _store(), session_id, agent=agent, grade=grade, regrade=regrade,
+    )
 
 
 @mcp.tool()

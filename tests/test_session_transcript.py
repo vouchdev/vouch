@@ -275,3 +275,87 @@ def test_load_transcript_codex_source(
     out = transcript.load_transcript(store, sid)
     assert out["available"] is True
     assert out["source"]["agent"] == "codex"
+
+
+# --- noise tagging ----------------------------------------------------------
+
+
+def _parse(tmp_path: Path, lines: list[dict]) -> dict:
+    f = tmp_path / "s.jsonl"
+    _write_jsonl(f, lines)
+    return transcript.parse_claude_transcript(f)
+
+
+def _user_line(content, **extra) -> dict:
+    return {"type": "user", "message": {"role": "user", "content": content}, **extra}
+
+
+def test_system_reminder_block_tagged_and_rolled_up(tmp_path: Path) -> None:
+    parsed = _parse(tmp_path, [_user_line(
+        [{"type": "text", "text": "<system-reminder>nag nag</system-reminder>"}],
+    )])
+    (m,) = parsed["messages"]
+    assert m["blocks"][0]["noise"] == "system-reminder"
+    assert m["noise"] == "system-reminder"
+
+
+def test_is_meta_entry_tagged_meta(tmp_path: Path) -> None:
+    parsed = _parse(tmp_path, [_user_line("Caveat: local commands…", isMeta=True)])
+    (m,) = parsed["messages"]
+    assert m["blocks"][0]["noise"] == "meta"
+    assert m["noise"] == "meta"
+
+
+def test_mixed_message_keeps_real_text_unrolled(tmp_path: Path) -> None:
+    parsed = _parse(tmp_path, [_user_line([
+        {"type": "text", "text": "<system-reminder>recall</system-reminder>"},
+        {"type": "text", "text": "fix the login bug"},
+    ])])
+    (m,) = parsed["messages"]
+    assert m["blocks"][0]["noise"] == "system-reminder"
+    assert "noise" not in m["blocks"][1]
+    assert "noise" not in m
+
+
+def test_prompt_mentioning_tag_mid_sentence_not_tagged(tmp_path: Path) -> None:
+    parsed = _parse(tmp_path, [_user_line(
+        [{"type": "text", "text": "why does <system-reminder> appear in my logs?"}],
+    )])
+    (m,) = parsed["messages"]
+    assert "noise" not in m["blocks"][0]
+    assert "noise" not in m
+
+
+def test_command_scaffolding_tagged(tmp_path: Path) -> None:
+    parsed = _parse(tmp_path, [
+        _user_line([{"type": "text", "text": "<command-name>/clear</command-name>"}]),
+        _user_line([{"type": "text", "text": "<local-command-stdout>ok</local-command-stdout>"}]),
+        _user_line([{"type": "text", "text": "<ide_opened_file>x.py</ide_opened_file>"}]),
+    ])
+    kinds = [m["noise"] for m in parsed["messages"]]
+    assert kinds == ["command", "command", "command"]
+
+
+def test_hook_payloads_tagged(tmp_path: Path) -> None:
+    parsed = _parse(tmp_path, [
+        _user_line([{
+            "type": "text",
+            "text": "<user-prompt-submit-hook>kb ctx</user-prompt-submit-hook>",
+        }]),
+        _user_line([{"type": "text", "text": "[SYSTEM NOTIFICATION - NOT USER INPUT] task done"}]),
+    ])
+    kinds = [m["noise"] for m in parsed["messages"]]
+    assert kinds == ["hook-context", "hook-context"]
+
+
+def test_codex_user_noise_tagged(tmp_path: Path) -> None:
+    f = tmp_path / "rollout.jsonl"
+    _write_jsonl(f, [
+        {"type": "response_item", "payload": {"type": "message", "role": "user",
+         "content": [{"type": "input_text", "text": "<system-reminder>x</system-reminder>"}]}},
+        {"type": "response_item", "payload": {"type": "message", "role": "user",
+         "content": [{"type": "input_text", "text": "real prompt"}]}},
+    ])
+    parsed = transcript.parse_codex_transcript(f)
+    assert parsed["messages"][0]["noise"] == "system-reminder"
+    assert "noise" not in parsed["messages"][1]

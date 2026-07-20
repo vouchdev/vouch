@@ -14,8 +14,16 @@ export interface ToolResult {
   subagent_session_id: string | null
 }
 
+/** Injected/scaffolding content the reviewer never typed — collapsed by default. */
+export type NoiseKind = 'meta' | 'system-reminder' | 'hook-context' | 'command' | 'mixed'
+
+export interface Relevance {
+  grade: 'key' | 'low'
+  note: string | null
+}
+
 export type TranscriptBlock =
-  | { type: 'text'; text: string }
+  | { type: 'text'; text: string; noise?: NoiseKind }
   | { type: 'thinking'; text: string }
   | {
       type: 'tool_use'
@@ -32,6 +40,17 @@ export interface TranscriptMessage {
   timestamp: string | null
   tokens: Tokens | null
   blocks: TranscriptBlock[]
+  /** Set when every block is noise — the whole message renders as a stub. */
+  noise?: NoiseKind
+  /** LLM review-relevance annotation; absent = normal. */
+  relevance?: Relevance
+}
+
+export interface GradingStatus {
+  graded_at?: string
+  cached?: boolean
+  graded_messages?: number
+  error?: string
 }
 
 export interface SessionMeta {
@@ -61,6 +80,8 @@ export type Transcript =
       session: SessionMeta
       messages: TranscriptMessage[]
       truncated: boolean
+      grading_available?: boolean
+      grading?: GradingStatus
     }
   | { available: false; reason: string; observations: Observation[] }
 
@@ -68,8 +89,11 @@ export function fetchTranscript(
   conn: VouchConnectionInfo,
   sessionId: string,
   agent?: string,
+  opts?: { grade?: boolean; regrade?: boolean },
 ): Promise<Transcript> {
   const params: Record<string, unknown> = { session_id: sessionId }
   if (agent) params.agent = agent
+  if (opts?.grade) params.grade = true
+  if (opts?.regrade) params.regrade = true
   return rpc<Transcript>(conn, 'kb.session_transcript', params)
 }

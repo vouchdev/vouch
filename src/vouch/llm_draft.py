@@ -11,6 +11,7 @@ session page type).
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import tempfile
@@ -47,6 +48,12 @@ def run_llm(
                 input=prompt, capture_output=True, text=True,
                 encoding="utf-8", errors="replace",
                 timeout=timeout_seconds,
+                # An agent CLI used as llm_cmd fires its own vouch hooks; the
+                # temp cwd shields cwd-discovery, but hooks that resolve the
+                # project dir from their own env still capture the drafting
+                # session back into the KB as a new pending summary each run.
+                # capture.load_config honors this kill-switch.
+                env={**os.environ, "VOUCH_CAPTURE_DISABLE": "1"},
             )
         except subprocess.TimeoutExpired as e:
             raise LLMDraftError(f"{label} timed out after {timeout_seconds:.0f}s") from e
