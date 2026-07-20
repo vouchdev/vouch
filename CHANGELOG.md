@@ -28,9 +28,19 @@ All notable changes to vouch are documented here. Format follows
   byte-offset receipt re-verifies mechanically, and the project's own
   review config decides durability — auto-approve on receipt where
   enabled, pending for a human otherwise; adoption never bypasses
-  review. idempotent; `--dry-run` previews; `--from-path` adopts a
-  moved project's captures; `--retire` archives the personal copies;
-  both KBs log a `kb.adopt` audit event carrying the other side's id.
+  review. idempotent in both directions (a claim already durable *or*
+  already queued in the project is skipped, so re-running never doubles
+  the review queue); `--dry-run` previews against the project's real
+  gate; `--from-path` adopts a moved project's captures; `--retire`
+  archives only the personal copies that actually landed durable —
+  retiring a merely-pending one would strand it if the proposal is
+  later rejected or expires; session rollups are reported, not moved
+  (an unreviewed summary is not knowledge yet, so it stays where it was
+  filed); both KBs log a `kb.adopt` audit event carrying the other
+  side's id. the personal KB is ONE store shared by every KB-less
+  folder — recall there reads all of it, and the digest header, the
+  per-prompt block, the session banner, `vouch status` and the opt-in
+  question all say so rather than calling it "this repo's" knowledge.
 
 ## [1.5.0] — 2026-07-20
 
