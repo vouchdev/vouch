@@ -2452,7 +2452,7 @@ def capture() -> None:
     """Automatic session capture (driven by claude code hooks)."""
 
 
-def _capture_store() -> KBStore | None:
+def _capture_store(start: Path | None = None) -> KBStore | None:
     """Locate the KB without the sys.exit(2) that _load_store does — hooks
     must never abort the host.
 
@@ -2460,9 +2460,14 @@ def _capture_store() -> KBStore | None:
     guard: a KB registered as personal-role never absorbs another
     directory's session (the write-plane half of the ~/.vouch hijack fix;
     the $HOME walk-stop in discover_root is the structural half).
+
+    ``start`` pins the resolution to the host-reported project directory
+    (the hook payload's ``cwd``) — under a machine-wide install the hook
+    process may be launched from anywhere, and the payload, not the process
+    cwd, is what names the session's project.
     """
     try:
-        res = hub_mod.resolve()
+        res = hub_mod.resolve(start)
     except Exception:
         return None
     if res.root is None:
@@ -2471,6 +2476,41 @@ def _capture_store() -> KBStore | None:
         click.echo(f"vouch: {res.guard}", err=True)
         return None
     return KBStore(res.root)
+
+
+def _read_hook_payload() -> dict[str, Any]:
+    """Tolerantly read a hook's stdin JSON payload ({} when absent/invalid)."""
+    if sys.stdin.isatty():
+        return {}
+    raw = sys.stdin.read()
+    if not raw.strip():
+        return {}
+    try:
+        loaded = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def _hook_start(payload: dict[str, Any]) -> tuple[Path | None, bool]:
+    """Resolution start from a hook payload: (start, ok).
+
+    ``VOUCH_PROJECT_DIR`` keeps its documented precedence over the payload
+    (return (None, True) so the resolver reads the env). A payload whose
+    ``cwd`` names something that is not a directory returns ok=False:
+    capture must REFUSE rather than fall back to the process cwd and land
+    the session in whatever KB the hook process happened to start in; read
+    paths may still proceed with start=None (best effort beats silence).
+    """
+    if os.environ.get("VOUCH_PROJECT_DIR"):
+        return None, True
+    raw = payload.get("cwd")
+    if not isinstance(raw, str) or not raw.strip():
+        return None, True
+    p = Path(raw)
+    if p.is_dir():
+        return p, True
+    return None, False
 
 
 @capture.command("observe")
@@ -2494,13 +2534,18 @@ def capture_observe_cmd() -> None:
         )
         if obs is None:
             return
-        store = _capture_store()
+        start, ok = _hook_start(payload)
+        if not ok:
+            return
+        store = _capture_store(start)
         if store is None:
             return
+        tool_use_id = payload.get("tool_use_id")
         capture_mod.observe(
             store, session_id,
             tool=obs["tool"], summary=obs["summary"],
             files=obs.get("files"), cmd=obs.get("cmd"),
+            tool_use_id=str(tool_use_id) if tool_use_id else None,
         )
     except Exception:
         # a capture failure must never break the user's tool call.
@@ -2524,7 +2569,10 @@ def capture_finalize_cmd(session_id: str | None) -> None:
     sid = session_id or str(payload.get("session_id") or "")
     if not sid:
         return
-    store = _capture_store()
+    start, ok = _hook_start(payload)
+    if not ok:
+        return
+    store = _capture_store(start)
     if store is None:
         return
     cwd = Path(str(payload.get("cwd") or ".")).resolve()
@@ -2560,7 +2608,10 @@ def capture_answer_cmd(session_id: str | None) -> None:
         transcript_raw = payload.get("transcript_path")
         if not sid or not transcript_raw:
             return
-        store = _capture_store()
+        start, ok = _hook_start(payload)
+        if not ok:
+            return
+        store = _capture_store(start)
         if store is None:
             return
         result = capture_mod.capture_answer(store, sid, Path(str(transcript_raw)))
@@ -2575,16 +2626,28 @@ def capture_answer_cmd(session_id: str | None) -> None:
 @click.option("--max-age-seconds", type=float, default=3600.0, help="Max age in seconds.")
 def capture_finalize_all_cmd(session_id: str | None, max_age_seconds: float) -> None:
     """Finalize all capture buffers except current session (SessionStart cleanup)."""
-    sid = session_id or os.environ.get("VOUCH_SESSION_ID") or ""
+    payload = _read_hook_payload()
+    sid = (
+        session_id
+        or os.environ.get("VOUCH_SESSION_ID")
+        or str(payload.get("session_id") or "")
+    )
+    empty: dict[str, list[str]] = {
+        "finalized": [], "skipped_recent": [], "skipped_current": []
+    }
     if not sid:
         # No session ID provided; silently succeed
-        _emit_json({"finalized": [], "skipped_recent": [], "skipped_current": []})
+        _emit_json(empty)
         return
 
-    store = _capture_store()
+    start, ok = _hook_start(payload)
+    if not ok:
+        _emit_json(empty)
+        return
+    store = _capture_store(start)
     if store is None:
         # No KB; silently succeed
-        _emit_json({"finalized": [], "skipped_recent": [], "skipped_current": []})
+        _emit_json(empty)
         return
 
     result = capture_mod.finalize_all_except(
@@ -2633,9 +2696,11 @@ def capture_ingest_codex_cmd(
             raw = "" if sys.stdin.isatty() else sys.stdin.read()
             payload = json.loads(raw) if raw.strip() else {}
             if isinstance(payload, dict):
-                codex_rollout_mod.ingest_hook_payload(
-                    _capture_store(), payload, codex_home=codex_home
-                )
+                start, ok = _hook_start(payload)
+                if ok:
+                    codex_rollout_mod.ingest_hook_payload(
+                        _capture_store(start), payload, codex_home=codex_home
+                    )
         except Exception:
             # the hook contract is exit 0 — never surface an error here.
             pass
@@ -2665,8 +2730,17 @@ def capture_ingest_codex_cmd(
 @capture.command("banner")
 def capture_banner_cmd() -> None:
     """Emit a SessionStart nudge if captured summaries await review."""
-    store = _capture_store()
+    payload = _read_hook_payload()
+    start, _ok = _hook_start(payload)
+    store = _capture_store(start)
     if store is None:
+        # SessionStart stdout becomes session context — this is the one
+        # channel where the promised "run `vouch init`" hint is actually
+        # seen, so a machine-wide install isn't silent in KB-less folders.
+        click.echo(
+            "vouch: no project knowledge base in this folder — run "
+            "`vouch init` here to enable durable memory."
+        )
         return
     n = capture_mod.pending_count(store)
     if n:
@@ -2680,9 +2754,12 @@ def capture_banner_cmd() -> None:
 def recall_cmd() -> None:
     """Emit a digest of all approved knowledge for session-start injection."""
     # Read plane: like context-hook, the digest warns under the personal-role
-    # guard instead of going dark.
+    # guard instead of going dark. Resolution starts at the hook payload's
+    # cwd when given (machine-wide installs run this from anywhere).
+    payload = _read_hook_payload()
+    start, _ok = _hook_start(payload)
     try:
-        store, warning = hub_mod.resolve_for_read()
+        store, warning = hub_mod.resolve_for_read(start)
     except Exception:
         store, warning = None, None
     if warning:
@@ -2978,8 +3055,17 @@ def context_hook() -> None:
     # Read plane: recall must survive the personal-role guard (warn, don't
     # go dark) — a silent context-hook is indistinguishable from vouch
     # being broken. Capture commands stay on the refusing _capture_store.
+    # Resolution starts at the payload's cwd when given: under a global
+    # install the hook process cwd is not guaranteed to be the project.
+    start: Path | None = None
     try:
-        store, warning = hub_mod.resolve_for_read()
+        loaded = json.loads(stdin_text) if stdin_text.strip() else {}
+        if isinstance(loaded, dict):
+            start, _ok = _hook_start(loaded)
+    except json.JSONDecodeError:
+        start = None
+    try:
+        store, warning = hub_mod.resolve_for_read(start)
     except Exception:
         store, warning = None, None
     if warning:
@@ -3776,13 +3862,28 @@ def serve(
 
     GET /health, /healthz, and /capabilities are always unauthenticated.
     """
-    _load_store()  # fail fast with a clear message if no .vouch/ KB is present
-
     if transport == "stdio":
+        # No fail-fast here: a user-scope (machine-wide) registration launches
+        # this from every folder, most of which have no KB — exiting 2 would
+        # show a permanently failed MCP server in every non-vouch project.
+        # server._store() re-resolves per tool call and surfaces a clean
+        # "run `vouch init`" error instead, and a mid-session `vouch init`
+        # works on the very next call.
+        try:
+            discover_root()
+        except KBNotFoundError as e:
+            click.echo(
+                f"vouch serve: no KB yet ({e}) — serving anyway; kb_* tools "
+                "will say so until `vouch init` is run in the project.",
+                err=True,
+            )
         from .server import run_stdio
 
         run_stdio()
         return
+
+    _load_store()  # fail fast with a clear message if no .vouch/ KB is present
+
     if transport == "jsonl":
         from .jsonl_server import run_jsonl
 
@@ -4040,6 +4141,55 @@ def pr_cache_show(repo: str, state: str, limit: int, as_json: bool, cache_dir: s
 # --- install-mcp: drop the right adapter files into a project tree --------
 
 
+def _install_mcp_global(host: str, *, tier: str, approve: bool) -> None:
+    """The --global path: user-level wiring once, no project target at all.
+
+    Deliberately no KB bootstrap — there is no project here. Each session
+    resolves its own project's `.vouch` (run `vouch init` once per project);
+    a folder without one no-ops with a hint instead of capturing anywhere.
+    """
+    try:
+        result, target = install_mod.install_global(host, tier=tier, approve=approve)
+    except install_mod.AdapterError as e:
+        raise click.ClickException(str(e)) from e
+
+    for f in result.written:
+        click.echo(f"  + {f}")
+    for f in result.appended:
+        click.echo(f"  ~ {f}  (appended fenced block)")
+    for f in result.merged:
+        click.echo(f"  ~ {f}  (merged into existing)")
+    for f in result.registered:
+        click.echo(f"  ⚑ {f}  (user scope — serves every project)")
+    for f in result.skipped:
+        click.echo(f"  · {f}  (already present)")
+    for f in result.failed:
+        click.echo(f"  ✗ {f}  (could not install — left unchanged)")
+    click.echo(
+        f"Done — {len(result.written)} written, "
+        f"{len(result.appended)} appended, {len(result.merged)} merged, "
+        f"{len(result.registered)} registered, "
+        f"{len(result.skipped)} skipped, {len(result.failed)} failed "
+        f"under {target}"
+    )
+    click.echo(
+        "Global install: every Claude session now captures + recalls into "
+        "the nearest project .vouch/. Run `vouch init` once in each project "
+        "you want vouch in; projects with an existing per-project install "
+        "keep working (duplicate hooks collapse; capture dedups by event)."
+    )
+    if result.registered:
+        click.echo(
+            "Reload your editor window so it picks up the vouch MCP server "
+            "(VS Code: Developer: Reload Window)."
+        )
+    if result.failed:
+        raise click.ClickException(
+            f"{len(result.failed)} file(s) could not be installed: "
+            + ", ".join(result.failed)
+        )
+
+
 @cli.command(name="install-mcp", context_settings={"ignore_unknown_options": False})
 @click.argument("host", required=False)
 @click.option("--list", "list_hosts", is_flag=True, help="List available hosts and exit.")
@@ -4083,6 +4233,17 @@ def pr_cache_show(repo: str, state: str, limit: int, as_json: bool, cache_dir: s
     "Claude Code extension loads it without a manual approval it never prompts "
     "for. --no-approve leaves only the project .mcp.json (needs manual approval).",
 )
+@click.option(
+    "--global",
+    "global_install",
+    is_flag=True,
+    default=False,
+    help="Install once for the whole machine: user-level hooks/commands "
+    "(e.g. ~/.claude/) + a user-scope MCP server. Every session in every "
+    "folder then captures + recalls into that folder's own project KB "
+    "(run `vouch init` once per project). Coexists safely with per-project "
+    "installs.",
+)
 def install_mcp(
     host: str | None,
     list_hosts: bool,
@@ -4091,6 +4252,7 @@ def install_mcp(
     tier: str,
     auto_init: bool,
     approve: bool,
+    global_install: bool,
 ) -> None:
     """Install vouch into HOST (claude-code, cursor, …) idempotently.
 
@@ -4099,6 +4261,7 @@ def install_mcp(
       vouch install-mcp --list              # show known hosts
       vouch install-mcp claude-code         # one command: init .vouch/ if
                                             # missing + write T1..T4 into cwd
+      vouch install-mcp claude-code --global  # once per machine, all projects
       vouch install-mcp cursor --tier T2    # stop at AGENTS.md
       vouch install-mcp claude-desktop      # drop a paste-ready config
       vouch install-mcp windsurf --path /abs/path/to/project
@@ -4119,6 +4282,15 @@ def install_mcp(
         raise click.ClickException(
             "missing HOST; run `vouch install-mcp --list` to see the catalogue"
         )
+
+    if global_install:
+        if target_alias is not None or path != ".":
+            raise click.UsageError(
+                "--global is machine-wide; --path/--target do not apply "
+                "(each project's KB comes from `vouch init` in that project)"
+            )
+        _install_mcp_global(host, tier=tier, approve=approve)
+        return
 
     target = Path(target_alias or path).resolve()
     if host in hosts and install_mod.wants_kb_bootstrap(host):

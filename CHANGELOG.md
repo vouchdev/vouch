@@ -7,6 +7,30 @@ All notable changes to vouch are documented here. Format follows
 ## [Unreleased]
 
 ### Added
+- **`vouch install-mcp claude-code --global`** — install once for the
+  whole machine. writes user-level hooks, `/vouch-*` commands, and a
+  fenced CLAUDE.md snippet under `~/.claude/`, and registers vouch as a
+  *user-scope* MCP server (top-level `mcpServers` in `~/.claude.json`),
+  so every claude session in every folder gets capture + per-prompt
+  recall into that folder's **own** project `.vouch/` — the data stays
+  per project; run `vouch init` once per project. a folder without a KB
+  never captures anywhere: its session opens with a one-line "run
+  `vouch init`" note (the session-start banner), and `vouch serve` now
+  starts without a KB for the stdio transport (per-tool-call errors
+  instead of a machine-wide failed server in every non-vouch folder).
+  declared by a manifest `global:` block, so other hosts opt in as pure
+  manifest work; the user-level CLAUDE.md snippet is machine-wide-worded.
+  safe next to existing per-project installs, guarded three ways: the
+  global settings template is byte-for-byte the project one (claude code
+  collapses duplicate hook commands; a sync test freezes them), capture
+  dedups on the event's `tool_use_id` (exact, window-free — catches
+  drifted wiring too), and the hook commands (capture
+  observe/answer/finalize/finalize-all/banner, context-hook, recall,
+  ingest-codex) resolve the KB from the hook payload's `cwd` — with
+  `VOUCH_PROJECT_DIR` keeping precedence, and a payload naming a
+  nonexistent cwd refusing capture rather than falling back to the
+  process cwd. a malformed existing settings.json now reports as
+  *failed* (vouch is not wired) instead of "already present".
 - **KB instance identity**: `vouch init` mints a durable id (uuid, stored
   in `config.yaml` under `kb:` next to a display name) and stamps it onto
   every new audit event and bundle manifest, so history and exported

@@ -1,0 +1,24 @@
+# Vouch — knowledge base (machine-wide)
+
+**vouch** is installed machine-wide on this machine. Projects that have a
+`.vouch/` directory get durable, review-gated agent knowledge — each
+project its own KB, committed in that repo and reviewed in PRs.
+
+**If the current project has a `.vouch/` directory**, the `kb_*` MCP
+tools are live for it:
+
+- Read: `kb_search` (keyword), `kb_context` (working set for a task),
+  `kb_read_*` (specific ids).
+- Remember: register evidence with `kb_register_source`, then
+  `kb_propose_claim` citing it; richer write-ups via `kb_propose_page`.
+  Every claim MUST cite at least one source or evidence id. You cannot
+  write durable knowledge directly — proposals require approval
+  (`vouch approve`). This is intentional.
+- Hygiene: `kb_supersede` to replace a wrong claim, `kb_contradict` to
+  flag a conflict, `kb_confirm` to re-cite a claim you relied on.
+
+**If the current project has no `.vouch/`**, the vouch tools report so
+and capture stays off for this folder. Only suggest `vouch init` when
+the user asks about persistent memory here.
+
+You are recorded as `proposed_by: claude-code` in the audit log.

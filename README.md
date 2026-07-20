@@ -129,6 +129,8 @@ vouch install-mcp claude-code       # creates .vouch/ (if missing) + wires Claud
 
 > **What you'll see.** Every prompt is checked against the KB first. When vouch knows something relevant, the answer opens with **"From vouch memory:"**, grounded in the cited items; when it doesn't, it opens with *"Nothing in vouch on this."* — recall is visible on every turn, never silent. (A fresh KB knows almost nothing yet: work a session or two so capture fills it, then ask about the project again.)
 
+> **Prefer one install for every project?** `vouch install-mcp claude-code --global` wires vouch once, machine-wide: user-level hooks and commands in `~/.claude/` plus a user-scope MCP server in `~/.claude.json`. Every Claude session in every folder then captures + recalls into *that folder's own* `.vouch/` — data stays per project. Run `vouch init` once in each project you want vouch in; a folder without a KB never captures anywhere — its session opens with a one-line "run `vouch init` to enable durable memory here" note and the `kb_*` tools say the same. Safe next to existing per-project installs: duplicate hooks collapse and capture dedups by event id.
+
 **2. Point `compile` at an LLM** — the only step that needs a model. In `.vouch/config.yaml`:
 
 ```yaml
