@@ -121,6 +121,15 @@ def _starter_config() -> dict[str, Any]:
                 "enabled": True,
                 "half_life_days": 90,
             },
+            # decide per prompt how much of the turn vouch is entitled to.
+            # chatter with no informative tokens gets nothing; a "do work"
+            # imperative gets a small background pack and no reply contract
+            # (silent when there is no match); questions keep full visible
+            # recall. new KBs get it on; existing KBs behave exactly as
+            # before until they add this key.
+            "prompt_gate": {
+                "enabled": True,
+            },
         },
         "agents": {
             "recommended_loop": [

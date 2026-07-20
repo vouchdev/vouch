@@ -253,3 +253,174 @@ def test_salience_recording_failure_does_not_block_the_hook(
         assert "tuesdays" in json.loads(out)["hookSpecificOutput"]["additionalContext"]
     finally:
         salience.reset_session(session_id)
+
+
+# --- the prompt gate: which prompts are entitled to a turn ----------------
+
+
+def _enable_gate(store: KBStore) -> None:
+    import yaml
+
+    cfg = yaml.safe_load(store.config_path.read_text(encoding="utf-8"))
+    cfg.setdefault("retrieval", {})["prompt_gate"] = {"enabled": True}
+    store.config_path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+
+
+def _disable_gate(store: KBStore) -> None:
+    import yaml
+
+    cfg = yaml.safe_load(store.config_path.read_text(encoding="utf-8"))
+    retrieval = cfg.setdefault("retrieval", {})
+    retrieval.pop("prompt_gate", None)
+    store.config_path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+
+
+def _hook(store: KBStore, prompt: str) -> str:
+    return hooks.build_claude_prompt_hook(store, json.dumps({"prompt": prompt}))
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "fix the failing auth test",
+        "please refactor storage.py",
+        "ok now add a test for adopt",
+        "can you run the suite and commit?",
+        "bump the version",
+        "continue",
+        "go ahead",
+    ],
+)
+def test_action_prompts_are_classified_as_work(prompt: str) -> None:
+    assert hooks._looks_like_action(prompt) is True
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "what is our release cutoff?",
+        "how does the review gate work?",
+        "why did the container job fail?",
+        "can you tell me what the deploy cadence is?",
+        "who owns the deploy?",
+        "remind me how adopt works",
+        "the tests are failing, any idea why?",
+    ],
+)
+def test_lookup_prompts_are_not_classified_as_work(prompt: str) -> None:
+    assert hooks._looks_like_action(prompt) is False
+
+
+def test_work_prompt_with_a_miss_injects_nothing(
+    store: KBStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The whole point: a coding command the KB knows nothing about must not
+    spend the turn's opener announcing an empty search."""
+    _enable_gate(store)
+    monkeypatch.setattr(context.index_db, "search_semantic", lambda *a, **k: [])
+    monkeypatch.setattr(context.index_db, "search", lambda *a, **k: [])
+    assert _hook(store, "fix the flaky websocket reconnect") == ""
+
+
+def test_work_prompt_with_a_hit_is_advisory_not_a_contract(
+    store: KBStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Recall still helps the work — it just must not force the reply shape."""
+    _enable_gate(store)
+    _force_hit(monkeypatch)
+    out = _hook(store, "fix the tuesday deploy script")
+    assert out  # context is still injected
+    block = json.loads(out)["hookSpecificOutput"]["additionalContext"]
+    assert "deploys run on tuesdays" in block
+    assert "work request" in block
+    assert "Do NOT open your reply with a memory banner" in block
+    assert "MUST open with" not in block
+    assert "From vouch memory:" not in block
+
+
+def test_lookup_prompt_keeps_the_visible_recall_contract(
+    store: KBStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _enable_gate(store)
+    _force_hit(monkeypatch)
+    out = _hook(store, "what day do deploys run?")
+    block = json.loads(out)["hookSpecificOutput"]["additionalContext"]
+    assert 'MUST open with the exact words "From vouch memory:"' in block
+    assert "work request" not in block
+
+
+def test_lookup_prompt_with_a_miss_still_says_so(
+    store: KBStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A question the KB cannot answer keeps the honest 'nothing' answer —
+    silence there is indistinguishable from vouch being broken."""
+    _enable_gate(store)
+    monkeypatch.setattr(context.index_db, "search_semantic", lambda *a, **k: [])
+    monkeypatch.setattr(context.index_db, "search", lambda *a, **k: [])
+    out = _hook(store, "what is our incident escalation policy?")
+    block = json.loads(out)["hookSpecificOutput"]["additionalContext"]
+    assert '"Nothing in vouch on this."' in block
+
+
+@pytest.mark.parametrize("prompt", ["ok thanks", "yes", "which one is better?", "hmm"])
+def test_chatter_injects_nothing(
+    store: KBStore, monkeypatch: pytest.MonkeyPatch, prompt: str
+) -> None:
+    """Retrieval ORs every token, so 'which one' used to match on 'one'."""
+    _enable_gate(store)
+    _force_hit(monkeypatch)
+    assert _hook(store, prompt) == ""
+
+
+def test_work_prompts_get_a_smaller_pack(
+    store: KBStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Recall should inform the work, not crowd the turn it is helping."""
+    _enable_gate(store)
+    _force_hit(monkeypatch)
+    seen: dict[str, int] = {}
+
+    real = context.build_context_pack
+
+    def _spy(store_arg, **kwargs):
+        seen["limit"] = kwargs.get("limit")
+        seen["max_chars"] = kwargs.get("max_chars")
+        return real(store_arg, **kwargs)
+
+    monkeypatch.setattr(hooks, "build_context_pack", _spy)
+    _hook(store, "fix the tuesday deploy script")
+    assert seen["limit"] == hooks._WORK_MAX_ITEMS
+    assert seen["max_chars"] == hooks._WORK_MAX_CHARS
+    _hook(store, "what day do deploys run?")
+    assert seen["limit"] == hooks._MAX_ITEMS
+    assert seen["max_chars"] == hooks._MAX_CHARS
+
+
+def test_gate_absent_keeps_todays_behaviour(
+    store: KBStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Existing KBs have no prompt_gate key on disk and must not change."""
+    _disable_gate(store)
+    monkeypatch.setattr(context.index_db, "search_semantic", lambda *a, **k: [])
+    monkeypatch.setattr(context.index_db, "search", lambda *a, **k: [])
+    out = _hook(store, "fix the flaky websocket reconnect")
+    block = json.loads(out)["hookSpecificOutput"]["additionalContext"]
+    assert '"Nothing in vouch on this."' in block
+    # chatter, too: unchanged without the key
+    assert _hook(store, "ok thanks") != ""
+
+
+def test_starter_config_ships_the_gate_on(tmp_path: Path) -> None:
+    import yaml
+
+    fresh = KBStore.init(tmp_path / "fresh")
+    cfg = yaml.safe_load(fresh.config_path.read_text(encoding="utf-8"))
+    assert cfg["retrieval"]["prompt_gate"]["enabled"] is True
+    assert hooks.prompt_gate_cfg(cfg) is True
+
+
+def test_prompt_gate_cfg_is_defensive() -> None:
+    assert hooks.prompt_gate_cfg({}) is False
+    assert hooks.prompt_gate_cfg({"retrieval": "nonsense"}) is False
+    assert hooks.prompt_gate_cfg({"retrieval": {"prompt_gate": []}}) is False
+    assert hooks.prompt_gate_cfg({"retrieval": {"prompt_gate": {}}}) is False

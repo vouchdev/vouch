@@ -6,7 +6,25 @@ All notable changes to vouch are documented here. Format follows
 
 ## [Unreleased]
 
-### Added
+### Changed
+- **the per-prompt hook now decides how much of a turn it is entitled
+  to** (`retrieval.prompt_gate`). recall used to inject a block on every
+  prompt, so "fix the failing test" spent its opener announcing a memory
+  search nobody asked for. three cases now:
+  *chatter* with no informative tokens ("ok thanks", "which one is
+  better?") injects nothing — retrieval ORs every query token, so those
+  used to match on `one` and pull noise into turns that wanted none;
+  *"do work" imperatives* ("fix …", "refactor …", "run the tests",
+  "continue") get a smaller background pack (3 items / 700 chars) with
+  **no reply contract** — no "From vouch memory:" opener, no blockquote
+  ritual, cite an id inline only where it was actually used — and inject
+  nothing at all when the KB has no match; *lookups* — questions,
+  "what/why/how", anything not imperative — keep the full visible-recall
+  behaviour, including the honest "Nothing in vouch on this." on a miss.
+  the classifier is deterministic and llm-free (an imperative-verb test
+  that reads past politeness lead-ins like "please" / "ok now" / "can
+  you"), so it adds no latency to a turn. new KBs get it on; existing KBs
+  behave exactly as before until they add the key.
 - **personal catch-all KB + `vouch adopt`** (global vouch, phase 3):
   `vouch hub init-personal` creates and registers a personal KB at
   `~/.local/share/vouch/personal` (`XDG_DATA_HOME` honoured;
