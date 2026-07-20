@@ -53,8 +53,11 @@ class HealthReport:
 
 def status(store: KBStore) -> dict[str, Any]:
     """Quick, machine-readable summary. No deep checks."""
+    identity = store.identity()
     return {
         "kb_dir": str(store.kb_dir),
+        "kb_id": identity[0] if identity else None,
+        "kb_name": identity[1] if identity else None,
         "claims": len(store.list_claims()),
         "pages": len(store.list_pages()),
         "sources": len(store.list_sources()),

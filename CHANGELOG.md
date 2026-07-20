@@ -6,7 +6,95 @@ All notable changes to vouch are documented here. Format follows
 
 ## [Unreleased]
 
+## [1.5.0] — 2026-07-20
+
 ### Added
+- **`vouch install-mcp claude-code --global`** — install once for the
+  whole machine. writes user-level hooks, `/vouch-*` commands, and a
+  fenced CLAUDE.md snippet under `~/.claude/`, and registers vouch as a
+  *user-scope* MCP server (top-level `mcpServers` in `~/.claude.json`),
+  so every claude session in every folder gets capture + per-prompt
+  recall into that folder's **own** project `.vouch/` — the data stays
+  per project; run `vouch init` once per project. a folder without a KB
+  never captures anywhere: its session opens with a one-line "run
+  `vouch init`" note (the session-start banner), and `vouch serve` now
+  starts without a KB for the stdio transport (per-tool-call errors
+  instead of a machine-wide failed server in every non-vouch folder).
+  declared by a manifest `global:` block, so other hosts opt in as pure
+  manifest work; the user-level CLAUDE.md snippet is machine-wide-worded.
+  safe next to existing per-project installs, guarded three ways: the
+  global settings template is byte-for-byte the project one (claude code
+  collapses duplicate hook commands; a sync test freezes them), capture
+  dedups on the event's `tool_use_id` (exact, window-free — catches
+  drifted wiring too), and the hook commands (capture
+  observe/answer/finalize/finalize-all/banner, context-hook, recall,
+  ingest-codex) resolve the KB from the hook payload's `cwd` — with
+  `VOUCH_PROJECT_DIR` keeping precedence, and a payload naming a
+  nonexistent cwd refusing capture rather than falling back to the
+  process cwd. a malformed existing settings.json now reports as
+  *failed* (vouch is not wired) instead of "already present".
+- **KB instance identity**: `vouch init` mints a durable id (uuid, stored
+  in `config.yaml` under `kb:` next to a display name) and stamps it onto
+  every new audit event and bundle manifest, so history and exported
+  artifacts stay attributable to the KB that produced them once knowledge
+  starts moving between KBs. existing KBs are backfilled on re-init or
+  `vouch hub register` (an additive `kb.identity` audit event — never a
+  history rewrite); pre-identity audit chains still verify. bundle
+  imports move settings, never identity: the destination's `kb:` block
+  survives even an overwrite-import, and same-settings configs no longer
+  read as conflicts just because ids differ (config.yaml is compared
+  structurally, modulo `kb:`, on both sides). compat note: a *pre-identity*
+  vouch importing a new bundle uses the old byte-compare and may report
+  config.yaml as a conflict — its default skip mode leaves the file
+  untouched, so nothing breaks; upgrade the importer to converge.
+- **machine registry** (`vouch hub register / list / unregister`): a
+  machine-local list of known KBs at `~/.config/vouch/registry.yaml`
+  (honours `XDG_CONFIG_HOME`; override with `VOUCH_REGISTRY_PATH`) with a
+  role per KB — `project`, `personal`, or `team`. advisory routing state
+  only: authority stays in each KB's own `.vouch/`, and a missing or
+  corrupt registry degrades to per-project behaviour. this is the
+  substrate for global (install-once) vouch and the local seed of the
+  vouchhub registry of connected KBs.
+- **scope stamped at write time**: every new claim and page proposal — and
+  every captured session-answer source — records the KB's own project scope
+  at the propose gate, so knowledge knows which project it belongs to
+  before KBs ever start sharing artifacts (scope cannot be retrofitted
+  later). the stamp and the read-side viewer resolve through ONE chain
+  (`VOUCH_PROJECT` > `retrieval.scope` > the durable `kb.id`), so what a KB
+  writes it can always read back — the mutable `kb.name` is never
+  load-bearing for visibility, and a rename cannot orphan stamped
+  knowledge. pages join claims and sources as scoped kinds, closing a
+  cross-KB leak channel (vault edits carry the durable page's scope
+  through, never a restamp; hand-edited legacy `scope:` frontmatter
+  degrades to unscoped instead of breaking the page). malformed explicit
+  scopes are refused at the gate, and a malformed scope already on disk
+  degrades to unscoped instead of crashing the audit read path. the
+  SessionStart digest (`vouch recall`) is viewer-filtered like every other
+  retrieval surface — it used to inject every live claim regardless of
+  scope — and reports on stderr how many artifacts scope filtering hid,
+  never filtering silently; the salience sidebar honours the same filter.
+  existing unscoped artifacts behave exactly as before. explicit `scope=`
+  overrides are accepted by `propose_claim` / `propose_quoted_claim` /
+  `propose_page`.
+- **hijack-proof KB resolution**: the upward `.vouch` walk never ascends
+  past `$HOME` any more, so a stray home-directory KB can no longer
+  silently capture every project below it (a recorded incident class).
+  starting *in* `$HOME` still resolves its KB; `VOUCH_KB_PATH` and a
+  `global: {allow_home_kb: true}` opt-in in the home KB's config remain
+  deliberate escape hatches. a registry entry with role `personal` adds a
+  second belt: ambient capture into it from another directory is refused
+  (reads warn). host adapters can now pin the walk's start with
+  `VOUCH_PROJECT_DIR`; `vouch discover` and `vouch status` report the
+  resolution chain (`why`) and the KB's id/name.
+- the per-prompt recall hook (`vouch context-hook`) is now instructional
+  and always visible: with relevant approved items it tells the model to
+  open its reply with **"From vouch memory:"** and ground in the cited
+  items; with no relevant items it says so explicitly ("Nothing in vouch
+  on this.") instead of injecting nothing — so recall can never be
+  silently mistaken for "vouch did nothing". an opt-in confidence
+  short-circuit (`retrieval.short_circuit.{enabled,min_confidence}`)
+  lets a high-confidence non-action lookup collapse to a verbatim
+  vouched answer; "do work" prompts never short-circuit.
 - `vouch install-mcp claude-code` now registers vouch as a **local-scope**
   MCP server in `~/.claude.json` (`projects[<abs project>].mcpServers`),
   the same thing `claude mcp add` does. a committed `.mcp.json` is a

@@ -110,6 +110,7 @@ def observe(
     cmd: str | None = None,
     now: float | None = None,
     config: CaptureConfig | None = None,
+    tool_use_id: str | None = None,
 ) -> bool:
     """Append one observation to the session buffer. Returns True if written."""
     cfg = config or load_config(store)
@@ -123,13 +124,25 @@ def observe(
         cmd = mask_secrets(cmd)
     ts = time.time() if now is None else now
     path = buffer_path(store, session_id)
+    observations = _read_observations(path)
+    # Event-identity dedup: exact and window-free. With user-level AND
+    # legacy project-level hooks both wired (global install coexisting
+    # with a per-project one), the same PostToolUse event can reach us
+    # twice; the (session, tool_use_id) pair identifies it regardless of
+    # which wiring delivered it or how the command strings drifted.
+    if tool_use_id and any(
+        obs.get("tool_use_id") == tool_use_id for obs in observations
+    ):
+        return False
     key = _dedup_key(tool, summary)
-    for obs in reversed(_read_observations(path)):
+    for obs in reversed(observations):
         if ts - float(obs.get("ts", 0.0)) > cfg.dedup_window_seconds:
             break
         if _dedup_key(str(obs.get("tool", "")), str(obs.get("summary", ""))) == key:
             return False
     record: dict[str, Any] = {"ts": ts, "tool": tool, "summary": summary}
+    if tool_use_id:
+        record["tool_use_id"] = tool_use_id
     if files:
         record["files"] = files
     if cmd:
@@ -525,6 +538,9 @@ def capture_answer(
         source_type="message",
         tags=["session-answer"],
         metadata={"session_id": session_id, "question": question},
+        # same stamp the extracted claims get at the propose gate: captured
+        # knowledge records its project at write time (unretrofittable later)
+        scope=proposals_mod.default_scope(store),
     )
     filed = extract_mod.extract_receipt_claims(
         store, source.id, proposed_by=ANSWER_ACTOR, limit=max_claims,

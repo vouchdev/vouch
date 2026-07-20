@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import yaml
+
 from .models import AuditEvent
 
 if TYPE_CHECKING:
@@ -73,6 +75,27 @@ def _audit_lock(kb_dir: Path) -> Iterator[None]:
 
 def new_event_id() -> str:
     return uuid.uuid4().hex
+
+
+def _kb_id(kb_dir: Path) -> str | None:
+    """Best-effort `kb.id` from the KB's config.yaml (None on any problem).
+
+    Stamped onto every new event so history stays attributable to its KB of
+    origin once bundles move artifacts between KBs. A config read failure
+    must never block an audit append — events fall back to kb_id=None,
+    exactly like pre-identity history.
+    """
+    try:
+        loaded = yaml.safe_load((kb_dir / "config.yaml").read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        return None
+    if not isinstance(loaded, dict):
+        return None
+    kb = loaded.get("kb")
+    if not isinstance(kb, dict):
+        return None
+    raw = kb.get("id")
+    return str(raw) if raw else None
 
 
 def _canonical_json(payload: dict[str, Any]) -> str:
@@ -135,6 +158,7 @@ def log_event(
             dry_run=dry_run,
             reversible=reversible,
             data=data or {},
+            kb_id=_kb_id(kb_dir),
             prev_hash=prev_hash,
         )
         ev.hash = _compute_hash(prev_hash, _event_payload_for_hash(ev))
