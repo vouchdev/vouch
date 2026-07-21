@@ -7,7 +7,15 @@ from pathlib import Path
 import pytest
 
 from vouch import health, index_db
-from vouch.models import Claim, ClaimStatus, Proposal, ProposalKind, ProposalStatus
+from vouch.models import (
+    Claim,
+    ClaimStatus,
+    Entity,
+    EntityType,
+    Proposal,
+    ProposalKind,
+    ProposalStatus,
+)
 from vouch.storage import KBStore, _yaml_dump
 
 
@@ -294,6 +302,54 @@ def test_fsck_decided_missing_artifact(store: KBStore) -> None:
     report = health.fsck(store)
     codes = {f.code for f in report.findings}
     assert "decided_missing_artifact" in codes
+
+
+def _decide_proposal(store: KBStore, proposal: Proposal) -> None:
+    """Land an APPROVED proposal in decided/ so list_proposals finds it."""
+    store.put_proposal(proposal)
+    src_path = store.kb_dir / "proposed" / f"{proposal.id}.yaml"
+    dst_path = store.kb_dir / "decided" / f"{proposal.id}.yaml"
+    dst_path.write_text(src_path.read_text())
+    src_path.unlink()
+
+
+def test_fsck_approved_delete_with_artifact_gone_is_clean(store: KBStore) -> None:
+    """An approved delete whose target is gone is the healthy case.
+
+    Regression: the presence map only covered create kinds, so any KB with
+    an approved delete proposal crashed fsck with a KeyError.
+    """
+    _decide_proposal(store, Proposal(
+        id="prop-del-1",
+        kind=ProposalKind.DELETE,
+        proposed_by="agent",
+        payload={"target_kind": "entity", "id": "gone-entity", "snapshot": {}},
+        status=ProposalStatus.APPROVED,
+    ))
+
+    report = health.fsck(store)
+    codes = {f.code for f in report.findings}
+    assert "decided_missing_artifact" not in codes
+    assert "decided_delete_artifact_present" not in codes
+
+
+def test_fsck_flags_approved_delete_artifact_still_present(store: KBStore) -> None:
+    """An approved delete whose target survived on disk is the drift case."""
+    store.put_entity(
+        Entity(id="acme-example", name="acme example", type=EntityType.COMPANY)
+    )
+    _decide_proposal(store, Proposal(
+        id="prop-del-2",
+        kind=ProposalKind.DELETE,
+        proposed_by="agent",
+        payload={"target_kind": "entity", "id": "acme-example", "snapshot": {}},
+        status=ProposalStatus.APPROVED,
+    ))
+
+    report = health.fsck(store)
+    codes = {f.code for f in report.findings}
+    assert "decided_delete_artifact_present" in codes
+    assert report.ok is False
 
 
 def test_fsck_index_orphan_row(store: KBStore) -> None:

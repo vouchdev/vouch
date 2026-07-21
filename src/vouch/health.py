@@ -436,6 +436,8 @@ def _check_decided_proposals(
     A crash between `put_<kind>()` and `move_proposal_to_decided()` would
     leave a `decided/` entry without a matching artifact (or vice versa);
     surface the artifact-missing case so an operator can investigate.
+    Approved delete proposals promise the inverse — the target artifact is
+    gone — so for those the still-present case is surfaced instead.
     """
     relations = {r.id for r in store.list_relations()}
     presence: dict[ProposalKind, set[str]] = {
@@ -444,6 +446,7 @@ def _check_decided_proposals(
         ProposalKind.ENTITY: set(entities),
         ProposalKind.RELATION: relations,
     }
+    presence_by_target_kind = {kind.value: ids for kind, ids in presence.items()}
     for pr in store.list_proposals(ProposalStatus.APPROVED):
         artifact_id = pr.payload.get("id") if isinstance(pr.payload, dict) else None
         if not artifact_id:
@@ -455,6 +458,20 @@ def _check_decided_proposals(
                     [pr.id],
                 )
             )
+            continue
+        if pr.kind is ProposalKind.DELETE:
+            target_kind = pr.payload.get("target_kind", "")
+            if artifact_id in presence_by_target_kind.get(target_kind, set()):
+                findings.append(
+                    Finding(
+                        "error",
+                        "decided_delete_artifact_present",
+                        f"approved delete proposal {pr.id} promised "
+                        f"{target_kind} {artifact_id} removed but the "
+                        f"artifact is still on disk",
+                        [pr.id, artifact_id],
+                    )
+                )
             continue
         if artifact_id not in presence[pr.kind]:
             findings.append(

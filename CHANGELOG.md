@@ -64,6 +64,13 @@ All notable changes to vouch are documented here. Format follows
   per-prompt block, the session banner, `vouch status` and the opt-in
   question all say so rather than calling it "this repo's" knowledge.
 
+### Fixed
+- `vouch fsck` no longer crashes with a `KeyError` on a KB that has an
+  approved delete proposal. the decided-proposals check only knew the
+  create kinds, so the first approved delete broke fsck permanently.
+  approved deletes are now checked for the inverse drift — a target
+  artifact still on disk is reported as `decided_delete_artifact_present`.
+
 ## [1.5.0] — 2026-07-20
 
 ### Added
