@@ -170,6 +170,30 @@ def test_build_context_pack_exception_is_swallowed(
     assert hooks.build_claude_prompt_hook(store, json.dumps({"prompt": "x"})) == ""
 
 
+def test_retrieval_error_is_not_reported_as_an_empty_kb(
+    store: KBStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A retrieval FAILURE must inject nothing — never a false "Nothing in
+    vouch" claim, which is what a broken index would otherwise assert. Covers
+    both the gated and the legacy path."""
+    def _boom(*a: object, **k: object) -> object:
+        raise RuntimeError("index is corrupt")
+
+    monkeypatch.setattr(hooks, "build_context_pack", _boom)
+    _enable_gate(store)
+    assert _hook(store, "what is our deploy cadence?") == ""
+    _disable_gate(store)
+    assert _hook(store, "what is our deploy cadence?") == ""
+
+
+def test_informative_tokens_keep_multidigit_numbers() -> None:
+    """Issue ids, error codes, and ports are load-bearing search terms."""
+    toks = hooks._informative_tokens("why does endpoint 8080 return 500 on issue 12345")
+    assert "8080" in toks and "500" in toks and "12345" in toks
+    # single-digit noise is still dropped
+    assert "5" not in hooks._informative_tokens("retry 5 times")
+
+
 def test_context_hook_cli_always_exits_zero_without_kb(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

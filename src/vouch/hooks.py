@@ -81,7 +81,10 @@ def _informative_tokens(prompt: str) -> list[str]:
     seen: set[str] = set()
     out: list[str] = []
     for tok in _TOKEN_RE.findall(prompt.lower()):
-        if len(tok) < 2 or tok.isdigit() or tok in _STOPWORDS or tok in seen:
+        # keep multi-digit tokens — issue ids (#12345), error codes (404/500),
+        # and ports (8080) are exactly the terms a technical query needs;
+        # len < 2 already drops single-digit noise.
+        if len(tok) < 2 or tok in _STOPWORDS or tok in seen:
             continue
         seen.add(tok)
         out.append(tok)
@@ -292,20 +295,29 @@ def build_claude_prompt_hook(
     # already reads. Measured compliance (real claude -p, 3 tiers): tasks are
     # never wrongly announced; questions are announced by haiku/opus, and by
     # sonnet once the block is KB-backed (not a hand-crafted test string).
-    if not prompt_gate_cfg(cfg):
-        return _legacy_injection(store, prompt, cfg, personal)
-    return _gated_injection(store, prompt, cfg, personal)
+    try:
+        if not prompt_gate_cfg(cfg):
+            return _legacy_injection(store, prompt, cfg, personal)
+        return _gated_injection(store, prompt, cfg, personal)
+    except Exception:
+        # Fail-safe: any retrieval/render error injects NOTHING, never a false
+        # "nothing in vouch" claim on a path where the search did not complete.
+        _log.warning("context-hook: injection failed", exc_info=True)
+        return ""
 
 
 def _retrieve_body(store: KBStore, query: str) -> tuple[Any, str]:
-    """Run the context-pack retrieval; (pack, rendered_body). ("", "") on error."""
-    try:
-        pack = build_context_pack(
-            store, query=query, limit=_MAX_ITEMS, max_chars=_MAX_CHARS,
-        )
-    except Exception:
-        _log.warning("context-hook: build_context_pack failed", exc_info=True)
-        return None, ""
+    """Run the context-pack retrieval; returns (pack, rendered_body).
+
+    Raises on retrieval failure — the caller must NOT treat a broken index or
+    bad config as an empty result. A genuine empty search asserts "nothing in
+    vouch" to the model; a retrieval error must stay silent (inject nothing),
+    exactly as the pre-gate hook did, so vouch never makes a false claim about
+    KB contents on a fail-safe path.
+    """
+    pack = build_context_pack(
+        store, query=query, limit=_MAX_ITEMS, max_chars=_MAX_CHARS,
+    )
     return pack, (_render(pack) if isinstance(pack, dict) else "")
 
 
