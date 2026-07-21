@@ -18,6 +18,7 @@ from pydantic import ValidationError
 
 from . import audit, index_db
 from .models import (
+    ArtifactScope,
     Claim,
     Entity,
     Page,
@@ -25,8 +26,10 @@ from .models import (
     ProposalKind,
     ProposalStatus,
     Relation,
+    _coerce_artifact_scope,
 )
 from .page_kinds import PageKindError, load_page_kind_registry, validate_page
+from .scoping import viewer_from
 from .storage import ArtifactNotFoundError, KBStore
 
 
@@ -66,6 +69,48 @@ def new_proposal_id() -> str:
     # naturally show oldest pending first, which matches review intuition.
     ts = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
     return f"{ts}-{uuid.uuid4().hex[:8]}"
+
+
+def default_scope(store: KBStore) -> dict[str, str] | None:
+    """The stamp every new claim/page proposal carries: this KB's own project.
+
+    Scope cannot be retrofitted once KBs start sharing artifacts, so it is
+    recorded at write time. The stamp resolves through the SAME chain the
+    read-side viewer uses (``scoping.viewer_from``: VOUCH_PROJECT >
+    retrieval.scope > the durable ``kb.id``) so what a KB writes it can
+    always read back — including across a ``kb.name`` rename, which is why
+    the terminal fallback is the id, never the display name. None (no
+    stamp, today's behaviour) for KBs with no identity and no configured
+    scope.
+    """
+    project = viewer_from(config_path=store.config_path).project
+    if project is None:
+        return None
+    return {"visibility": "project", "project": project}
+
+
+def _stamp_scope(
+    store: KBStore, payload: dict[str, Any], scope: dict[str, Any] | str | None
+) -> None:
+    """Attach an explicit scope, or the KB's own default, to a payload.
+
+    An explicit scope is validated here, at the gate: a malformed one filed
+    into a payload would otherwise crash every audit read surface (which
+    resolves payload scopes for visibility) and escape ``approve()`` as a
+    raw pydantic error.
+    """
+    if scope is None:
+        stamp = default_scope(store)
+        if stamp is not None:
+            payload["scope"] = stamp
+        return
+    try:
+        coerced = _coerce_artifact_scope(scope)
+        validated = coerced if isinstance(coerced, ArtifactScope) \
+            else ArtifactScope.model_validate(coerced)
+    except (ValidationError, ValueError) as e:
+        raise ProposalError(f"invalid scope: {e}") from e
+    payload["scope"] = validated.model_dump(mode="json")
 
 
 def _file_proposal(
@@ -116,6 +161,7 @@ def propose_claim(
     slug_hint: str | None = None,
     session_id: str | None = None,
     dry_run: bool = False,
+    scope: dict[str, Any] | str | None = None,
 ) -> ProposeClaimResult:
     if not text.strip():
         raise ProposalError("claim text is empty")
@@ -140,6 +186,7 @@ def propose_claim(
         "entities": entities or [],
         "tags": tags or [],
     }
+    _stamp_scope(store, payload, scope)
     exclude_claim: str | None = None
     if (store.kb_dir / "claims" / f"{claim_id}.yaml").exists():
         exclude_claim = claim_id
@@ -177,6 +224,7 @@ def propose_quoted_claim(
     rationale: str | None = None,
     slug_hint: str | None = None,
     session_id: str | None = None,
+    scope: dict[str, Any] | str | None = None,
 ) -> ProposeClaimResult | None:
     """File a claim backed by a byte-offset receipt into ``source_id``, or drop.
 
@@ -203,7 +251,7 @@ def propose_quoted_claim(
         store, text=text, evidence=[evidence.id], proposed_by=proposed_by,
         claim_type=claim_type, confidence=confidence, entities=entities,
         tags=tags, rationale=rationale, slug_hint=slug_hint,
-        session_id=session_id,
+        session_id=session_id, scope=scope,
     )
 
 
@@ -223,6 +271,7 @@ def propose_page(
     slug_hint: str | None = None,
     session_id: str | None = None,
     dry_run: bool = False,
+    scope: dict[str, Any] | str | None = None,
 ) -> Proposal:
     if not title.strip():
         raise ProposalError("page title is empty")
@@ -269,6 +318,7 @@ def propose_page(
         "tags": tags or [],
         "metadata": meta,
     }
+    _stamp_scope(store, payload, scope)
     return _file_proposal(
         store, kind=ProposalKind.PAGE, payload=payload,
         proposed_by=proposed_by, session_id=session_id,
@@ -478,33 +528,74 @@ def _approval_block_reason(
     return None
 
 
+def resolve_pending_receipt_claim(
+    store: KBStore, proposal: Proposal, *, actor: str, reason: str
+) -> Claim | None:
+    """Mechanically decide one pending CLAIM proposal, honouring the gate.
+
+    Returns the durable Claim when self-approval clears — under
+    ``review.approver_role: trusted-agent``, or when the claim's byte-offset
+    receipts all verify under ``review.auto_approve_on_receipt``. Returns None
+    when the proposal stays pending (gate closed, receipts unverifiable, or
+    its id is held by a claim with *different* text — a real conflict, a human
+    call) or when it was rejected as a duplicate: re-deriving a claim whose
+    identical text is already durable adds nothing, so the proposal is closed
+    with a duplicate reason instead of piling up in the review queue.
+    """
+    if proposal.kind != ProposalKind.CLAIM:
+        return None
+    review_cfg = _review_config(store)
+    trusted = review_cfg.get("approver_role") == "trusted-agent"
+    receipted = bool(
+        review_cfg.get("auto_approve_on_receipt")
+    ) and _claim_receipts_verify(store, proposal)
+    if not (trusted or receipted):
+        return None
+    claim_id = str(proposal.payload.get("id", ""))
+    existing: Claim | None = None
+    if claim_id:
+        try:
+            existing = store.get_claim(claim_id)
+        except ArtifactNotFoundError:
+            existing = None
+    if existing is not None:
+        if existing.text == proposal.payload.get("text"):
+            reject(
+                store, proposal.id, rejected_by=actor,
+                reason="duplicate: identical claim already durable",
+            )
+        return None
+    result = approve(store, proposal.id, approved_by=actor, reason=reason)
+    assert isinstance(result, Claim)  # kind == CLAIM guaranteed above
+    return result
+
+
 def auto_approve_receipts(
     store: KBStore, *, actor: str | None = None
 ) -> list[Claim]:
     """Approve every pending receipt-verified claim, no human in the loop.
 
     The mechanical gate is the reviewer: a pending CLAIM whose citations all
-    carry receipts that verify by string comparison is approved; anything else
-    — a bare source id, a forged or missing receipt, a non-claim proposal — is
-    left pending for a human. This is the drain that makes "run vouch and it
-    just captures knowledge" real. No-op unless ``review.auto_approve_on_receipt``
-    is set, so the human-review gate is never silently bypassed.
+    carry receipts that verify by string comparison is approved; a duplicate
+    of an already-durable identical claim is rejected (see
+    ``resolve_pending_receipt_claim``); anything else — a bare source id, a
+    forged or missing receipt, a non-claim proposal, an id held by different
+    text — is left pending for a human. This is the drain that makes "run
+    vouch and it just captures knowledge" real. No-op unless
+    ``review.auto_approve_on_receipt`` is set, so the human-review gate is
+    never silently bypassed.
     """
     if not _review_config(store).get("auto_approve_on_receipt"):
         return []
     approved: list[Claim] = []
     for proposal in store.list_proposals(ProposalStatus.PENDING):
-        if proposal.kind != ProposalKind.CLAIM or not _claim_receipts_verify(
-            store, proposal
-        ):
-            continue
-        result = approve(
-            store, proposal.id,
-            approved_by=actor or proposal.proposed_by,
+        claim = resolve_pending_receipt_claim(
+            store, proposal,
+            actor=actor or proposal.proposed_by,
             reason="receipt verified — auto-approved",
         )
-        assert isinstance(result, Claim)  # kind == CLAIM guaranteed above
-        approved.append(result)
+        if claim is not None:
+            approved.append(claim)
     return approved
 
 

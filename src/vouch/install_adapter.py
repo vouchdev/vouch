@@ -78,6 +78,26 @@ class InstallResult:
     # from ``skipped`` so "already installed" and "install failed" never look
     # the same to the caller / CLI.
     failed: list[str] = field(default_factory=list)
+    # user-scope MCP servers registered outside the target tree (in the host's
+    # user config, e.g. ~/.claude.json). Reported separately because the write
+    # lands outside `target` and, unlike the tier files, is a config the host
+    # engine reads on launch rather than a file the user edits.
+    registered: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class _UserMcp:
+    """A local-scope MCP registration declared by an adapter's manifest.
+
+    Written to ``<home>/<config>`` (e.g. ``~/.claude.json``). ``scope: project``
+    keys the server under ``projects[<abs target>].mcpServers``; ``scope: user``
+    puts it in the top-level ``mcpServers``. Idempotent: an existing server of
+    the same ``name`` is never overwritten.
+    """
+    config: str            # path relative to the user's home dir
+    scope: str             # "project" | "user"
+    name: str              # server key
+    spec: dict[str, Any]   # the server definition (command/args/env/…)
 
 
 @dataclass(frozen=True)
@@ -90,12 +110,34 @@ class _FileEntry:
 
 
 @dataclass(frozen=True)
+class _GlobalSpec:
+    """A host's user-level (install-once) wiring, declared under ``global:``.
+
+    ``target`` is the host's user config directory relative to the user's
+    home (e.g. ``.claude``); ``tiers`` mirror the project tiers but with
+    dsts relative to that directory. The settings template MUST be the same
+    ``src`` file the project tier uses — byte-identical hook command strings
+    are what lets the host collapse user-level and legacy project-level
+    hooks into one execution instead of double-firing (enforced by
+    ``tests/test_install_adapter.py``).
+    """
+    target: str
+    tiers: dict[str, list[_FileEntry]]
+
+
+@dataclass(frozen=True)
 class _Manifest:
     host: str
     pretty: str
     tiers: dict[str, list[_FileEntry]]
     fence_begin: str = _DEFAULT_FENCE_BEGIN
     fence_end: str = _DEFAULT_FENCE_END
+    user_mcp: _UserMcp | None = None
+    # false for hosts whose install target is a staging dir for user-global
+    # config (claude-desktop) rather than project wiring — a KB bootstrapped
+    # at the target would land wherever the user happened to be standing.
+    kb_bootstrap: bool = True
+    global_spec: _GlobalSpec | None = None
 
 
 def _load_manifest(host: str) -> _Manifest:
@@ -116,67 +158,7 @@ def _load_manifest(host: str) -> _Manifest:
             f"expected {host!r} (must match directory name)"
         )
     raw_tiers = data.get("tiers") or {}
-    if not isinstance(raw_tiers, dict):
-        raise AdapterError(f"{host}: install.yaml `tiers:` must be a mapping")
-
-    parsed: dict[str, list[_FileEntry]] = {}
-    for tier_name, entries in raw_tiers.items():
-        if tier_name not in _TIER_ORDER:
-            raise AdapterError(
-                f"{host}: install.yaml declares unknown tier {tier_name!r} "
-                f"(valid: {', '.join(_TIER_ORDER)})"
-            )
-        if not isinstance(entries, list):
-            raise AdapterError(
-                f"{host}: install.yaml tier {tier_name} must be a list of file entries"
-            )
-        parsed_entries: list[_FileEntry] = []
-        for raw in entries:
-            if not isinstance(raw, dict):
-                raise AdapterError(
-                    f"{host}: install.yaml tier {tier_name} entry must be a mapping, "
-                    f"got {type(raw).__name__}"
-                )
-            src = raw.get("src")
-            dst = raw.get("dst")
-            if not isinstance(src, str) or not src.strip():
-                raise AdapterError(
-                    f"{host}: install.yaml tier {tier_name}: every entry needs a non-empty `src`"
-                )
-            if not isinstance(dst, str) or not dst.strip():
-                raise AdapterError(
-                    f"{host}: install.yaml tier {tier_name}: every entry needs a non-empty `dst`"
-                )
-            def _flag(name: str, raw: Any = raw, tier_name: str = tier_name) -> bool:
-                # Require an actual YAML boolean. `bool(raw.get(...))` would
-                # coerce a mistakenly-quoted `toml_merge: "false"` (a
-                # non-empty string) to True and silently enable a merge
-                # strategy, so reject anything that isn't a real bool.
-                val = raw.get(name, False)
-                if not isinstance(val, bool):
-                    raise AdapterError(
-                        f"{host}: install.yaml tier {tier_name}: `{name}` must be "
-                        f"a boolean, got {type(val).__name__} ({val!r})"
-                    )
-                return val
-
-            fenced = _flag("fenced_append")
-            json_merge = _flag("json_merge")
-            toml_merge = _flag("toml_merge")
-            if fenced + json_merge + toml_merge > 1:
-                raise AdapterError(
-                    f"{host}: install.yaml tier {tier_name}: entry sets more than "
-                    f"one of fenced_append/json_merge/toml_merge; pick one strategy"
-                )
-            parsed_entries.append(
-                _FileEntry(
-                    src=src, dst=dst, fenced_append=fenced,
-                    json_merge=json_merge, toml_merge=toml_merge,
-                )
-            )
-        if parsed_entries:
-            parsed[tier_name] = parsed_entries
-
+    parsed = _parse_tiers(host, raw_tiers, label="tiers")
     if not parsed:
         raise AdapterError(f"{host}: install.yaml declares zero usable tiers")
 
@@ -188,13 +170,160 @@ def _load_manifest(host: str) -> _Manifest:
         fence_begin = _DEFAULT_FENCE_BEGIN
         fence_end = _DEFAULT_FENCE_END
 
+    kb_bootstrap = data.get("kb_bootstrap", True)
+    if not isinstance(kb_bootstrap, bool):
+        raise AdapterError(
+            f"{host}: install.yaml `kb_bootstrap` must be a boolean, "
+            f"got {type(kb_bootstrap).__name__} ({kb_bootstrap!r})"
+        )
+
     return _Manifest(
         host=host,
         pretty=str(data.get("pretty") or host),
         tiers=parsed,
         fence_begin=fence_begin,
         fence_end=fence_end,
+        user_mcp=_parse_user_mcp(host, data.get("user_mcp")),
+        kb_bootstrap=kb_bootstrap,
+        global_spec=_parse_global(host, data.get("global")),
     )
+
+
+def _parse_tiers(
+    host: str, raw_tiers: Any, *, label: str, ctx: str = ""
+) -> dict[str, list[_FileEntry]]:
+    """Parse a ``tiers:``-shaped mapping (shared by project and global specs).
+
+    ``ctx`` prefixes per-tier error messages ("" for the project tiers so
+    long-standing error strings stay byte-identical; "global." for the
+    global spec).
+    """
+    if not isinstance(raw_tiers, dict):
+        raise AdapterError(f"{host}: install.yaml `{label}:` must be a mapping")
+    parsed: dict[str, list[_FileEntry]] = {}
+    for tier_name, entries in raw_tiers.items():
+        if tier_name not in _TIER_ORDER:
+            raise AdapterError(
+                f"{host}: install.yaml {ctx}declares unknown tier {tier_name!r} "
+                f"(valid: {', '.join(_TIER_ORDER)})"
+            )
+        if not isinstance(entries, list):
+            raise AdapterError(
+                f"{host}: install.yaml {ctx}tier {tier_name} must be a list of file entries"
+            )
+        parsed_entries: list[_FileEntry] = []
+        for raw in entries:
+            if not isinstance(raw, dict):
+                raise AdapterError(
+                    f"{host}: install.yaml {ctx}tier {tier_name} entry must be a mapping, "
+                    f"got {type(raw).__name__}"
+                )
+            src = raw.get("src")
+            dst = raw.get("dst")
+            if not isinstance(src, str) or not src.strip():
+                raise AdapterError(
+                    f"{host}: install.yaml {ctx}tier {tier_name}: "
+                    "every entry needs a non-empty `src`"
+                )
+            if not isinstance(dst, str) or not dst.strip():
+                raise AdapterError(
+                    f"{host}: install.yaml {ctx}tier {tier_name}: "
+                    "every entry needs a non-empty `dst`"
+                )
+
+            def _flag(name: str, raw: Any = raw, tier_name: str = tier_name) -> bool:
+                # Require an actual YAML boolean. `bool(raw.get(...))` would
+                # coerce a mistakenly-quoted `toml_merge: "false"` (a
+                # non-empty string) to True and silently enable a merge
+                # strategy, so reject anything that isn't a real bool.
+                val = raw.get(name, False)
+                if not isinstance(val, bool):
+                    raise AdapterError(
+                        f"{host}: install.yaml {ctx}tier {tier_name}: `{name}` must be "
+                        f"a boolean, got {type(val).__name__} ({val!r})"
+                    )
+                return val
+
+            fenced = _flag("fenced_append")
+            json_merge = _flag("json_merge")
+            toml_merge = _flag("toml_merge")
+            if fenced + json_merge + toml_merge > 1:
+                raise AdapterError(
+                    f"{host}: install.yaml {ctx}tier {tier_name}: entry sets more than "
+                    f"one of fenced_append/json_merge/toml_merge; pick one strategy"
+                )
+            parsed_entries.append(
+                _FileEntry(
+                    src=src, dst=dst, fenced_append=fenced,
+                    json_merge=json_merge, toml_merge=toml_merge,
+                )
+            )
+        if parsed_entries:
+            parsed[tier_name] = parsed_entries
+    return parsed
+
+
+def _parse_global(host: str, raw: Any) -> _GlobalSpec | None:
+    """Parse an optional ``global:`` manifest block, or return None."""
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise AdapterError(f"{host}: install.yaml `global:` must be a mapping")
+    target = raw.get("target")
+    if not isinstance(target, str) or not target.strip():
+        raise AdapterError(f"{host}: install.yaml global needs a non-empty `target`")
+    # `target` is a directory under the user's home; an absolute or
+    # `..`-carrying value would let a manifest write anywhere on disk, and
+    # '.' (empty parts) would spray tier files across $HOME itself.
+    p = Path(target)
+    if p.is_absolute() or ".." in p.parts or not p.parts or p.parts == (".",):
+        raise AdapterError(
+            f"{host}: install.yaml global `target` must be a relative "
+            f"subdirectory of the home directory, got {target!r}"
+        )
+    tiers = _parse_tiers(host, raw.get("tiers") or {}, label="global.tiers", ctx="global.")
+    if not tiers:
+        raise AdapterError(f"{host}: install.yaml global declares zero usable tiers")
+    return _GlobalSpec(target=target, tiers=tiers)
+
+
+def _parse_user_mcp(host: str, raw: Any) -> _UserMcp | None:
+    """Parse an optional ``user_mcp:`` manifest block, or return None."""
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise AdapterError(f"{host}: install.yaml `user_mcp:` must be a mapping")
+    config = raw.get("config")
+    if not isinstance(config, str) or not config.strip():
+        raise AdapterError(f"{host}: install.yaml user_mcp needs a non-empty `config`")
+    # `config` names a file in the user's home dir; a `..`/absolute value would
+    # let a manifest scribble anywhere on disk. Keep it a plain relative name.
+    if config != Path(config).name or config in {"", ".", ".."}:
+        raise AdapterError(
+            f"{host}: install.yaml user_mcp `config` must be a bare filename, got {config!r}"
+        )
+    scope = raw.get("scope", "project")
+    if scope not in {"project", "user"}:
+        raise AdapterError(
+            f"{host}: install.yaml user_mcp `scope` must be 'project' or 'user', got {scope!r}"
+        )
+    name = raw.get("name")
+    if not isinstance(name, str) or not name.strip():
+        raise AdapterError(f"{host}: install.yaml user_mcp needs a non-empty `name`")
+    spec = raw.get("spec")
+    if not isinstance(spec, dict):
+        raise AdapterError(f"{host}: install.yaml user_mcp `spec` must be a mapping")
+    return _UserMcp(config=config, scope=scope, name=name, spec=spec)
+
+
+def wants_kb_bootstrap(host: str) -> bool:
+    """Whether ``install-mcp`` may bootstrap a KB at this host's target.
+
+    Manifest-declared (`kb_bootstrap`, default true) so the knowledge lives
+    with the adapter: false for staging-dir hosts like claude-desktop whose
+    real config is user-global and whose target is not project wiring.
+    """
+    return _load_manifest(host).kb_bootstrap
 
 
 def available_adapters() -> list[str]:
@@ -210,12 +339,26 @@ def available_adapters() -> list[str]:
     return sorted(out)
 
 
-def install(adapter: str, *, target: Path, tier: str = "T4") -> InstallResult:
+def install(
+    adapter: str,
+    *,
+    target: Path,
+    tier: str = "T4",
+    approve: bool = True,
+    home: Path | None = None,
+) -> InstallResult:
     """Install ``adapter``'s templates under ``target`` up to ``tier``.
 
     The call is idempotent: rerunning against a previously-installed tree
     produces an :class:`InstallResult` with everything in ``skipped`` and
     nothing in ``written`` / ``appended``.
+
+    When the adapter manifest declares a ``user_mcp:`` block and ``approve`` is
+    true, a local-scope MCP server is registered in the host's user config
+    (``home``/``<config>``, default ``~/.claude.json``). That is what makes a
+    fresh install connect in the Claude Code *extension*, whose engine ignores
+    an unapproved project ``.mcp.json``. Pass ``approve=False`` to skip it.
+    ``home`` overrides the user-config directory (tests point it at a tmp dir).
     """
     if tier not in _TIER_ORDER:
         raise AdapterError(
@@ -233,23 +376,122 @@ def install(adapter: str, *, target: Path, tier: str = "T4") -> InstallResult:
     target.mkdir(parents=True, exist_ok=True)
 
     result = InstallResult()
-    selected_tiers = _TIER_ORDER[: _TIER_ORDER.index(tier) + 1]
+    _install_tier_files(
+        adapter, manifest, tiers=manifest.tiers, tier=tier,
+        src_root=src_root, target=target, result=result,
+    )
 
+    if approve and manifest.user_mcp is not None:
+        _register_user_mcp(manifest.user_mcp, target=target, home=home, result=result)
+
+    return result
+
+
+def install_global(
+    adapter: str,
+    *,
+    tier: str = "T4",
+    approve: bool = True,
+    home: Path | None = None,
+) -> tuple[InstallResult, Path]:
+    """Install ``adapter``'s user-level (machine-wide) wiring once.
+
+    Writes the manifest's ``global:`` tiers under ``<home>/<target>`` (for
+    claude-code: hooks + commands + a fenced CLAUDE.md snippet into
+    ``~/.claude/``) and registers the MCP server at **user scope** — the
+    top-level ``mcpServers`` in ``~/.claude.json`` — so every project's
+    session gets capture + recall without per-project wiring. Each session
+    still resolves its OWN project KB (nearest ``.vouch``); a folder without
+    one no-ops with a `vouch init` hint. Returns (result, target_dir).
+
+    Idempotent like :func:`install`; safe next to legacy per-project
+    installs — the settings template is byte-identical to the project one
+    (the host collapses duplicate hook commands) and capture dedups on
+    event identity besides.
+    """
+    if tier not in _TIER_ORDER:
+        raise AdapterError(
+            f"unknown tier {tier!r} (valid: {', '.join(_TIER_ORDER)})"
+        )
+    if adapter not in available_adapters():
+        raise AdapterError(
+            f"unknown adapter {adapter!r} "
+            f"(available: {', '.join(available_adapters()) or '(none)'})"
+        )
+    manifest = _load_manifest(adapter)
+    if manifest.global_spec is None:
+        raise AdapterError(
+            f"adapter {adapter!r} has no `global:` wiring — install it "
+            f"per-project instead (vouch install-mcp {adapter})"
+        )
+    src_root = ADAPTERS_DIR / adapter
+    home_dir = (home or Path.home()).resolve()
+    # Containment is guaranteed lexically by _parse_global (relative,
+    # `..`-free, non-empty). Deliberately NOT resolved: a symlinked
+    # ~/.claude (dotfiles managers) must be written *through*, not
+    # rejected for resolving outside home.
+    target = home_dir / manifest.global_spec.target
+    if target.exists() and not target.is_dir():
+        raise AdapterError(
+            f"{target} exists but is not a directory — remove or rename it "
+            "and re-run"
+        )
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+    except (FileExistsError, NotADirectoryError) as e:
+        raise AdapterError(
+            f"cannot create {target}: {e} — a file is in the way"
+        ) from e
+
+    result = InstallResult()
+    _install_tier_files(
+        adapter, manifest, tiers=manifest.global_spec.tiers, tier=tier,
+        src_root=src_root, target=target, result=result,
+    )
+
+    if approve and manifest.user_mcp is not None:
+        # User scope regardless of the manifest's project-install scope: one
+        # top-level entry serves every project (the server re-resolves the KB
+        # per call from its launch cwd).
+        user_scoped = _UserMcp(
+            config=manifest.user_mcp.config, scope="user",
+            name=manifest.user_mcp.name, spec=manifest.user_mcp.spec,
+        )
+        _register_user_mcp(user_scoped, target=target, home=home, result=result)
+
+    return result, target
+
+
+def _install_tier_files(
+    adapter: str,
+    manifest: _Manifest,
+    *,
+    tiers: dict[str, list[_FileEntry]],
+    tier: str,
+    src_root: Path,
+    target: Path,
+    result: InstallResult,
+) -> None:
+    """Write every entry of ``tiers`` up to ``tier`` under ``target``."""
+    selected_tiers = _TIER_ORDER[: _TIER_ORDER.index(tier) + 1]
     for tier_name in selected_tiers:
-        entries = manifest.tiers.get(tier_name, [])
+        entries = tiers.get(tier_name, [])
         for entry in entries:
             src = src_root / entry.src
-            dst = target / entry.dst
             # Defense in depth: `dst` comes from the manifest. Adapters ship
             # with vouch (trusted), but a `..`/absolute `dst` must never let a
-            # manifest write outside the target tree. `target` is already
-            # resolved above; resolve `dst` (normalizes `..`, even when the
-            # file doesn't exist yet) and require containment.
-            if not dst.resolve().is_relative_to(target):
+            # manifest write outside the target tree. The check is LEXICAL
+            # (path shape, no filesystem access): a resolve()-based check
+            # would follow the user's own symlinks — e.g. a dotfiles-managed
+            # ~/.claude/CLAUDE.md pointing outside home — and wrongly abort
+            # an install the user very much intends to write through.
+            rel = Path(entry.dst)
+            if rel.is_absolute() or ".." in rel.parts:
                 raise AdapterError(
                     f"{adapter}: install.yaml dst {entry.dst!r} escapes the "
                     f"target tree ({target})"
                 )
+            dst = target / entry.dst
             if not src.is_file():
                 # Manifest declares a template that doesn't exist in the
                 # adapter directory: a contributor-time bug, but surface it
@@ -280,7 +522,64 @@ def install(adapter: str, *, target: Path, tier: str = "T4") -> InstallResult:
             shutil.copy2(src, dst)
             result.written.append(entry.dst)
 
-    return result
+
+def _register_user_mcp(
+    reg: _UserMcp, *, target: Path, home: Path | None, result: InstallResult
+) -> None:
+    """Merge a local-scope MCP server into the host user config (idempotent).
+
+    Mirrors ``claude mcp add``: writes ``<home>/<reg.config>`` with the server
+    under ``projects[<abs target>].mcpServers`` (scope=project) or the top-level
+    ``mcpServers`` (scope=user). Every other key in the file is preserved and
+    the write is atomic. Failures are recorded (``result.failed``), never
+    raised — a config we can't safely rewrite must not abort a working install.
+    """
+    cfg_path = (home or Path.home()) / reg.config
+    label = f"{reg.config}:{reg.name} (mcp)"
+    try:
+        if cfg_path.exists():
+            raw = cfg_path.read_text(encoding="utf-8")
+            data = json.loads(raw) if raw.strip() else {}
+            if not isinstance(data, dict):
+                result.failed.append(label)
+                return
+        else:
+            data = {}
+
+        if reg.scope == "project":
+            projects = data.setdefault("projects", {})
+            if not isinstance(projects, dict):
+                result.failed.append(label)
+                return
+            container = projects.setdefault(str(target), {})
+        else:
+            container = data
+        if not isinstance(container, dict):
+            result.failed.append(label)
+            return
+        servers = container.setdefault("mcpServers", {})
+        if not isinstance(servers, dict):
+            result.failed.append(label)
+            return
+
+        if reg.name in servers:
+            # already registered — never clobber the user's own edits, and stay
+            # out of `result.skipped` (a file-path channel; this is a config
+            # entry, not a file). The CLI reminds the user to reload regardless.
+            return
+        servers[reg.name] = dict(reg.spec)
+
+        cfg_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = cfg_path.with_name(cfg_path.name + ".vouch-tmp")
+        tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+        if cfg_path.exists():
+            shutil.copymode(cfg_path, tmp)
+        tmp.replace(cfg_path)
+        result.registered.append(label)
+    except (OSError, ValueError):
+        # malformed json, unreadable/unwritable file — surface as failed, but
+        # the tier files are already installed, so don't unwind the whole run.
+        result.failed.append(label)
 
 
 def _install_fenced(
@@ -473,7 +772,10 @@ def _install_json_merge(
     * dst missing                 -> copy fresh (``written``)
     * dst exists, merge adds keys -> merge + rewrite (``merged``)
     * dst exists, nothing to add  -> skip (``skipped``); already installed
-    * dst exists, unparseable     -> skip (``skipped``); never clobber the user
+    * dst exists, unparseable     -> ``failed``; the user's file is left
+                                     untouched, but vouch is NOT wired —
+                                     reporting it as "already present" would
+                                     hide a silently dead install
     """
     if not dst.exists():
         dst.parent.mkdir(parents=True, exist_ok=True)
@@ -486,10 +788,10 @@ def _install_json_merge(
         src_data = json.loads(src.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         # Malformed or unreadable user file — leave it untouched.
-        result.skipped.append(rel_dst)
+        result.failed.append(rel_dst)
         return
     if not isinstance(dst_data, dict) or not isinstance(src_data, dict):
-        result.skipped.append(rel_dst)
+        result.failed.append(rel_dst)
         return
 
     if _merge_settings(src_data, dst_data):

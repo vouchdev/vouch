@@ -7,6 +7,184 @@ All notable changes to vouch are documented here. Format follows
 ## [Unreleased]
 
 ### Added
+- **personal catch-all KB + `vouch adopt`** (global vouch, phase 3):
+  `vouch hub init-personal` creates and registers a personal KB at
+  `~/.local/share/vouch/personal` (`XDG_DATA_HOME` honoured;
+  `VOUCH_PERSONAL_KB` overrides). with its opt-in flag on
+  (`personal.fallback_capture` in the KB's own config — one question at
+  `install-mcp --global`, or `--personal-fallback`, or `vouch hub
+  fallback on`), sessions in folders WITHOUT a project KB capture into
+  it instead of nowhere: every captured source records the folder it
+  came from (`metadata.origin_path`), the session-start banner announces
+  the routing, and per-prompt recall in those folders reads the same KB
+  back. strictly double-opt-in (registry role `personal` + the KB's own
+  config flag) and fail-closed: no personal KB, no flag, a corrupt
+  registry, or a guard refusal (discovery landing on a personal KB from
+  below — the hijack shape) all mean capture stays off exactly as
+  before. `vouch adopt`, run inside a project that now has its own KB,
+  drains those captures home THROUGH the project's review gate: sources
+  copy byte-identically (content-addressed ids are stable across KBs),
+  each live personal claim is re-proposed against the copied source, its
+  byte-offset receipt re-verifies mechanically, and the project's own
+  review config decides durability — auto-approve on receipt where
+  enabled, pending for a human otherwise; adoption never bypasses
+  review. idempotent in both directions (a claim already durable *or*
+  already queued in the project is skipped, so re-running never doubles
+  the review queue); `--dry-run` previews against the project's real
+  gate; `--from-path` adopts a moved project's captures; `--retire`
+  archives only the personal copies that actually landed durable —
+  retiring a merely-pending one would strand it if the proposal is
+  later rejected or expires; session rollups are reported, not moved
+  (an unreviewed summary is not knowledge yet, so it stays where it was
+  filed); both KBs log a `kb.adopt` audit event carrying the other
+  side's id. the personal KB is ONE store shared by every KB-less
+  folder — recall there reads all of it, and the digest header, the
+  per-prompt block, the session banner, `vouch status` and the opt-in
+  question all say so rather than calling it "this repo's" knowledge.
+
+## [1.5.0] — 2026-07-20
+
+### Added
+- **`vouch install-mcp claude-code --global`** — install once for the
+  whole machine. writes user-level hooks, `/vouch-*` commands, and a
+  fenced CLAUDE.md snippet under `~/.claude/`, and registers vouch as a
+  *user-scope* MCP server (top-level `mcpServers` in `~/.claude.json`),
+  so every claude session in every folder gets capture + per-prompt
+  recall into that folder's **own** project `.vouch/` — the data stays
+  per project; run `vouch init` once per project. a folder without a KB
+  never captures anywhere: its session opens with a one-line "run
+  `vouch init`" note (the session-start banner), and `vouch serve` now
+  starts without a KB for the stdio transport (per-tool-call errors
+  instead of a machine-wide failed server in every non-vouch folder).
+  declared by a manifest `global:` block, so other hosts opt in as pure
+  manifest work; the user-level CLAUDE.md snippet is machine-wide-worded.
+  safe next to existing per-project installs, guarded three ways: the
+  global settings template is byte-for-byte the project one (claude code
+  collapses duplicate hook commands; a sync test freezes them), capture
+  dedups on the event's `tool_use_id` (exact, window-free — catches
+  drifted wiring too), and the hook commands (capture
+  observe/answer/finalize/finalize-all/banner, context-hook, recall,
+  ingest-codex) resolve the KB from the hook payload's `cwd` — with
+  `VOUCH_PROJECT_DIR` keeping precedence, and a payload naming a
+  nonexistent cwd refusing capture rather than falling back to the
+  process cwd. a malformed existing settings.json now reports as
+  *failed* (vouch is not wired) instead of "already present".
+- **KB instance identity**: `vouch init` mints a durable id (uuid, stored
+  in `config.yaml` under `kb:` next to a display name) and stamps it onto
+  every new audit event and bundle manifest, so history and exported
+  artifacts stay attributable to the KB that produced them once knowledge
+  starts moving between KBs. existing KBs are backfilled on re-init or
+  `vouch hub register` (an additive `kb.identity` audit event — never a
+  history rewrite); pre-identity audit chains still verify. bundle
+  imports move settings, never identity: the destination's `kb:` block
+  survives even an overwrite-import, and same-settings configs no longer
+  read as conflicts just because ids differ (config.yaml is compared
+  structurally, modulo `kb:`, on both sides). compat note: a *pre-identity*
+  vouch importing a new bundle uses the old byte-compare and may report
+  config.yaml as a conflict — its default skip mode leaves the file
+  untouched, so nothing breaks; upgrade the importer to converge.
+- **machine registry** (`vouch hub register / list / unregister`): a
+  machine-local list of known KBs at `~/.config/vouch/registry.yaml`
+  (honours `XDG_CONFIG_HOME`; override with `VOUCH_REGISTRY_PATH`) with a
+  role per KB — `project`, `personal`, or `team`. advisory routing state
+  only: authority stays in each KB's own `.vouch/`, and a missing or
+  corrupt registry degrades to per-project behaviour. this is the
+  substrate for global (install-once) vouch and the local seed of the
+  vouchhub registry of connected KBs.
+- **scope stamped at write time**: every new claim and page proposal — and
+  every captured session-answer source — records the KB's own project scope
+  at the propose gate, so knowledge knows which project it belongs to
+  before KBs ever start sharing artifacts (scope cannot be retrofitted
+  later). the stamp and the read-side viewer resolve through ONE chain
+  (`VOUCH_PROJECT` > `retrieval.scope` > the durable `kb.id`), so what a KB
+  writes it can always read back — the mutable `kb.name` is never
+  load-bearing for visibility, and a rename cannot orphan stamped
+  knowledge. pages join claims and sources as scoped kinds, closing a
+  cross-KB leak channel (vault edits carry the durable page's scope
+  through, never a restamp; hand-edited legacy `scope:` frontmatter
+  degrades to unscoped instead of breaking the page). malformed explicit
+  scopes are refused at the gate, and a malformed scope already on disk
+  degrades to unscoped instead of crashing the audit read path. the
+  SessionStart digest (`vouch recall`) is viewer-filtered like every other
+  retrieval surface — it used to inject every live claim regardless of
+  scope — and reports on stderr how many artifacts scope filtering hid,
+  never filtering silently; the salience sidebar honours the same filter.
+  existing unscoped artifacts behave exactly as before. explicit `scope=`
+  overrides are accepted by `propose_claim` / `propose_quoted_claim` /
+  `propose_page`.
+- **hijack-proof KB resolution**: the upward `.vouch` walk never ascends
+  past `$HOME` any more, so a stray home-directory KB can no longer
+  silently capture every project below it (a recorded incident class).
+  starting *in* `$HOME` still resolves its KB; `VOUCH_KB_PATH` and a
+  `global: {allow_home_kb: true}` opt-in in the home KB's config remain
+  deliberate escape hatches. a registry entry with role `personal` adds a
+  second belt: ambient capture into it from another directory is refused
+  (reads warn). host adapters can now pin the walk's start with
+  `VOUCH_PROJECT_DIR`; `vouch discover` and `vouch status` report the
+  resolution chain (`why`) and the KB's id/name.
+- the per-prompt recall hook (`vouch context-hook`) is now instructional
+  and always visible: with relevant approved items it tells the model to
+  open its reply with **"From vouch memory:"** and ground in the cited
+  items; with no relevant items it says so explicitly ("Nothing in vouch
+  on this.") instead of injecting nothing — so recall can never be
+  silently mistaken for "vouch did nothing". an opt-in confidence
+  short-circuit (`retrieval.short_circuit.{enabled,min_confidence}`)
+  lets a high-confidence non-action lookup collapse to a verbatim
+  vouched answer; "do work" prompts never short-circuit.
+- `vouch install-mcp claude-code` now registers vouch as a **local-scope**
+  MCP server in `~/.claude.json` (`projects[<abs project>].mcpServers`),
+  the same thing `claude mcp add` does. a committed `.mcp.json` is a
+  *project*-scope server that Claude Code loads only after a per-user
+  approval — and the **VS Code extension never surfaces that approval
+  prompt**, so `.mcp.json` alone left the `kb_*` tools stuck at "pending
+  approval" in the extension while the hooks quietly ran (reads as
+  connected, isn't). the local-scope entry is trusted on sight, so a fresh
+  install now connects after a window reload with no manual step. verified
+  end-to-end: fresh project → `install-mcp` → `claude mcp list` reports
+  `✔ Connected` (was `⏸ Pending approval`). declared by a manifest
+  `user_mcp:` block (host-neutral core; only claude-code opts in);
+  idempotent and never clobbers a server you added yourself; opt out with
+  `--no-approve`.
+
+### Changed
+- the starter config now ships `review.auto_approve_on_receipt: true`
+  (and `require_human_approval: false`, an advisory key no code path
+  reads): a fresh KB auto-approves captured claims whose byte-offset
+  receipts verify against their source, so recall works out of the box
+  with no `vouch review` pass. the gate is unchanged for everything
+  the receipt check cannot vouch for — pages (session summaries
+  included), entities, relations, and claims that cannot quote their
+  source still wait for a human. existing KBs keep whatever their
+  `.vouch/config.yaml` says; set `auto_approve_on_receipt: false` to
+  restore the fully human gate.
+- the receipt drain now runs at every session start (`capture
+  finalize-all`), so verifiable claims left pending while the gate was
+  off are approved instead of stranded, and it is duplicate-safe: a
+  claim re-deriving text that is already durable is mechanically
+  rejected ("duplicate: identical claim already durable") rather than
+  crashing the drain or piling up in the review queue. a claim id held
+  by *different* text is a real conflict and stays pending for a human.
+  the same resolution now backs `capture answer`, which previously left
+  re-captured duplicates pending forever.
+
+## [1.4.0] — 2026-07-17
+
+### Added
+- `vouch install-mcp <host>` now bootstraps the KB when no `.vouch/` is
+  discoverable at or above the target, making install a one-command
+  setup. previously it exited 0 with "0 failed" in a fresh project while
+  every installed hook silently no-oped forever (`|| true`) and the mcp
+  server exited 2 — with nothing ever telling the user to run
+  `vouch init`. opt out with `--no-init` (a loud stderr warning then
+  names the remedy); an ancestor KB is reported ("Using existing KB
+  at …"), never shadowed by a second one; unknown hosts still fail
+  cleanly without planting a KB. staging-dir hosts opt out via a new
+  `kb_bootstrap: false` manifest key (claude-desktop does — its target
+  is a paste-ready staging dir, and a KB planted at an arbitrary cwd
+  would ambiently capture every child project). the preflight ignores
+  a shell-exported `VOUCH_KB_PATH` (it answers "what does this tree
+  resolve to", and notes the override on stderr instead). `vouch init`
+  and the auto-init share one code path so they cannot drift.
 - cli mirrors for the last five `kb.*` methods that had none —
   `vouch propose-delete`, `vouch source list`, `vouch session list`,
   `vouch session transcript`, `vouch session summarize` — and the

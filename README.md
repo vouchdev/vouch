@@ -116,15 +116,22 @@ make check                     # the CI gate: lint + type + test
 
 After exploring the demo above, set up vouch in your own project:
 
-**1. Set up the KB and wire Claude Code** (one-time, per repo):
+**1. Set up the KB and wire Claude Code** (one command, one-time, per repo):
 
 ```bash
 cd /path/to/your/project
-vouch init                          # creates .vouch/ with starter config
-vouch install-mcp claude-code       # wires capture hooks into Claude Code
+vouch install-mcp claude-code       # creates .vouch/ (if missing) + wires Claude Code
 ```
 
-`install-mcp` writes `.mcp.json` (the `kb.*` MCP tools), the `/vouch-*` slash commands, and three hooks — `PostToolUse` capture, `SessionEnd` rollup, `SessionStart` recall. Restart Claude Code so they load.
+`install-mcp` initialises the KB when no `.vouch/` is discoverable (pass `--no-init` to skip; `vouch init` still exists for KB-only setup), then writes `.mcp.json` (the `kb.*` MCP tools), the `/vouch-*` slash commands, and five hooks — `SessionStart` recall, `UserPromptSubmit` per-prompt recall, `PostToolUse` capture, `Stop` answer capture, `SessionEnd` rollup. It also registers vouch as a local-scope MCP server in `~/.claude.json` (the `⚑` line in the output). **Reload your editor window** (VS Code: *Developer: Reload Window*) so it loads.
+
+> **Why the extra registration?** A committed `.mcp.json` is a *project*-scope server, and Claude Code only loads one after a per-user approval — which the **VS Code extension never prompts for**, so `.mcp.json` alone leaves the `kb_*` tools invisible in the extension (they sit at "pending approval", while the hooks quietly work — easy to misread as "connected"). The local-scope entry `install-mcp` writes is trusted on sight, so a fresh install just connects. Verify with `claude mcp list` (`vouch … ✔ Connected`). Pass `--no-approve` to skip it and approve `.mcp.json` yourself.
+
+> **What you'll see.** Every prompt is checked against the KB first. When vouch knows something relevant, the answer opens with **"From vouch memory:"**, grounded in the cited items; when it doesn't, it opens with *"Nothing in vouch on this."* — recall is visible on every turn, never silent. (A fresh KB knows almost nothing yet: work a session or two so capture fills it, then ask about the project again.)
+
+> **Prefer one install for every project?** `vouch install-mcp claude-code --global` wires vouch once, machine-wide: user-level hooks and commands in `~/.claude/` plus a user-scope MCP server in `~/.claude.json`. Every Claude session in every folder then captures + recalls into *that folder's own* `.vouch/` — data stays per project. Run `vouch init` once in each project you want vouch in; by default a folder without a KB never captures anywhere — its session opens with a one-line "run `vouch init` to enable durable memory here" note and the `kb_*` tools say the same. Safe next to existing per-project installs: duplicate hooks collapse and capture dedups by event id.
+
+> **Optionally, a personal catch-all KB.** The global install asks one question (or pass `--personal-fallback`; later: `vouch hub init-personal --fallback`): opt in, and folders *without* a project KB capture into a personal KB at `~/.local/share/vouch/personal` instead of nowhere — each captured source stamped with the folder it came from, and the session banner saying exactly where the knowledge is going. It is **one store shared by every KB-less folder**: recall in any of them reads the whole personal KB, so knowledge captured while working in one such folder can surface in another (the injected block says so). Projects with their own `.vouch/` are never affected. When such a folder later becomes a real project, `vouch init` + **`vouch adopt`** moves its captures into the new project KB *through that KB's own review gate*: sources copy byte-identically, every claim is re-proposed and its byte-offset receipt re-verified, and the project's review config decides durability — adoption never bypasses review. Strictly opt-in; without it, nothing changes.
 
 **2. Point `compile` at an LLM** — the only step that needs a model. In `.vouch/config.yaml`:
 
@@ -145,43 +152,17 @@ compile:
 vouch review                    # walk pending proposals one at a time
 ```
 
-**Want a browser UI for reviewing and proposing?** The video shows the **vouch webapp** — chat, review queue, claims, and stats. You have four options:
+Receipt-verified claims skip the queue by default (`review.auto_approve_on_receipt: true` in the starter config): each session's captured answers become recallable memory with no review pass. What lands in `vouch review` is everything the mechanical check can't vouch for — session-summary pages, entities, relations, and claims that can't quote their source. Set the flag to `false` in `.vouch/config.yaml` to put every write behind the gate.
 
-- **No setup**: Use the Docker demo (recommended)
-- **pip, no clone**: `pipx install 'vouch-kb[web]'` then `vouch console` — serves the same React console from the installed package (Python only, no Docker, no node), open http://localhost:5173
-- **Local development**: Clone the repo, run `make console`, open http://localhost:5173
-- **CLI-only**: Use `vouch review`, `vouch show <id>`, `vouch approve <id>` commands instead
+**Want a browser UI for reviewing and proposing?** The video shows the **vouch webapp** — chat, review queue, claims, and stats. Your options:
 
-**Point the webapp at your existing KB:**
+- **No setup**: the Docker demo above
+- **pip, no clone**: `pipx install 'vouch-kb[web]'` then `vouch console` (Python only, no Docker, no node) — open http://localhost:5173
+- **Local development**: clone the repo, run `make console`
+- **Lighter built-in queue**: `vouch review-ui` (also in the `[web]` extra)
+- **CLI-only**: `vouch pending`, `vouch show <id>`, `vouch approve <id>`, `vouch reject <id> --reason "…"`
 
-```bash
-# Terminal 1: start the vouch server pointing at your .vouch/
-cd /path/to/your/project
-vouch serve --transport http --port 8731
-
-# Terminal 2: run the Docker UI pointing at that server
-docker run --rm -p 127.0.0.1:5173:5173 \
-  -e VOUCH_TARGET=http://host.docker.internal:8731 \
-  ghcr.io/plind-junior/vouch-demo
-# then open http://localhost:5173
-```
-
-Or serve that same console with no Docker — `vouch console` in place of Terminal 2 (needs the `[web]` extra), then add the `:8731` backend in the connect dialog:
-
-```bash
-vouch console                   # http://localhost:5173, proxying to the server above
-```
-
-Or to skip the browser entirely and use the CLI tools:
-
-```bash
-vouch review                    # walk pending proposals
-vouch show <id>                 # inspect a claim or page
-vouch approve <id>              # approve a proposal
-vouch reject <id> --reason "…"  # reject with feedback
-```
-
-Both browser UIs ship with vouch under the `[web]` extra (`pipx install 'vouch-kb[web]'`): `vouch console` is the full React console shown in the video; `vouch review-ui` is a lighter built-in review queue. Or go piecemeal: `vouch pending`, `vouch show <id>`, `vouch approve <id>`, `vouch reject <id> --reason "…"`.
+To point any of them at an existing KB, start a backend in your project — `vouch serve --transport http --port 8731` — then connect the console to `:8731` (for the Docker demo, pass `-e VOUCH_TARGET=http://host.docker.internal:8731`).
 
 **5. Compile the wiki.**
 

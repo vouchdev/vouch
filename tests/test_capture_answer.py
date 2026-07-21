@@ -135,7 +135,10 @@ def test_capture_answer_approves_under_trusted_agent(store: KBStore, tmp_path: P
 
 
 def test_capture_answer_leaves_pending_when_gate_off(store: KBStore, tmp_path: Path) -> None:
-    # default starter config: neither opt-in set.
+    # both opt-ins explicitly off: every capture waits for a human.
+    store.config_path.write_text(
+        "review:\n  auto_approve_on_receipt: false\n", encoding="utf-8"
+    )
     tp = _transcript(tmp_path, [_user(QUESTION), _assistant(ANSWER)])
     res = cap.capture_answer(store, "sess-1", tp)
     assert res["captured"] is True
@@ -144,6 +147,30 @@ def test_capture_answer_leaves_pending_when_gate_off(store: KBStore, tmp_path: P
     # the review gate is honoured — claims wait for a human.
     pending = [p for p in store.list_proposals(ProposalStatus.PENDING)]
     assert len(pending) >= 3
+
+
+def test_capture_answer_recapture_leaves_no_pending_duplicates(
+    store: KBStore, tmp_path: Path
+) -> None:
+    # a later answer restating already-durable facts must not pile up pending
+    # duplicates -- they are closed mechanically (rejected), fresh facts land.
+    tp1 = _transcript(tmp_path, [_user(QUESTION), _assistant(ANSWER)])
+    first = cap.capture_answer(store, "sess-1", tp1)
+    assert first["approved"] == first["filed"] >= 3
+    assert cap.pending_count(store) == 0
+
+    extra = (
+        "The observation buffer feeds passive capture across every host "
+        "adapter vouch ships."
+    )
+    tp2 = _transcript(tmp_path, [_user(QUESTION), _assistant(ANSWER + " " + extra)])
+    second = cap.capture_answer(store, "sess-2", tp2)
+    assert second["captured"] is True
+    # nothing waits for a human: fresh claims approved, restated ones rejected
+    # as duplicates of durable claims.
+    assert cap.pending_count(store) == 0
+    rejected = store.list_proposals(ProposalStatus.REJECTED)
+    assert any("duplicate" in (p.decision_reason or "") for p in rejected)
 
 
 def test_capture_answer_skips_short_answer(store: KBStore, tmp_path: Path) -> None:

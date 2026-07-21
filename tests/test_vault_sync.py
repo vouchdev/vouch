@@ -484,3 +484,29 @@ def test_vault_edit_proposal_can_be_approved_without_page_already_exists_error(
     assert approved.id == "alpha-page"
     updated = store.get_page("alpha-page")
     assert "Approved edit." in updated.body
+
+
+def test_vault_edit_preserves_page_scope(store: KBStore, vault: Path) -> None:
+    """A vault edit is a body edit, never a scope change: the durable page's
+    scope must survive the propose gate's default stamp (review finding)."""
+    from vouch.models import ArtifactScope, Visibility
+    from vouch.proposals import approve
+
+    page = store.get_page("alpha-page")
+    page.scope = ArtifactScope(visibility=Visibility.TEAM)
+    store.update_page(page)
+
+    kb_to_vault(store, vault)
+    mirror = vault / VAULT_DIR / "pages" / "alpha-page.md"
+    mirror.write_text(
+        mirror.read_text(encoding="utf-8").replace("Original body.", "Scoped edit."),
+        encoding="utf-8",
+    )
+    result = vault_to_kb(store, vault, actor="vault-sync")
+    assert "alpha-page" in result.pages_proposed
+    proposal_id = sorted((store.kb_dir / "proposed").glob("*.yaml"))[-1].stem
+    approve(store, proposal_id, approved_by="reviewer")
+
+    updated = store.get_page("alpha-page")
+    assert "Scoped edit." in updated.body
+    assert updated.scope.visibility is Visibility.TEAM  # not restamped

@@ -29,6 +29,7 @@ import os
 import re
 import sqlite3
 import stat
+import uuid
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -36,6 +37,7 @@ import yaml
 from pydantic import BaseModel, ValidationError
 
 from .models import (
+    ArtifactScope,
     Claim,
     Entity,
     Evidence,
@@ -77,13 +79,14 @@ def _starter_config() -> dict[str, Any]:
     return {
         "version": KB_FORMAT_VERSION,
         "review": {
-            "require_human_approval": True,
+            "require_human_approval": False,
             "expire_pending_after_days": 90,
             # phase d — the receipt is the reviewer. When true, a claim whose
             # byte-offset receipts all verify is auto-approved with no human;
-            # a claim that cannot quote its source is left pending. Opt-in:
-            # the human-review gate stays on by default.
-            "auto_approve_on_receipt": False,
+            # a claim that cannot quote its source is left pending, as is
+            # every page/entity/relation proposal. Set false to put every
+            # write behind `vouch review`.
+            "auto_approve_on_receipt": True,
         },
         "capture": {
             # auto-capture agent sessions into pending summaries.
@@ -143,15 +146,53 @@ def sha256_hex(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def discover_root(start: Path | None = None) -> Path:
+def _home_kb_allowed(home: Path) -> bool:
+    """True when the $HOME KB opts into ambient use via `global.allow_home_kb`."""
+    try:
+        loaded = _yaml_load(
+            (home / KB_DIRNAME / CONFIG_FILENAME).read_text(encoding="utf-8")
+        )
+    except (OSError, yaml.YAMLError):
+        return False
+    if not isinstance(loaded, dict):
+        return False
+    glob = loaded.get("global")
+    return isinstance(glob, dict) and glob.get("allow_home_kb") is True
+
+
+def discover_root(
+    start: Path | None = None,
+    *,
+    respect_env: bool = True,
+    trace: list[str] | None = None,
+) -> Path:
     """Walk up from `start` looking for a `.vouch` directory.
 
-    Mirrors how git locates its repo root. The walk can be skipped entirely
-    by setting `VOUCH_KB_PATH=/abs/path/.vouch` (documented in
-    `adapters/generic-mcp/README.md`) — useful when the host launches the
-    server from a default cwd (e.g. Claude Desktop on macOS / Windows).
+    Mirrors how git locates its repo root, with two safety differences:
+
+    * When `start` is omitted, `VOUCH_PROJECT_DIR` (set by host adapters that
+      know the real workspace directory) overrides the process cwd as the
+      walk's starting point. `VOUCH_KB_PATH=/abs/path/.vouch` still skips the
+      walk entirely (documented in `adapters/generic-mcp/README.md`) — useful
+      when the host launches the server from a default cwd.
+    * The walk never ascends past `$HOME`: a `$HOME/.vouch` is never used for
+      a project below it (it would silently capture every project under the
+      user's home — a recorded incident class). Starting *in* `$HOME` itself
+      still resolves it, as does `global: {allow_home_kb: true}` in its
+      config.yaml or an explicit `VOUCH_KB_PATH`.
+
+    `respect_env=False` ignores both env overrides and answers purely from
+    the filesystem walk — for callers asking "what would this tree resolve
+    to", not "what would this process resolve to". `trace`, when given, is
+    appended with human-readable resolution steps (surfaced by
+    `vouch discover` / `vouch status`).
     """
-    forced = os.environ.get("VOUCH_KB_PATH")
+
+    def note(msg: str) -> None:
+        if trace is not None:
+            trace.append(msg)
+
+    forced = os.environ.get("VOUCH_KB_PATH") if respect_env else None
     if forced:
         kb = Path(forced).resolve()
         if not kb.is_dir():
@@ -163,15 +204,52 @@ def discover_root(start: Path | None = None) -> Path:
                 f"VOUCH_KB_PATH must point at a {KB_DIRNAME!r} directory, "
                 f"got {forced!r}"
             )
+        note(f"VOUCH_KB_PATH={forced} -> {kb.parent}")
         return kb.parent
 
+    if start is None and respect_env:
+        project_dir = os.environ.get("VOUCH_PROJECT_DIR")
+        if project_dir:
+            candidate = Path(project_dir)
+            if candidate.is_dir():
+                start = candidate
+                note(f"VOUCH_PROJECT_DIR={project_dir} -> walk starts there")
+            else:
+                note(f"VOUCH_PROJECT_DIR={project_dir} ignored (not a directory)")
+
     cur = (start or Path.cwd()).resolve()
+    origin = cur
+    try:
+        home: Path | None = Path.home().resolve()
+    except (RuntimeError, OSError):
+        # HOME-less container / stripped env: the walk-stop has nothing to
+        # anchor on, so fall back to the plain git-style walk.
+        home = None
+        note("$HOME unresolvable; home walk-stop disabled")
     while True:
         if (cur / KB_DIRNAME).is_dir():
+            if home is not None and cur == home and origin != home and not _home_kb_allowed(home):
+                note(f"refused {home / KB_DIRNAME} (home KB never used for projects below it)")
+                raise KBNotFoundError(
+                    f"No project {KB_DIRNAME}/ found at or above {origin}. A knowledge "
+                    f"base exists at {home / KB_DIRNAME}, but a home-directory KB is "
+                    "never used for projects below it. Run `vouch init` in the project "
+                    "root; or to use the home KB deliberately, set VOUCH_KB_PATH="
+                    f"{home / KB_DIRNAME} or `global: {{allow_home_kb: true}}` in its "
+                    "config.yaml."
+                )
+            note(f"found {KB_DIRNAME}/ at {cur}")
             return cur
-        if cur.parent == cur:
+        if home is not None and cur == home:
+            note(f"stopped at {home} (walk never ascends past $HOME)")
             raise KBNotFoundError(
-                f"No {KB_DIRNAME}/ directory found at or above {start or Path.cwd()}"
+                f"No {KB_DIRNAME}/ directory found at or above {origin} "
+                f"(search stopped at {home})"
+            )
+        if cur.parent == cur:
+            note("reached filesystem root without finding a KB")
+            raise KBNotFoundError(
+                f"No {KB_DIRNAME}/ directory found at or above {origin}"
             )
         cur = cur.parent
 
@@ -302,6 +380,10 @@ class KBStore:
             (kb.kb_dir / sub).mkdir(exist_ok=True)
         if not kb.config_path.exists():
             kb.config_path.write_text(_yaml_dump(_starter_config()), encoding="utf-8")
+        # Mint (or backfill, for pre-identity KBs re-inited) the instance id.
+        # The id is the KB's durable identity across moves/renames/clones —
+        # stamping starts now because unstamped history can't be retrofitted.
+        kb.ensure_identity()
         schema_version_file = kb.kb_dir / SCHEMA_VERSION_FILENAME
         if not schema_version_file.exists():
             schema_version_file.write_text(SCHEMA_VERSION + "\n", encoding="utf-8")
@@ -310,6 +392,98 @@ class KBStore:
             # state.db is derived; proposed/ is the agent's scratch space.
             gi.write_text("proposed/\ncaptures/\nstate.db\nstate.db-*\n", encoding="utf-8")
         return kb
+
+    # --- identity ----------------------------------------------------------
+
+    def identity(self) -> tuple[str, str] | None:
+        """Return (kb_id, name) from config.yaml, or None if not yet minted."""
+        try:
+            loaded = _yaml_load(self.config_path.read_text(encoding="utf-8"))
+        except (OSError, yaml.YAMLError):
+            return None
+        if not isinstance(loaded, dict):
+            return None
+        kb = loaded.get("kb")
+        if not isinstance(kb, dict) or not kb.get("id"):
+            return None
+        return str(kb["id"]), str(kb.get("name") or self.root.name or "kb")
+
+    def ensure_identity(self) -> tuple[str, str]:
+        """Return (kb_id, name), minting and persisting them if absent.
+
+        The id is a uuid4 hex stored in config.yaml under `kb:`; the name
+        defaults to the root directory's basename and is display-only —
+        the id is the identity (paths move, basenames collide). Pure I/O:
+        audit logging of a backfill is the caller's job (see hub.py and
+        cli._bootstrap_kb).
+
+        A config it cannot parse is refused, never clobbered: minting must
+        not be the operation that destroys a user's hand-edited settings.
+        And the common backfill (a valid mapping with no `kb:` key) appends
+        the block textually, so comments and formatting in the existing
+        file survive byte-for-byte.
+        """
+        existing = self.identity()
+        if existing is not None:
+            return existing
+        if not self.config_path.exists():
+            # Never create a bare config here: a later init() would see the
+            # file and skip the starter config entirely.
+            raise KBNotFoundError(
+                f"{self.config_path} does not exist — run `vouch init` first"
+            )
+        # Serialize the read-mint-write against concurrent init/backfill
+        # paths (two hooks racing on a legacy KB): without the lock both
+        # observe "no id", mint different ids, and every artifact stamped
+        # with the loser's id becomes unreachable under the winner's
+        # identity. The KB's existing cross-process lock (the audit
+        # sidecar) is reused so no new lockfile lands next to committed
+        # files; identity minting is rare and the critical section is
+        # tiny, so contention with audit appends is a non-issue.
+        from .audit import _audit_lock
+
+        with _audit_lock(self.kb_dir):
+            existing = self.identity()
+            if existing is not None:
+                # Lost the race — adopt the winner's id rather than minting
+                # a second one.
+                return existing
+            return self._mint_identity()
+
+    def _mint_identity(self) -> tuple[str, str]:
+        """The write half of ensure_identity — call only under the lock."""
+        raw = self.config_path.read_text(encoding="utf-8")
+        try:
+            loaded = _yaml_load(raw)
+        except yaml.YAMLError as e:
+            raise ValueError(
+                f"{self.config_path} is not valid yaml — fix it by hand, "
+                f"then re-run: {e}"
+            ) from e
+        if loaded is not None and not isinstance(loaded, dict):
+            raise ValueError(
+                f"{self.config_path} must be a yaml mapping to mint a kb identity"
+            )
+        cfg: dict[str, Any] = loaded if isinstance(loaded, dict) else {}
+        kb_id = uuid.uuid4().hex
+        default_name = self.root.name or "kb"
+        if "kb" not in cfg:
+            text = raw
+            if text and not text.endswith("\n"):
+                text += "\n"
+            text += _yaml_dump({"kb": {"id": kb_id, "name": default_name}})
+            self.config_path.write_text(text, encoding="utf-8")
+            return kb_id, default_name
+        # A `kb:` entry exists but carries no id (hand-edited): merge in
+        # place. This branch has to round-trip the yaml; the common paths
+        # above never do.
+        kb_block = cfg.get("kb")
+        kb_block = dict(kb_block) if isinstance(kb_block, dict) else {}
+        kb_block["id"] = kb_id
+        kb_block.setdefault("name", default_name)
+        cfg["kb"] = kb_block
+        self.config_path.write_text(_yaml_dump(cfg), encoding="utf-8")
+        return kb_id, str(kb_block["name"])
 
     # --- paths -------------------------------------------------------------
 
@@ -360,6 +534,7 @@ class KBStore:
         media_type: str = "text/plain",
         tags: list[str] | None = None,
         metadata: dict[str, Any] | None = None,
+        scope: ArtifactScope | dict[str, Any] | str | None = None,
     ) -> Source:
         sid = sha256_hex(content)
         sdir = self._source_dir(sid)
@@ -380,6 +555,7 @@ class KBStore:
             media_type=media_type,
             tags=tags or [],
             metadata=metadata or {},
+            scope=scope if scope is not None else ArtifactScope(),  # type: ignore[arg-type]
         )
         meta_path.write_text(_yaml_dump(src.model_dump(mode="json")), encoding="utf-8")
         self._embed_and_store(kind="source", id=src.id, text=src.title or src.locator or "")
