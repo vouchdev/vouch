@@ -329,12 +329,20 @@ def _sync_apply_as_proposals(
     }
 
     # Pass 1: substrate registered directly so claim proposals can cite it.
+    # Sources before evidence, in two sub-passes: put_evidence rejects an
+    # evidence record whose cited source is not yet on disk, and the sorted
+    # path walk visits "evidence/..." ahead of "sources/..." — so a single
+    # interleaved loop crashes on any inbound evidence whose source arrives
+    # in the same sync. Mirrors the pass-1 order import_as_proposals
+    # (bundle.py) already uses for the same reason.
     for path in new:
         kind, _ = _artifact_kind(path)
         if kind == "source" and path.endswith("/content"):
             store.put_source(_read_source_file(src, path))
             sources_registered += 1
-        elif kind == "evidence":
+    for path in new:
+        kind, _ = _artifact_kind(path)
+        if kind == "evidence":
             ev = Evidence.model_validate(yaml.safe_load(_read_source_file(src, path)))
             store.put_evidence(ev)
             evidence_registered += 1

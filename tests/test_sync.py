@@ -96,6 +96,48 @@ def test_sync_apply_as_proposals_approves_into_a_claim_with_origin(tmp_path: Pat
     assert "origin:kb-remote" in dest.get_claim(approved.id).tags
 
 
+def test_sync_apply_as_proposals_registers_sources_before_evidence(tmp_path: Path) -> None:
+    """An inbound receipt-backed claim (source + evidence + claim, all new) syncs.
+
+    Regression: pass 1 walked a single sorted(new_files) list, and
+    "evidence/..." sorts ahead of "sources/..." -- put_evidence then raised
+    "cites unknown source" for any evidence whose source arrived in the same
+    sync, crashing the whole gated apply before anything was audited.
+    import_as_proposals (bundle.py) already registered sources before
+    evidence; the sync path must keep the same order.
+    """
+    from vouch.models import Evidence
+
+    incoming = _store(tmp_path / "incoming")
+    content = b"the deploy runs at 03:00 utc"
+    src = incoming.put_source(content, title="runbook")
+    ev = Evidence(
+        id="ev-deploy-span",
+        source_id=src.id,
+        locator="bytes=0-28",
+        quote="the deploy runs at 03:00 utc",
+        byte_start=0,
+        byte_end=28,
+    )
+    incoming.put_evidence(ev)
+    incoming.put_claim(
+        Claim(id="deploy-time", text="deploys run at 03:00 utc", evidence=[ev.id])
+    )
+    dest = _store(tmp_path / "dest")
+
+    result = sync.sync_apply(
+        dest.kb_dir, incoming.root, as_proposals=True, origin_kb="kb-remote"
+    )
+
+    assert result["sources_registered"] == 1
+    assert result["evidence_registered"] == 1
+    assert result["failed"] == []
+    assert len(result["proposed"]) == 1
+    # The substrate landed, so the pending claim proposal can cite it.
+    assert dest.get_evidence("ev-deploy-span").source_id == src.id
+    assert dest.get_source(src.id).id == src.id
+
+
 def test_cli_sync_apply_as_proposals(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     incoming = _store(tmp_path / "incoming")
     _claim(incoming, "c1", "alpha from the other kb")
