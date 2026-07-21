@@ -6,6 +6,27 @@ All notable changes to vouch are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+- **`vouch health effectiveness` / `kb.effectiveness`** (#426) — read-only,
+  measurement-only signal for "is this kb helping, and which claims earn
+  their keep?" per approved artifact, correlates it being surfaced into a
+  session's context pack (a new `context_surfacing` cache in
+  `index_db.SCHEMA`, recorded only when `kb.context` is called with a
+  `session_id`, cleared on `index_db.reset` like every other derived table)
+  against a coarse session outcome derived from the audit log — a session
+  whose events lean `claim.confirm` / `proposal.*.approve` is "good", lean
+  `claim.contradict` / `proposal.*.reject` is "bad". every artifact's
+  good-outcome rate carries a 95% Wilson interval; `useful` / `harmful`
+  render only once the interval clears the population baseline *and*
+  `--min-samples` is met, otherwise `unverified` / `insufficient` — an
+  untrustworthy sample never renders as a confident verdict. `--window
+  90d`, `--format text|json` (stable schema, `schema_version: 1`). nothing
+  here writes an artifact, logs an audit event, or files a proposal; no
+  storage-migration risk for existing `.vouch/` directories — a missing
+  `context_surfacing` table is created empty by `index_db`'s normal
+  `CREATE TABLE IF NOT EXISTS` schema application, exactly like every
+  other cache table.
+
 ### Changed
 - **the per-prompt hook now lets the model decide how much of a turn
   vouch takes** (`retrieval.prompt_gate`). recall used to inject an

@@ -140,6 +140,7 @@ HOT_MEMORY_EXCLUDED: dict[str, str] = {
     "kb.status": "meta-tool — health summary only",
     "kb.stats": "aggregates — sidebar would duplicate counts",
     "kb.digest": "aggregated reviewer briefing — sidebar would duplicate its own recency content",
+    "kb.effectiveness": "aggregated per-artifact ranking — self-contained, not a claim browse",
     "kb.activity": "aggregated audit-log buckets — sidebar would duplicate counts",
     "kb.neighbors": "graph slice — out of scope for recency sidebar",
     "kb.synthesize": "answer-mode prose — sidebar adds noise",

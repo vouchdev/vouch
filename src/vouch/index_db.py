@@ -86,6 +86,16 @@ CREATE TABLE IF NOT EXISTS prov_edges (
 
 CREATE INDEX IF NOT EXISTS prov_edges_dst ON prov_edges(dst_id);
 CREATE INDEX IF NOT EXISTS prov_edges_kind ON prov_edges(kind);
+
+CREATE TABLE IF NOT EXISTS context_surfacing (
+    session_id      TEXT NOT NULL,
+    kind            TEXT NOT NULL,
+    id              TEXT NOT NULL,
+    surfaced_at     TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS context_surfacing_session ON context_surfacing(session_id);
+CREATE INDEX IF NOT EXISTS context_surfacing_artifact ON context_surfacing(kind, id);
 """
 
 
@@ -116,6 +126,13 @@ def reset(kb_dir: Path) -> None:
     hook backfills `embedding_index` and `index_meta` as artifacts are
     re-read. Leaving stale rows here means semantic search can return
     orphaned hits after a reindex.
+
+    `context_surfacing` is the odd one out: it is not re-derivable from
+    durable files (it is a log of read-path events, not a cache of current
+    artifact content), so a reset genuinely loses that history rather than
+    rebuilding it. It still lives here rather than in the audit log because
+    it is not authoritative — kb.effectiveness (#426) treats it as a
+    best-effort telemetry cache, not a knowledge write.
     """
     with open_db(kb_dir) as conn:
         conn.executescript(
@@ -128,6 +145,7 @@ def reset(kb_dir: Path) -> None:
             "DELETE FROM prov_edges;"
             "DELETE FROM index_meta WHERE key LIKE 'embedding_%';"
             "DELETE FROM index_meta WHERE key LIKE 'prov_%';"
+            "DELETE FROM context_surfacing;"
         )
 
 
@@ -236,6 +254,45 @@ def read_prov_edges(kb_dir: Path) -> list[tuple[str, str, str, str, str | None]]
             "ORDER BY src_id, dst_id, kind"
         ).fetchall()
     return [(r[0], r[1], r[2], r[3], r[4]) for r in rows]
+
+
+# --- context-pack surfacing (derived cache for `kb.effectiveness`, #426) --
+
+
+def record_context_surfacing(
+    kb_dir: Path, *, session_id: str, items: Iterable[tuple[str, str]],
+) -> None:
+    """Log which artifacts were surfaced into a session's context pack.
+
+    Called from the read path (`kb.context`) only when a session_id is
+    given — same gating as the salience reflex. `items` is (kind, id) pairs.
+    Never called from `kb.effectiveness` itself, which only reads this
+    table: recording surfacing is a side effect of retrieval, not of
+    measurement.
+    """
+    if not session_id:
+        return
+    pairs = [(kind, aid) for kind, aid in items if aid]
+    if not pairs:
+        return
+    ts = _dt.datetime.now(_dt.UTC).isoformat(timespec="seconds")
+    rows = [(session_id, kind, aid, ts) for kind, aid in pairs]
+    with open_db(kb_dir) as conn:
+        conn.executemany(
+            "INSERT INTO context_surfacing (session_id, kind, id, surfaced_at) "
+            "VALUES (?, ?, ?, ?)",
+            rows,
+        )
+
+
+def read_context_surfacing(kb_dir: Path) -> list[tuple[str, str, str, str]]:
+    """Return all (session_id, kind, id, surfaced_at) rows, oldest first."""
+    with open_db(kb_dir) as conn:
+        rows = conn.execute(
+            "SELECT session_id, kind, id, surfaced_at FROM context_surfacing "
+            "ORDER BY surfaced_at"
+        ).fetchall()
+    return [(r[0], r[1], r[2], r[3]) for r in rows]
 
 
 def set_meta(conn: sqlite3.Connection, key: str, value: str) -> None:

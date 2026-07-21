@@ -41,6 +41,7 @@ from . import trust as trust_mod
 from . import verify as verify_mod
 from .capabilities import capabilities as build_caps
 from .context import build_context_pack
+from .eval import effectiveness as effectiveness_mod
 from .logging_config import configure_logging
 from .models import ProposalStatus
 from .page_filters import filter_pages
@@ -218,9 +219,30 @@ def _h_context(p: dict) -> dict:
     result = salience_mod.attach_salience(result, store, session_id, cfg)
     pack_items = result.get("items") if isinstance(result, dict) else None
     exclude = [it.get("id") for it in pack_items] if isinstance(pack_items, list) else []
+    if session_id and isinstance(pack_items, list):
+        from . import index_db
+
+        index_db.record_context_surfacing(
+            store.kb_dir,
+            session_id=session_id,
+            items=[(it.get("type"), it.get("id")) for it in pack_items],
+        )
     return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
         result, store, query=query, exclude_ids=[i for i in exclude if i],
     )
+
+
+def _h_effectiveness(p: dict) -> dict:
+    store = _store()
+    since = metrics_mod.parse_since(
+        str(p.get("window", effectiveness_mod.DEFAULT_WINDOW_SPEC))
+    )
+    report = effectiveness_mod.compute(
+        store,
+        since=since,
+        min_samples=int(p.get("min_samples", effectiveness_mod.DEFAULT_MIN_SAMPLES)),
+    )
+    return report.to_dict()
 
 
 def _h_synthesize(p: dict) -> dict:
@@ -848,6 +870,7 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.stats": _h_stats,
     "kb.activity": _h_activity,
     "kb.digest": _h_digest,
+    "kb.effectiveness": _h_effectiveness,
     "kb.search": _h_search,
     "kb.neighbors": _h_neighbors,
     "kb.experts": _h_experts,

@@ -32,6 +32,7 @@ from . import trust as trust_mod
 from . import verify as verify_mod
 from .capabilities import capabilities as build_caps
 from .context import build_context_pack
+from .eval import effectiveness as effectiveness_mod
 from .logging_config import configure_logging
 from .models import ProposalStatus
 from .page_filters import filter_pages
@@ -301,9 +302,36 @@ def kb_context(
     result = salience_mod.attach_salience(result, store, session_id, cfg)
     pack_items = result.get("items") if isinstance(result, dict) else None
     exclude = [it.get("id") for it in pack_items] if isinstance(pack_items, list) else []
+    if session_id and isinstance(pack_items, list):
+        from . import index_db
+
+        index_db.record_context_surfacing(
+            store.kb_dir,
+            session_id=session_id,
+            items=[(it.get("type"), it.get("id")) for it in pack_items],
+        )
     return hot_mod.attach_hot_memory(  # type: ignore[no-any-return]
         result, store, query=task, exclude_ids=[i for i in exclude if i],
     )
+
+
+@mcp.tool()
+def kb_effectiveness(
+    *,
+    window: str = effectiveness_mod.DEFAULT_WINDOW_SPEC,
+    min_samples: int = effectiveness_mod.DEFAULT_MIN_SAMPLES,
+) -> dict[str, Any]:
+    """Read-only: per-artifact lift between context-pack surfacing and a
+    coarse audit-derived session outcome, with a 95% Wilson interval.
+
+    window: a duration ("90d", "12h"), an ISO date, or "all". Verdicts
+    (useful/harmful) render only once the interval clears the population
+    baseline and min_samples is met; otherwise unverified/insufficient.
+    """
+    store = _store()
+    since = metrics_mod.parse_since(window)
+    report = effectiveness_mod.compute(store, since=since, min_samples=min_samples)
+    return report.to_dict()
 
 
 @mcp.tool()

@@ -53,6 +53,7 @@ from . import vault_sync as vault_sync_mod
 from . import verify as verify_mod
 from .capabilities import capabilities as build_caps
 from .context import build_context_pack
+from .eval import effectiveness as effectiveness_mod
 from .lifecycle import LifecycleError
 from .logging_config import configure_logging
 from .models import Proposal, ProposalKind, ProposalStatus
@@ -833,6 +834,52 @@ def digest_cmd(since: str, stale_days: int, limit: int, fmt: str) -> None:
         click.echo(digest_mod.render_markdown(d))
     else:
         click.echo(digest_mod.render_text(d))
+
+
+@cli.group(name="health")
+def health_group() -> None:
+    """Knowledge-effectiveness signals. Read-only."""
+
+
+@health_group.command("effectiveness")
+@click.option(
+    "--window",
+    default=effectiveness_mod.DEFAULT_WINDOW_SPEC,
+    show_default=True,
+    help="Window: a duration (30d, 12h), an ISO date, or 'all'.",
+)
+@click.option(
+    "--min-samples",
+    default=effectiveness_mod.DEFAULT_MIN_SAMPLES,
+    show_default=True,
+    type=int,
+    help="Sessions a surfaced artifact needs before a verdict can be more than 'insufficient'.",
+)
+@click.option(
+    "--format",
+    "fmt",
+    default="text",
+    show_default=True,
+    type=click.Choice(["text", "json"]),
+)
+def health_effectiveness(window: str, min_samples: int, fmt: str) -> None:
+    """Does surfaced knowledge change session outcomes? Read-only; writes nothing.
+
+    Correlates kb.context surfacing (recorded only when a session_id is
+    passed) with a coarse audit-derived session outcome, per artifact, with
+    a 95% Wilson interval on the good-outcome rate.
+    """
+    store = _load_store()
+    try:
+        since = metrics_mod.parse_since(window)
+    except metrics_mod.MetricsError as e:
+        raise click.UsageError(str(e)) from e
+    with _cli_errors():
+        report = effectiveness_mod.compute(store, since=since, min_samples=min_samples)
+    if fmt == "json":
+        _emit_json(report.to_dict())
+    else:
+        click.echo(effectiveness_mod.render_text(report))
 
 
 def _findings_json(report) -> list[dict[str, Any]]:

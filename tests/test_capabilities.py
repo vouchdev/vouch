@@ -129,6 +129,7 @@ def test_mcp_tools_match_methods() -> None:
 # Irregular method → cli-command mirrors. The path part (before any flag) must
 # exist in the click tree; flags document which invocation form is the mirror.
 _CLI_MIRRORS = {
+    "kb.effectiveness": "health effectiveness",
     "kb.list_pending": "pending",
     "kb.triage_pending": "triage",
     "kb.clear_claims": "claims-clear",
