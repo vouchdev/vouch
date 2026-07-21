@@ -131,6 +131,36 @@ def test_conformance_gate_holds_only_approve_makes_it_durable(tmp_path: Path) ->
     assert dest.get_claim("c1").text == "a fact to federate"
 
 
+def test_federated_claim_surfaces_origin_at_read_time(tmp_path: Path) -> None:
+    """Provenance end to end: a claim imported from another KB, once approved,
+    names its origin KB when it is later recalled (roadmap step 10)."""
+    from vouch.context import build_context_pack
+
+    src = _kb_with_claim(tmp_path / "a", claim_id="c1", text="advisory locks are session scoped")
+    bundle_path = _knowledge_bundle(src, tmp_path / "a.tar.gz")
+    dest = KBStore.init(tmp_path / "b")
+    result = bundle.import_as_proposals(dest.kb_dir, bundle_path, origin_kb="kb-alice")
+    proposals.approve(dest, result["proposed"][0], approved_by="human")
+
+    pack = build_context_pack(dest, query="advisory locks session", limit=10)
+    claim_items = [i for i in pack["items"] if i["type"] == "claim"]
+    assert claim_items, pack
+    assert claim_items[0]["origin"] == "kb-alice"
+    assert pack.get("origins") == ["kb-alice"]
+
+
+def test_locally_authored_claim_has_no_origin(tmp_path: Path) -> None:
+    from vouch.context import build_context_pack
+
+    store = _kb_with_claim(tmp_path / "a", claim_id="c1", text="a locally authored fact here")
+    # put_claim above writes directly; approve path not needed for a read check.
+    pack = build_context_pack(store, query="locally authored fact", limit=10)
+    claim_items = [i for i in pack["items"] if i["type"] == "claim"]
+    assert claim_items
+    assert claim_items[0]["origin"] is None
+    assert "origins" not in pack
+
+
 def test_instance_id_is_stable_and_per_kb(tmp_path: Path) -> None:
     a = KBStore.init(tmp_path / "a")
     b = KBStore.init(tmp_path / "b")

@@ -432,6 +432,12 @@ class ContextItem(BaseModel):
     backend: str = "fts5"
     citations: list[str] = Field(default_factory=list)
     freshness: Literal["fresh", "unknown", "stale"] = "unknown"
+    origin: str | None = Field(
+        default=None,
+        description="vouch: the KB that vouched for this item, when it arrived via "
+        "gated federation import (from the claim's origin:<kb> tag). None for "
+        "locally-authored knowledge.",
+    )
 
 
 class ContextQuality(BaseModel):
