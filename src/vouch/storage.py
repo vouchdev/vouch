@@ -271,6 +271,29 @@ def _yaml_load(text: str) -> Any:
     return yaml.safe_load(text)
 
 
+def _reject_unsafe_id(obj_id: str) -> None:
+    """Reject an artifact id that would escape its subdirectory as a path.
+
+    `Source.id` is locked to a hex sha256, but every other artifact model
+    (`Claim`, `Page`, `Entity`, `Relation`, `Evidence`, `Session`,
+    `Proposal`) declares a bare `id: str` with no validator. A poisoned id —
+    e.g. ``"../../tmp/x"`` smuggled through a bundle body that `import_apply`
+    lands under a safe *filename* but whose in-memory id is traversal — would
+    otherwise resolve to a path outside `kb_dir` on the next put / update /
+    lifecycle write (or read arbitrary files on get). This is the single
+    chokepoint every `_*_path` helper funnels through, so guarding it closes
+    all reach paths at once. Mirrors `bundle._unsafe_name_reason` (#149).
+    """
+    if not obj_id:
+        raise ValueError("artifact id must not be empty")
+    if "\x00" in obj_id:
+        raise ValueError(f"artifact id contains a nul byte: {obj_id!r}")
+    if "/" in obj_id or "\\" in obj_id:
+        raise ValueError(f"artifact id must not contain a path separator: {obj_id!r}")
+    if obj_id in (".", "..") or ".." in Path(obj_id).parts:
+        raise ValueError(f"path traversal in artifact id: {obj_id!r}")
+
+
 _log = logging.getLogger("vouch.storage")
 
 _ModelT = TypeVar("_ModelT", bound=BaseModel)
@@ -501,15 +524,21 @@ class KBStore:
         return self.kb_dir / CONFIG_FILENAME
 
     def _yaml(self, sub: str, obj_id: str) -> Path:
+        _reject_unsafe_id(obj_id)
         return self.kb_dir / sub / f"{obj_id}.yaml"
 
     def _claim_path(self, claim_id: str) -> Path:
         return self._yaml("claims", claim_id)
 
     def _page_path(self, page_id: str) -> Path:
+        _reject_unsafe_id(page_id)
         return self.kb_dir / "pages" / f"{page_id}.md"
 
     def _source_dir(self, source_id: str) -> Path:
+        # Source.id is hex-sha256-locked on the model, but get_source /
+        # read_source_content / the evidence-ref existence checks route raw
+        # id strings through here, so guard this chokepoint too (#149).
+        _reject_unsafe_id(source_id)
         return self.kb_dir / "sources" / source_id
 
     def _entity_path(self, eid: str) -> Path:

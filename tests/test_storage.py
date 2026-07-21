@@ -131,6 +131,15 @@ def test_source_hash_field_mirrors_id(store: KBStore) -> None:
     assert s.hash == s.id
 
 
+def test_get_source_rejects_traversal_id(store: KBStore) -> None:
+    # get_source / read_source_content take raw id strings; a crafted id must
+    # not resolve to <outside>/meta.yaml or <outside>/content (#149).
+    with pytest.raises(ValueError, match="artifact id"):
+        store.get_source("../../../etc/hostname")
+    with pytest.raises(ValueError, match="artifact id"):
+        store.read_source_content("../../outside")
+
+
 # --- claims ---------------------------------------------------------------
 
 
@@ -256,6 +265,68 @@ def test_page_with_frontmatter_round_trip(store: KBStore) -> None:
     assert back.claims == ["c1"]
     assert back.tags == ["auth"]
     assert back.type == PageType.CONCEPT
+
+
+# --- artifact id path-traversal guard (#149) ------------------------------
+
+
+@pytest.mark.parametrize(
+    "bad_id",
+    ["../escape", "../../etc/passwd", "a/b", "sub\\evil", "/abs", "..", ""],
+)
+def test_yaml_path_rejects_unsafe_id(store: KBStore, bad_id: str) -> None:
+    with pytest.raises(ValueError, match="artifact id"):
+        store._yaml("claims", bad_id)
+
+
+@pytest.mark.parametrize("bad_id", ["../../pwned", "a/b", "/abs"])
+def test_page_path_rejects_unsafe_id(store: KBStore, bad_id: str) -> None:
+    with pytest.raises(ValueError, match="artifact id"):
+        store._page_path(bad_id)
+
+
+def test_put_claim_rejects_traversal_id(store: KBStore) -> None:
+    src = store.put_source(b"e")
+    with pytest.raises(ValueError, match="artifact id"):
+        store.put_claim(Claim(id="../../../tmp/pwned", text="x", evidence=[src.id]))
+
+
+def test_get_claim_rejects_traversal_id(store: KBStore) -> None:
+    # A crafted id on a read path must not resolve to an arbitrary file.
+    with pytest.raises(ValueError, match="artifact id"):
+        store.get_claim("../../../etc/hostname")
+
+
+def test_put_page_rejects_traversal_id(store: KBStore) -> None:
+    with pytest.raises(ValueError, match="artifact id"):
+        store.put_page(Page(id="../../../tmp/pwned", title="x"))
+
+
+def test_update_claim_rejects_disk_smuggled_traversal_id(store: KBStore) -> None:
+    """The bundle exploit: a claim lands under a *safe* filename but carries a
+    traversal string in its `id` field (models don't validate non-Source ids).
+    Reading it is fine; the next write must refuse to escape kb_dir."""
+    src = store.put_source(b"e")
+    planted = Claim(id="innocent", text="looks fine", evidence=[src.id])
+    on_disk = {**planted.model_dump(mode="json"), "id": "../../../tmp/pwned"}
+    claim_file = store.kb_dir / "claims" / "innocent.yaml"
+    claim_file.write_text(_yaml_dump(on_disk))
+
+    c = store.get_claim("innocent")
+    assert c.id == "../../../tmp/pwned"  # in-memory id is traversal
+
+    with pytest.raises(ValueError, match="artifact id"):
+        store.update_claim(c)
+    # nothing escaped, and the planted file is untouched by the refused write.
+    assert claim_file.read_text() == _yaml_dump(on_disk)
+
+
+def test_legitimate_ids_still_resolve(store: KBStore) -> None:
+    """Regression guard: normal slug / hex ids must keep working."""
+    for sub, cid in [("claims", "auth-uses-jwt"), ("entities", "proj_foo"),
+                     ("sessions", "a1b2c3d4")]:
+        assert store._yaml(sub, cid) == store.kb_dir / sub / f"{cid}.yaml"
+    assert store._page_path("overview") == store.kb_dir / "pages" / "overview.md"
 
 
 @pytest.mark.parametrize("bad", ["", "   ", "\n"])

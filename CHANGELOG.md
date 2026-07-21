@@ -734,6 +734,8 @@ All notable changes to vouch are documented here. Format follows
   KB under `eval/fixture-kb/`, and an `eval` workflow gating retrieval changes
   (#226).
 ### Fixed
+- artifact ids that contain a path separator, `..`, a nul byte, or are empty are now rejected at the storage layer, closing a path-traversal hole. `Source.id` is hex-locked, but the other models (`Claim`, `Page`, `Entity`, `Relation`, `Evidence`, `Session`, `Proposal`) carry a bare `id: str`, so a poisoned id — e.g. one smuggled through a bundle body under a safe on-disk filename — could resolve to a path outside `kb_dir` on the next put / update / lifecycle write (or read an arbitrary file on get). The guard sits at the `_yaml` / `_page_path` chokepoint every `_*_path` helper funnels through, mirroring the `bundle._safe_member_path` tar-traversal fix (fixes #149).
+- `Claim.text`, `Entity.name`, and `Page.title` now reject empty / whitespace-only values at the model layer via `@field_validator`s, mirroring the `Claim.evidence` min-citation validator (#81/#82). The non-empty contract previously lived only in the `propose_*` helpers, so `store.put_*`, `store.update_*`, and bundle/sync import all silently accepted blank-content artifacts; enforcing on the model closes every write path at once (fixes #155).
 - `build_context_pack` now evaluates the `require_citations` gate (and
   `quality.uncited_items`) after the `max_chars` budget drops tail items, so
   the pack is never failed for uncited claims the caller did not receive.
