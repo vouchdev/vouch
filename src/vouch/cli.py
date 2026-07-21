@@ -7,10 +7,13 @@ same storage + audit + index layer.
 
 from __future__ import annotations
 
+import contextlib
 import getpass
 import io
 import json
 import os
+import shutil
+import sqlite3
 import sys
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
@@ -22,13 +25,15 @@ from typing import Any, Literal
 import click
 import yaml
 
-from . import __version__, bundle, health, hub_client, session_split, volunteer_context
+from . import __version__, bundle, health, hub_client, volunteer_context
+from . import adopt as adopt_mod
 from . import audit as audit_mod
 from . import capture as capture_mod
 from . import codex_rollout as codex_rollout_mod
 from . import compile as compile_mod
 from . import digest as digest_mod
 from . import fetch as fetch_mod
+from . import hub as hub_mod
 from . import inbox as inbox_mod
 from . import install_adapter as install_mod
 from . import lifecycle as life
@@ -39,6 +44,7 @@ from . import pr_cache as prc_mod
 from . import provenance as prov_mod
 from . import recall as recall_mod
 from . import sessions as sess_mod
+from . import skills as skills_mod
 from . import stats as stats_mod
 from . import sync as sync_mod
 from . import synthesize as synth
@@ -53,6 +59,8 @@ from .models import Proposal, ProposalKind, ProposalStatus
 from .onboarding import (
     DEFAULT_TEMPLATE,
     TEMPLATES,
+    SeedResult,
+    StarterSeedResult,
     available_templates,
     seed_starter_kb,
 )
@@ -107,11 +115,33 @@ def _cli_errors() -> Iterator[None]:
 
 def _load_store(start: Path | None = None) -> KBStore:
     try:
-        return KBStore(discover_root(start))
+        root = discover_root(start)
     except KBNotFoundError as e:
         click.echo(f"error: {e}", err=True)
+        # A KB-less folder under an opted-in personal fallback is NOT inert —
+        # its sessions capture into the personal KB. Saying only "run vouch
+        # init" here would hide where this folder's knowledge is going.
+        fallback = None
+        with contextlib.suppress(Exception):
+            fallback = hub_mod.personal_fallback_store()
+        if fallback is not None:
+            click.echo(
+                f"note: sessions in this folder capture into your personal KB "
+                f"({fallback.root}). `vouch init` here, then `vouch adopt`, "
+                "moves that knowledge into this project.",
+                err=True,
+            )
         click.echo("hint: run `vouch init` in your project root.", err=True)
         sys.exit(2)
+    # Reads proceed under the personal-role registry guard, but say so:
+    # stderr only, so JSON stdout stays parseable.
+    try:
+        res = hub_mod.resolve(start)
+        if res.guard is not None:
+            click.echo(f"vouch: {res.guard}", err=True)
+    except Exception:
+        pass
+    return KBStore(root)
 
 
 def _whoami() -> str:
@@ -183,6 +213,38 @@ def cli() -> None:
 # --- bootstrap ------------------------------------------------------------
 
 
+def _bootstrap_kb(
+    root: Path, *, template: str = DEFAULT_TEMPLATE
+) -> tuple[KBStore, StarterSeedResult, SeedResult | None]:
+    """Create + seed a KB at ``root`` — the single init path.
+
+    Shared by `vouch init` and `vouch install-mcp`'s auto-init so the two
+    cannot drift: same starter seed, same index rebuild, same audit event.
+    """
+    root.mkdir(parents=True, exist_ok=True)
+    # Detect the legacy-backfill case BEFORE init mints silently — after,
+    # identity() can no longer tell a backfill from a pre-existing id.
+    config_existed = (root / ".vouch" / "config.yaml").exists()
+    backfill = config_existed and KBStore(root).identity() is None
+    store = KBStore.init(root)
+    seed = seed_starter_kb(store, approved_by=_whoami())
+    template_result: SeedResult | None = None
+    if template != DEFAULT_TEMPLATE:
+        template_result = TEMPLATES[template](store, approved_by=_whoami())
+    health.rebuild_index(store)
+    if backfill:
+        identity = store.identity()
+        if identity is not None:
+            # Additive event, mirroring hub.ensure_kb_identity: an existing
+            # KB acquiring its id is recorded history, never a rewrite.
+            audit_mod.log_event(
+                store.kb_dir, event="kb.identity", actor=_whoami(),
+                data={"kb_id": identity[0], "name": identity[1]},
+            )
+    audit_mod.log_event(store.kb_dir, event="kb.init", actor=_whoami())
+    return store, seed, template_result
+
+
 @cli.command()
 @click.option("--path", default=".", type=click.Path(file_okay=False), show_default=True)
 @click.option(
@@ -194,15 +256,12 @@ def cli() -> None:
 )
 def init(path: str, template: str) -> None:
     """Initialise a .vouch/ knowledge base at PATH."""
-    root = Path(path).resolve()
-    root.mkdir(parents=True, exist_ok=True)
-    store = KBStore.init(root)
-    seed = seed_starter_kb(store, approved_by=_whoami())
-    template_result = None
-    if template != DEFAULT_TEMPLATE:
-        template_result = TEMPLATES[template](store, approved_by=_whoami())
-    health.rebuild_index(store)
-    audit_mod.log_event(store.kb_dir, event="kb.init", actor=_whoami())
+    # _cli_errors so a refused identity mint (corrupt config.yaml) reads as
+    # a one-line error, not a traceback.
+    with _cli_errors():
+        store, seed, template_result = _bootstrap_kb(
+            Path(path).resolve(), template=template
+        )
     click.echo(f"Initialised KB at {store.kb_dir}")
     if seed.created_anything:
         click.echo(f"Seeded starter claim: {seed.claim_id}")
@@ -223,21 +282,376 @@ def init(path: str, template: str) -> None:
 
 
 @cli.command()
-@click.option("--path", default=".", show_default=True)
-def discover(path: str) -> None:
-    """Walk up from PATH and print the nearest .vouch/ root, or fail."""
+@click.option(
+    "--path",
+    default=None,
+    help="Start the walk here (pure filesystem semantics). Default: resolve "
+    "exactly as the servers and hooks do, env overrides included.",
+)
+def discover(path: str | None) -> None:
+    """Print the KB root this process would resolve to, with the why-chain."""
+    trace: list[str] = []
     try:
-        root = discover_root(Path(path))
-        _emit_json({"root": str(root), "kb_dir": str(root / ".vouch")})
+        # An explicit --path asks about that tree, so env overrides
+        # (VOUCH_KB_PATH / VOUCH_PROJECT_DIR) must not answer instead.
+        root = discover_root(
+            Path(path) if path is not None else None,
+            respect_env=path is None,
+            trace=trace,
+        )
+        _emit_json({"root": str(root), "kb_dir": str(root / ".vouch"), "why": trace})
     except KBNotFoundError as e:
         click.echo(f"error: {e}", err=True)
         sys.exit(2)
 
 
+# --- hub (machine registry of KBs) ----------------------------------------
+
+
+@cli.group()
+def hub() -> None:
+    """Machine registry of KBs and sync with a VouchHub.
+
+    The registry at ~/.config/vouch/registry.yaml is advisory routing
+    state — authority stays in each KB's own .vouch/. It is machine-local
+    and never committed. The link/push/pull/status subcommands sync this
+    KB's approved knowledge with a remote VouchHub, gated by review on pull.
+    """
+
+
+@hub.command("register")
+@click.option("--path", default=".", type=click.Path(file_okay=False), show_default=True)
+@click.option(
+    "--role",
+    default="project",
+    show_default=True,
+    type=click.Choice(hub_mod.ROLES),
+    help="How this KB participates: project (default), personal, or team.",
+)
+@click.option("--name", default=None, help="Display name (defaults to the KB's own name).")
+def hub_register(path: str, role: str, name: str | None) -> None:
+    """Add (or refresh) the KB at PATH in this machine's registry."""
+    with _cli_errors():
+        try:
+            entry = hub_mod.register_kb(
+                Path(path).resolve(), role=role, name=name, actor=_whoami()
+            )
+        except KBNotFoundError as e:
+            raise click.ClickException(str(e)) from e
+    click.echo(f"registered {entry.name} ({entry.kb_id}) role={entry.role} at {entry.path}")
+
+
+@hub.command("list")
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON instead of a table.")
+def hub_list(as_json: bool) -> None:
+    """List the KBs registered on this machine."""
+    entries = hub_mod.load_registry()
+    if as_json:
+        _emit_json(
+            {
+                "registry": str(hub_mod.registry_path()),
+                "kbs": [
+                    {
+                        "kb_id": e.kb_id,
+                        "name": e.name,
+                        "role": e.role,
+                        "path": e.path,
+                        "added_at": e.added_at,
+                    }
+                    for e in entries
+                ],
+            }
+        )
+        return
+    if not entries:
+        click.echo(f"no KBs registered (registry: {hub_mod.registry_path()})")
+        return
+    for e in entries:
+        click.echo(f"{e.name}  [{e.role}]  {e.path}  ({e.kb_id})")
+
+
+@hub.command("unregister")
+@click.argument("token")
+def hub_unregister(token: str) -> None:
+    """Remove a KB from the registry by kb id or path."""
+    removed = hub_mod.unregister_kb(token)
+    if removed is None:
+        raise click.ClickException(f"no registered KB matches {token!r}")
+    click.echo(f"unregistered {removed.name} ({removed.kb_id})")
+
+
+def _init_personal_kb(fallback: bool | None) -> Path:
+    """Create + register the personal catch-all KB; shared by the two entry
+    points (`vouch hub init-personal` and `install-mcp --global`'s opt-in)
+    so they cannot drift.
+
+    ``fallback`` None means "don't touch the flag": a fresh KB starts off
+    (capture into it stays opt-in), an existing KB keeps whatever it says.
+    """
+    root = hub_mod.personal_kb_root()
+    if root is None:
+        raise click.ClickException(
+            "cannot determine a home directory for the personal KB — "
+            "set VOUCH_PERSONAL_KB to a writable folder"
+        )
+    created = not (root / ".vouch").is_dir()
+    if created:
+        try:
+            _bootstrap_kb(root)
+        except Exception as e:
+            # cli boundary: an unwritable XDG path (or any other OSError) must
+            # read as an error with a remedy, not a traceback — and must not
+            # leave half a KB that a rerun would mistake for a finished one.
+            shutil.rmtree(root / ".vouch", ignore_errors=True)
+            raise click.ClickException(
+                f"could not initialise the personal KB at {root}: {e} — fix "
+                "the cause and rerun, or set VOUCH_PERSONAL_KB to a writable "
+                "folder"
+            ) from e
+        click.echo(f"Initialised personal KB at {root / '.vouch'}")
+    else:
+        click.echo(f"Personal KB already present at {root / '.vouch'}")
+    # A personal row pointing somewhere else is a routing hazard: capture
+    # would follow one KB while `hub fallback` flips another. Retire the
+    # stale rows instead of leaving the choice to ordering.
+    for stale in hub_mod.personal_entries():
+        if Path(stale.path).expanduser().resolve() != root.resolve():
+            hub_mod.unregister_kb(stale.kb_id)
+            click.echo(
+                f"note: unregistered a previous personal KB row ({stale.path})",
+                err=True,
+            )
+    try:
+        entry = hub_mod.register_kb(
+            root, role="personal", name="personal", actor=_whoami()
+        )
+    except Exception as e:
+        raise click.ClickException(
+            f"could not register the personal KB at {root}: {e}"
+        ) from e
+    click.echo(f"Registered in the machine registry: {entry.name} ({entry.kb_id})")
+    if fallback is not None:
+        try:
+            hub_mod.set_personal_fallback(root, fallback)
+        except (OSError, ValueError) as e:
+            raise click.ClickException(str(e)) from e
+    enabled = hub_mod.personal_fallback_enabled(root)
+    if enabled:
+        click.echo(
+            "Fallback capture: on — sessions in folders WITHOUT a project KB "
+            "capture here, and recall in those folders reads this whole KB "
+            "(one store shared by all of them). `vouch init` + `vouch adopt` "
+            "moves a folder's share into its own project KB."
+        )
+    else:
+        click.echo(
+            "Fallback capture: off — folders without a project KB capture "
+            "nowhere (enable with `vouch hub fallback on`)."
+        )
+    return root
+
+
+@hub.command("init-personal")
+@click.option(
+    "--fallback/--no-fallback",
+    "fallback",
+    default=None,
+    help="Also opt in (or out of) capturing KB-less folders' sessions into "
+    "this KB. Without the flag: a prompt on a terminal, otherwise off.",
+)
+def hub_init_personal(fallback: bool | None) -> None:
+    """Create + register this machine's personal catch-all KB.
+
+    Lives at ~/.local/share/vouch/personal (XDG_DATA_HOME honoured;
+    override with VOUCH_PERSONAL_KB). Idempotent: re-running refreshes the
+    registry row and leaves the fallback flag alone unless you pass one.
+    """
+    created = True
+    root = hub_mod.personal_kb_root()
+    if root is not None and (root / ".vouch").is_dir():
+        created = False
+    if fallback is None and created and sys.stdin.isatty():
+        fallback = click.confirm(
+            "Capture sessions in folders WITHOUT a project KB into this "
+            "personal KB? It is one shared store: what you capture in any "
+            "KB-less folder is recalled in all of them (adopt a folder's "
+            "share into a project KB later)",
+            default=False,
+        )
+    _init_personal_kb(fallback)
+
+
+@hub.command("fallback")
+@click.argument(
+    "state", required=False, type=click.Choice(["on", "off", "status"])
+)
+def hub_fallback(state: str | None) -> None:
+    """Show or flip fallback capture on the registered personal KB."""
+    entry = hub_mod.personal_entry()
+    if entry is None:
+        raise click.ClickException(
+            "no personal KB registered — create one with `vouch hub init-personal`"
+        )
+    root = Path(entry.path)
+    if not (root / ".vouch").is_dir():
+        raise click.ClickException(
+            f"registered personal KB at {root} has no .vouch/ — re-run "
+            "`vouch hub init-personal` (or `vouch hub unregister` the stale row)"
+        )
+    if state in (None, "status"):
+        enabled = hub_mod.personal_fallback_enabled(root)
+        click.echo(f"fallback capture: {'on' if enabled else 'off'}  ({root})")
+        return
+    try:
+        hub_mod.set_personal_fallback(root, state == "on")
+    except (OSError, ValueError) as e:
+        raise click.ClickException(str(e)) from e
+    click.echo(f"fallback capture: {state}  ({root})")
+
+
+@cli.command()
+@click.option(
+    "--from-path",
+    "from_path",
+    default=None,
+    type=click.Path(file_okay=False),
+    help="Adopt captures whose origin is this folder instead of the project "
+    "root (for a project that moved since its sessions were captured).",
+)
+@click.option(
+    "--retire",
+    is_flag=True,
+    help="Archive the adopted claims in the personal KB so they stop "
+    "surfacing in personal recall (sources and audit history stay).",
+)
+@click.option("--dry-run", is_flag=True, help="Report what would move; write nothing.")
+@click.option("--json", "as_json", is_flag=True, help="Emit the report as JSON.")
+def adopt(
+    from_path: str | None, retire: bool, dry_run: bool, as_json: bool
+) -> None:
+    """Bring this folder's personal-KB captures into the project KB.
+
+    Sessions that ran here before `vouch init` (under a --global install
+    with the personal fallback on) captured into the machine's personal
+    KB, stamped with this folder as their origin. Adopt copies those
+    sources in and re-proposes their claims through THIS KB's own review
+    gate — receipts re-verify mechanically, so under the starter config
+    they land durable; under a human-only gate they land pending.
+    """
+    store = _load_store()
+    entry = hub_mod.personal_entry()
+    if entry is None:
+        raise click.ClickException(
+            "no personal KB registered on this machine — nothing to adopt "
+            "(see `vouch hub init-personal`)"
+        )
+    personal_root = Path(entry.path)
+    if not (personal_root / ".vouch").is_dir():
+        raise click.ClickException(
+            f"registered personal KB at {personal_root} has no .vouch/ — "
+            "re-run `vouch hub init-personal`"
+        )
+    personal = KBStore(personal_root)
+    if personal.kb_dir.resolve() == store.kb_dir.resolve():
+        raise click.ClickException(
+            "this folder IS the personal KB — adopt runs inside a project "
+            "with its own `.vouch/`"
+        )
+    match_root = Path(from_path).resolve() if from_path else store.root.resolve()
+    with _cli_errors():
+        report = adopt_mod.adopt(
+            store,
+            personal,
+            match_root=match_root,
+            actor=_whoami(),
+            retire=retire,
+            dry_run=dry_run,
+        )
+    if as_json:
+        _emit_json(report.as_dict())
+        return
+    verb = "would adopt" if dry_run else "adopted"
+    if not (
+        report.sources
+        or report.claims_durable
+        or report.claims_pending
+        or report.claims_skipped
+        or report.pages_pending_in_personal
+    ):
+        click.echo(
+            f"nothing to adopt: no personal-KB captures originate under "
+            f"{match_root} (personal KB: {personal_root})"
+        )
+        return
+    click.echo(
+        f"{verb} from personal KB {entry.name} ({entry.kb_id[:8]}…), "
+        f"origin {match_root}:"
+    )
+    click.echo(f"  sources copied:   {len(report.sources)}")
+    click.echo(f"  claims durable:   {len(report.claims_durable)}")
+    click.echo(f"  claims pending:   {len(report.claims_pending)}")
+    click.echo(f"  claims skipped:   {len(report.claims_skipped)}  (already here)")
+    if retire:
+        click.echo(
+            f"  retired (personal): {len(report.retired)}  "
+            "(only claims that landed durable here)"
+        )
+    if report.pages_pending_in_personal:
+        click.echo(
+            f"  session summaries captured here that are still pending in the "
+            f"personal KB: {len(report.pages_pending_in_personal)} — review "
+            f"them there (`cd {personal_root} && vouch review`); adopt moves "
+            "sources and claims, not unreviewed pages."
+        )
+    if report.claims_pending and not dry_run:
+        click.echo("review the pending ones with `vouch review`.")
+
+
 @cli.command()
 def capabilities() -> None:
     """Emit the JSON capabilities descriptor (mirrors kb.capabilities)."""
-    _emit_json(build_caps().model_dump(mode="json"))
+    # Stay usable outside a KB: fall back to the default-on flag if no
+    # .vouch/ is discoverable here.
+    try:
+        publish_skills = skills_mod.publish_skills_enabled(_load_store())
+    except Exception:
+        publish_skills = True
+    _emit_json(build_caps(publish_skills=publish_skills).model_dump(mode="json"))
+
+
+@cli.command("list-skills")
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON instead of a table.")
+def list_skills(as_json: bool) -> None:
+    """List discoverable Claude Code skills / slash commands (mirrors kb.list_skills)."""
+    store = _load_store()
+    rows = skills_mod.list_skills(store)
+    if as_json:
+        _emit_json(rows)
+        return
+    if not rows:
+        # Either nothing installed, or mcp.publish_skills is false.
+        click.echo("no skills published")
+        return
+    for r in rows:
+        click.echo(f"{r['name']}  [{r['scope']}/{r['kind']}]  {r['description']}")
+
+
+@cli.command("get-skill")
+@click.argument("name")
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON instead of the body.")
+def get_skill(name: str, as_json: bool) -> None:
+    """Print the full body of a named skill / slash command (mirrors kb.get_skill)."""
+    store = _load_store()
+    try:
+        result = skills_mod.get_skill(store, name)
+    except skills_mod.SkillsDisabledError as e:
+        raise click.ClickException(str(e)) from e
+    except KeyError as e:
+        raise click.ClickException(str(e)) from e
+    if as_json:
+        _emit_json(result)
+        return
+    click.echo(result["body"])
 
 
 # --- status / health ------------------------------------------------------
@@ -253,6 +667,8 @@ def status(as_json: bool) -> None:
         _emit_json(s)
         return
     click.echo(f"KB at {s['kb_dir']}")
+    if s.get("kb_id"):
+        click.echo(f"  kb:      {s['kb_name']} ({s['kb_id']})")
     click.echo(
         f"  durable: {s['claims']} claims  •  {s['pages']} pages  •  "
         f"{s['sources']} sources  •  {s['entities']} entities  •  "
@@ -317,6 +733,59 @@ def stats(days: int, as_json: bool) -> None:
     )
     if cites["invalid_claim"] or cites["broken_citation"]:
         _echo(f"    invalid: {cites['invalid_claim']}, broken: {cites['broken_citation']}")
+
+
+@cli.command()
+@click.option(
+    "--days",
+    default=365,
+    show_default=True,
+    type=click.IntRange(min=0),
+    help="Window (local calendar days). Use 0 for all-time.",
+)
+@click.option(
+    "--tz-offset-minutes",
+    default=0,
+    show_default=True,
+    type=int,
+    help="Viewer's UTC offset in minutes for local-time bucketing.",
+)
+@click.option("--tz", default=None, help="IANA zone for local-time bucketing (wins over offset).")
+@click.option("--project", default=None, help="Viewer project for audit scope filtering.")
+@click.option("--agent", default=None, help="Viewer agent for audit scope filtering.")
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON instead of a table.")
+def activity(
+    days: int,
+    tz_offset_minutes: int,
+    tz: str | None,
+    project: str | None,
+    agent: str | None,
+    as_json: bool,
+) -> None:
+    """Audit activity buckets: per-day counts, hour-of-week matrix, actors."""
+    from .scoping import viewer_from
+
+    store = _load_store()
+    viewer = viewer_from(
+        config_path=store.config_path,
+        project=project,
+        agent=agent,
+    )
+    body = stats_mod.collect_activity(
+        store, days=days, tz_offset_minutes=tz_offset_minutes, tz=tz, viewer=viewer,
+    )
+    if as_json:
+        _emit_json(body)
+        return
+    window = "all time" if body["window_days"] is None else f"last {body['window_days']}d"
+    _echo(
+        f"activity ({window}): {_style(str(body['total_events']), fg='cyan')} events "
+        f"on {body['active_days']} day(s)"
+    )
+    if body["first_event_day"]:
+        _echo(f"  span: {body['first_event_day']} → {body['last_event_day']}")
+    for actor, count in list(body["by_actor"].items())[:8]:
+        _echo(f"  {actor}: {count}")
 
 
 @cli.command(name="digest")
@@ -1273,6 +1742,54 @@ def propose_claim_cmd(
         _echo(_format_similarity_warning(w), err=True)
 
 
+@cli.command(name="ingest")
+@click.argument(
+    "path", type=click.Path(exists=True, dir_okay=False, path_type=Path)
+)
+@click.option(
+    "--title", default=None,
+    help="Human label for the source (default: the filename).",
+)
+@click.option(
+    "--no-approve", is_flag=True,
+    help="File the claims but never auto-approve, even if the receipt gate is on.",
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit source id + counts as json.")
+def ingest_cmd(
+    path: Path, title: str | None, no_approve: bool, as_json: bool
+) -> None:
+    """Ingest a file as a source and extract receipt-backed claims from it.
+
+    With review.auto_approve_on_receipt on, every claim whose quote verifies
+    against the source is approved with no human -- "run vouch on a doc and it
+    just captures the knowledge." Without the gate the claims are filed pending
+    for review; a claim that cannot quote its source is never rubber-stamped.
+    """
+    from . import extract as extract_mod
+
+    store = _load_store()
+    with _cli_errors():
+        source, approved = extract_mod.ingest_source(
+            store, path.read_bytes(),
+            proposed_by=_whoami(),
+            title=title or path.name,
+            auto_approve=not no_approve,
+        )
+    pending = sum(
+        1 for p in store.list_proposals(ProposalStatus.PENDING)
+        if p.kind == ProposalKind.CLAIM
+    )
+    if as_json:
+        _emit_json(
+            {"source": source.id, "approved": len(approved), "pending_claims": pending}
+        )
+    else:
+        click.echo(
+            f"ingested {source.id[:12]}… — {len(approved)} claim(s) "
+            f"auto-approved, {pending} pending review"
+        )
+
+
 @cli.command(name="propose-page")
 @click.option("--title", required=True)
 @click.option("--body", default="", help="Page body. Use `-` to read from stdin.")
@@ -1572,6 +2089,38 @@ def new_cmd(
         return
     click.echo(pr.id)
 
+@cli.command(name="experts")
+@click.argument("topic")
+@click.option("--limit", default=10, show_default=True, type=int)
+@click.option("--min-claims", "min_claims", default=1, show_default=True, type=int)
+@click.option(
+    "--weight",
+    default="count",
+    show_default=True,
+    help="ranking weight: count | recency | citation (unknown falls back to count).",
+)
+@click.option("--json", "as_json", is_flag=True, help="emit the ranking as JSON.")
+def experts_cmd(
+    topic: str, limit: int, min_claims: int, weight: str, as_json: bool
+) -> None:
+    """Rank entities by evidence density on TOPIC (read-only)."""
+    from .experts import rank_experts
+
+    store = _load_store()
+    rows = rank_experts(store, topic, limit=limit, min_claims=min_claims, weight=weight)
+    if as_json:
+        _emit_json({"experts": rows})
+        return
+    if not rows:
+        click.echo("no experts found.")
+        return
+    for row in rows:
+        click.echo(
+            f"{row['name']} ({row['type']})  "
+            f"claims={row['claim_count']} citations={row['citation_count']} "
+            f"score={row['score']}"
+        )
+
 
 @cli.group(name="schema")
 def schema() -> None:
@@ -1691,6 +2240,28 @@ def propose_relation_cmd(src: str, relation: str, target: str, confidence: float
     click.echo(pr.id)
 
 
+@cli.command(name="propose-delete")
+@click.argument("target_kind", type=click.Choice(["claim", "page", "entity", "relation"]))
+@click.argument("target_id")
+@click.option("--rationale", default=None)
+@click.option("--dry-run", is_flag=True, help="Validate without filing the proposal.")
+def propose_delete_cmd(
+    target_kind: str, target_id: str, rationale: str | None, dry_run: bool
+) -> None:
+    """File a review-gated request to hard-delete an artifact."""
+    store = _load_store()
+    with _cli_errors():
+        pr = propose_delete(
+            store,
+            target_kind=target_kind,
+            target_id=target_id,
+            rationale=rationale,
+            dry_run=dry_run,
+            proposed_by=_whoami(),
+        )
+    click.echo(pr.id)
+
+
 # --- sources --------------------------------------------------------------
 
 
@@ -1782,6 +2353,22 @@ def source_verify(fail_on_issue: bool) -> None:
         )
     if fail_on_issue and bad:
         sys.exit(1)
+
+
+@source.command("list")
+@click.option("--json", "as_json", is_flag=True)
+def source_list(as_json: bool) -> None:
+    """List all registered sources."""
+    store = _load_store()
+    sources = store.list_sources()
+    if as_json:
+        _emit_json([s.model_dump(mode="json") for s in sources])
+        return
+    if not sources:
+        click.echo("no sources found")
+        return
+    for src in sources:
+        click.echo(f"{src.id:66} {src.title or src.locator}")
 
 
 @cli.command(name="inbox")
@@ -1890,28 +2477,82 @@ def archive(claim_id: str) -> None:
     click.echo(f"archived {claim_id}")
 
 
-@cli.command(name="propose-delete")
-@click.argument(
-    "target_kind",
-    type=click.Choice(["claim", "page", "entity", "relation"]),
-)
-@click.argument("target_id")
-@click.option("--rationale", default=None, help="why this should be deleted")
-def propose_delete_cmd(
-    target_kind: str, target_id: str, rationale: str | None
-) -> None:
-    """File a review-gated hard-delete request for an artifact.
+@cli.command()
+@click.argument("claim_id")
+def redact(claim_id: str) -> None:
+    """Mask secrets in a claim's text and mark it REDACTED.
 
-    A different reviewer approves it with `vouch approve <id>`. Refused if the
-    target is still referenced (supersede the claim instead, usually).
+    For a credential that reached a durable claim. Rewrites the current tree
+    only — the append-only audit log and git history are untouched, so a truly
+    leaked secret must still be rotated (see docs/security/git-retention.md).
     """
     store = _load_store()
     with _cli_errors():
-        pr = propose_delete(
-            store, target_kind=target_kind, target_id=target_id,
-            proposed_by=_whoami(), rationale=rationale,
+        life.redact(store, claim_id=claim_id, actor=_whoami())
+    click.echo(f"redacted {claim_id}")
+
+
+@cli.command(name="claims-clear")
+@click.option("--auto-only", is_flag=True, default=True, show_default=True,
+              help="Clear only auto-approved claims (default: yes)")
+@click.option("--before", type=str, default=None,
+              help="Clear only claims created before this date (ISO 8601, e.g. 2026-07-01)")
+@click.option("--confirm", is_flag=True, default=False,
+              help="Skip confirmation prompt")
+@click.option("--dry-run", is_flag=True, default=False,
+              help="Preview what would be cleared without making changes")
+def claims_clear(auto_only: bool, before: str | None, confirm: bool, dry_run: bool) -> None:
+    """Clear auto-saved claims. Archived claims are preserved in history."""
+    from datetime import datetime
+
+    store = _load_store()
+    before_dt = None
+    if before:
+        try:
+            before_dt = datetime.fromisoformat(before)
+        except ValueError as err:
+            raise click.ClickException(
+                f"invalid date format: {before} (use ISO 8601, e.g. 2026-07-01)"
+            ) from err
+
+    with _cli_errors():
+        to_clear = life.clear_claims(
+            store,
+            auto_only=auto_only,
+            before=before_dt,
+            actor=_whoami(),
+            dry_run=True,  # Always dry-run first to show what will be cleared
         )
-    click.echo(f"filed delete proposal {pr.id} for {target_kind} {target_id}")
+
+    if not to_clear:
+        click.echo("no claims match the criteria")
+        return
+
+    click.echo(f"found {len(to_clear)} claims to clear:")
+    for claim in to_clear[:10]:  # Show first 10
+        click.echo(f"  {claim.id}: {claim.text[:60]}")
+    if len(to_clear) > 10:
+        click.echo(f"  ... and {len(to_clear) - 10} more")
+
+    if dry_run:
+        click.echo("(dry-run mode: no changes made)")
+        return
+
+    if not confirm and not click.confirm(f"\nClear {len(to_clear)} claims?"):
+        click.echo("cancelled")
+        return
+
+    # Now actually clear them
+    with _cli_errors():
+        life.clear_claims(
+            store,
+            auto_only=auto_only,
+            before=before_dt,
+            actor=_whoami(),
+            dry_run=False,
+        )
+
+    click.echo(f"cleared {len(to_clear)} claims")
 
 
 @cli.command()
@@ -1994,10 +2635,59 @@ def session_end_cmd(session_id: str, note: str | None) -> None:
 
 
 @session.command("list")
-def session_list_cmd() -> None:
-    """List captured sessions in the review pipeline (buffers + pending summaries)."""
+@click.option("--json", "as_json", is_flag=True)
+def session_list_cmd(as_json: bool) -> None:
+    """List captured sessions for the review pipeline."""
+    from . import session_split
+
     store = _load_store()
-    _emit_json({"sessions": session_split.build_session_rows(store)})
+    rows = session_split.build_session_rows(store)
+    if as_json:
+        _emit_json({"sessions": rows})
+        return
+    if not rows:
+        click.echo("no sessions found")
+        return
+    for row in rows:
+        click.echo(
+            f"{row.get('session_id') or '?':40} "
+            f"{row.get('stage') or '?':10} "
+            f"summarized={'yes' if row.get('summarized') else 'no'}"
+        )
+
+
+@session.command("transcript")
+@click.argument("session_id")
+@click.option(
+    "--agent",
+    type=click.Choice(["claude", "codex"]),
+    default=None,
+    help="Pin the transcript source instead of auto-detecting.",
+)
+def session_transcript_cmd(session_id: str, agent: str | None) -> None:
+    """Emit the normalized transcript of a captured session as JSON."""
+    from . import transcript
+
+    store = _load_store()
+    with _cli_errors():
+        _emit_json(transcript.load_transcript(store, session_id, agent=agent))
+
+
+@session.command("summarize")
+@click.argument("session_id")
+@click.option(
+    "--mode",
+    type=click.Choice(["auto", "split", "mechanical"]),
+    default="auto",
+    show_default=True,
+)
+def session_summarize_cmd(session_id: str, mode: str) -> None:
+    """Roll a session buffer into pending page proposals. Never approves."""
+    from . import session_split
+
+    store = _load_store()
+    with _cli_errors():
+        _emit_json(session_split.summarize(store, session_id, mode=mode))
 
 
 @cli.group()
@@ -2005,13 +2695,72 @@ def capture() -> None:
     """Automatic session capture (driven by claude code hooks)."""
 
 
-def _capture_store() -> KBStore | None:
-    """Locate the KB without the sys.exit(2) that _load_store does — hooks
-    must never abort the host."""
+def _capture_target(start: Path | None = None) -> hub_mod.CaptureTarget:
+    """Locate the capture target without the sys.exit(2) that _load_store
+    does — hooks must never abort the host.
+
+    Uses the hub resolver so ambient capture respects the registry guard
+    (a personal-role KB never absorbs another directory's session via
+    discovery) AND the personal fallback: a folder with no project KB
+    captures into the opted-in personal catch-all, origin recorded, or
+    nowhere at all.
+
+    ``start`` pins the resolution to the host-reported project directory
+    (the hook payload's ``cwd``) — under a machine-wide install the hook
+    process may be launched from anywhere, and the payload, not the process
+    cwd, is what names the session's project.
+    """
     try:
-        return KBStore(discover_root())
-    except KBNotFoundError:
-        return None
+        target = hub_mod.capture_target(start)
+    except Exception:
+        return hub_mod.CaptureTarget(store=None)
+    if target.store is None and target.note:
+        # A guard refusal must be loud; quiet fallback routing is announced
+        # once per session by `capture banner`, not per hook invocation.
+        click.echo(f"vouch: {target.note}", err=True)
+    return target
+
+
+def _capture_store(start: Path | None = None) -> KBStore | None:
+    """The store half of :func:`_capture_target` for callers that don't
+    need the fallback origin (buffers, summaries — origin rides on the
+    captured *sources*, stamped in `capture answer`)."""
+    return _capture_target(start).store
+
+
+def _read_hook_payload() -> dict[str, Any]:
+    """Tolerantly read a hook's stdin JSON payload ({} when absent/invalid)."""
+    if sys.stdin.isatty():
+        return {}
+    raw = sys.stdin.read()
+    if not raw.strip():
+        return {}
+    try:
+        loaded = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def _hook_start(payload: dict[str, Any]) -> tuple[Path | None, bool]:
+    """Resolution start from a hook payload: (start, ok).
+
+    ``VOUCH_PROJECT_DIR`` keeps its documented precedence over the payload
+    (return (None, True) so the resolver reads the env). A payload whose
+    ``cwd`` names something that is not a directory returns ok=False:
+    capture must REFUSE rather than fall back to the process cwd and land
+    the session in whatever KB the hook process happened to start in; read
+    paths may still proceed with start=None (best effort beats silence).
+    """
+    if os.environ.get("VOUCH_PROJECT_DIR"):
+        return None, True
+    raw = payload.get("cwd")
+    if not isinstance(raw, str) or not raw.strip():
+        return None, True
+    p = Path(raw)
+    if p.is_dir():
+        return p, True
+    return None, False
 
 
 @capture.command("observe")
@@ -2035,13 +2784,18 @@ def capture_observe_cmd() -> None:
         )
         if obs is None:
             return
-        store = _capture_store()
+        start, ok = _hook_start(payload)
+        if not ok:
+            return
+        store = _capture_store(start)
         if store is None:
             return
+        tool_use_id = payload.get("tool_use_id")
         capture_mod.observe(
             store, session_id,
             tool=obs["tool"], summary=obs["summary"],
             files=obs.get("files"), cmd=obs.get("cmd"),
+            tool_use_id=str(tool_use_id) if tool_use_id else None,
         )
     except Exception:
         # a capture failure must never break the user's tool call.
@@ -2050,10 +2804,8 @@ def capture_observe_cmd() -> None:
 
 @capture.command("finalize")
 @click.option("--session-id", default=None, help="Session id (else read from stdin payload).")
-@click.option("--split/--no-split", "force", default=None,
-              help="Force LLM topical split or a single mechanical page (default: size-gated).")
-def capture_finalize_cmd(session_id: str | None, force: bool | None) -> None:
-    """Roll a session buffer into PENDING summary proposal(s) (SessionEnd hook payload on stdin)."""
+def capture_finalize_cmd(session_id: str | None) -> None:
+    """Roll a session buffer into a PENDING summary (SessionEnd hook payload on stdin)."""
     payload: dict[str, Any] = {}
     if not sys.stdin.isatty():
         raw = sys.stdin.read()
@@ -2067,36 +2819,60 @@ def capture_finalize_cmd(session_id: str | None, force: bool | None) -> None:
     sid = session_id or str(payload.get("session_id") or "")
     if not sid:
         return
-    store = _capture_store()
-    if store is None:
+    start, ok = _hook_start(payload)
+    if not ok:
+        return
+    target = _capture_target(start)
+    if target.store is None:
         return
     cwd = Path(str(payload.get("cwd") or ".")).resolve()
     transcript_raw = payload.get("transcript_path")
     transcript = Path(str(transcript_raw)) if transcript_raw else None
-    mode = "auto" if force is None else ("split" if force else "mechanical")
     result = capture_mod.finalize(
-        store, sid, cwd=cwd, project=cwd.name,
+        target.store, sid, cwd=cwd, project=cwd.name,
         generated_at=datetime.now(UTC).isoformat(),
-        transcript_path=transcript, mode=mode,
+        transcript_path=transcript,
+        origin=target.origin if target.fallback else None,
     )
     _emit_json(result)
 
 
-@capture.command("summarize")
-@click.argument("session_id")
-@click.option("--split/--no-split", "force", default=None,
-              help="Force split or mechanical (default: size-gated auto).")
-def capture_summarize_cmd(session_id: str, force: bool | None) -> None:
-    """Summarize a captured session into PENDING page proposals (size-gated)."""
-    store = _capture_store()
-    if store is None:
-        _emit_json({"error": "no KB found"})
+@capture.command("answer")
+@click.option("--session-id", default=None, help="Session id (else read from stdin payload).")
+def capture_answer_cmd(session_id: str | None) -> None:
+    """Save the latest Q&A as durable knowledge (Stop hook payload on stdin).
+
+    The Stop hook emits {session_id, transcript_path} on stdin; the session's
+    answer is ingested as a source and its receipt-backed claims are
+    auto-approved when review.auto_approve_on_receipt is on (the
+    starter-config default) or under trusted-agent, else left pending.
+    Always exits 0 so a capture failure can never break the turn.
+    """
+    if sys.stdin.isatty():
         return
-    mode = "auto" if force is None else ("split" if force else "mechanical")
-    result = session_split.summarize(
-        store, session_id, mode=mode, generated_at=datetime.now(UTC).isoformat(),
-    )
-    _emit_json(result)
+    try:
+        raw = sys.stdin.read()
+        payload = json.loads(raw) if raw.strip() else {}
+        if not isinstance(payload, dict):
+            return
+        sid = session_id or str(payload.get("session_id") or "")
+        transcript_raw = payload.get("transcript_path")
+        if not sid or not transcript_raw:
+            return
+        start, ok = _hook_start(payload)
+        if not ok:
+            return
+        target = _capture_target(start)
+        if target.store is None:
+            return
+        result = capture_mod.capture_answer(
+            target.store, sid, Path(str(transcript_raw)),
+            origin=target.origin if target.fallback else None,
+        )
+        _emit_json(result)
+    except Exception:
+        # a capture failure must never break the user's turn.
+        return
 
 
 @capture.command("finalize-all")
@@ -2104,16 +2880,28 @@ def capture_summarize_cmd(session_id: str, force: bool | None) -> None:
 @click.option("--max-age-seconds", type=float, default=3600.0, help="Max age in seconds.")
 def capture_finalize_all_cmd(session_id: str | None, max_age_seconds: float) -> None:
     """Finalize all capture buffers except current session (SessionStart cleanup)."""
-    sid = session_id or os.environ.get("VOUCH_SESSION_ID") or ""
+    payload = _read_hook_payload()
+    sid = (
+        session_id
+        or os.environ.get("VOUCH_SESSION_ID")
+        or str(payload.get("session_id") or "")
+    )
+    empty: dict[str, list[str]] = {
+        "finalized": [], "skipped_recent": [], "skipped_current": []
+    }
     if not sid:
         # No session ID provided; silently succeed
-        _emit_json({"finalized": [], "skipped_recent": [], "skipped_current": []})
+        _emit_json(empty)
         return
 
-    store = _capture_store()
+    start, ok = _hook_start(payload)
+    if not ok:
+        _emit_json(empty)
+        return
+    store = _capture_store(start)
     if store is None:
         # No KB; silently succeed
-        _emit_json({"finalized": [], "skipped_recent": [], "skipped_current": []})
+        _emit_json(empty)
         return
 
     result = capture_mod.finalize_all_except(
@@ -2162,9 +2950,11 @@ def capture_ingest_codex_cmd(
             raw = "" if sys.stdin.isatty() else sys.stdin.read()
             payload = json.loads(raw) if raw.strip() else {}
             if isinstance(payload, dict):
-                codex_rollout_mod.ingest_hook_payload(
-                    _capture_store(), payload, codex_home=codex_home
-                )
+                start, ok = _hook_start(payload)
+                if ok:
+                    codex_rollout_mod.ingest_hook_payload(
+                        _capture_store(start), payload, codex_home=codex_home
+                    )
         except Exception:
             # the hook contract is exit 0 — never surface an error here.
             pass
@@ -2194,9 +2984,30 @@ def capture_ingest_codex_cmd(
 @capture.command("banner")
 def capture_banner_cmd() -> None:
     """Emit a SessionStart nudge if captured summaries await review."""
-    store = _capture_store()
+    payload = _read_hook_payload()
+    start, _ok = _hook_start(payload)
+    target = _capture_target(start)
+    store = target.store
     if store is None:
+        # SessionStart stdout becomes session context — this is the one
+        # channel where the promised "run `vouch init`" hint is actually
+        # seen, so a machine-wide install isn't silent in KB-less folders.
+        click.echo(
+            "vouch: no project knowledge base in this folder — run "
+            "`vouch init` here to enable durable memory."
+        )
         return
+    if target.fallback:
+        # Sessions must never capture somewhere the user can't see: this
+        # line is the per-session announcement of the personal fallback,
+        # including that the store is shared with every other KB-less folder.
+        click.echo(
+            "vouch: no project KB in this folder — this session captures to "
+            f"your personal KB ({store.root}), one store shared by every "
+            "KB-less folder, so recall here can surface knowledge captured "
+            "elsewhere. Run `vouch init` here, then `vouch adopt`, to give "
+            "this folder its own KB."
+        )
     n = capture_mod.pending_count(store)
     if n:
         click.echo(
@@ -2208,13 +3019,37 @@ def capture_banner_cmd() -> None:
 @cli.command(name="recall")
 def recall_cmd() -> None:
     """Emit a digest of all approved knowledge for session-start injection."""
-    store = _capture_store()
+    # Read plane: like context-hook, the digest warns under the personal-role
+    # guard instead of going dark, and follows capture into the personal
+    # fallback (a KB-less folder that captures personally recalls personally).
+    # Resolution starts at the hook payload's cwd when given (machine-wide
+    # installs run this from anywhere).
+    payload = _read_hook_payload()
+    start, _ok = _hook_start(payload)
+    fallback = False
+    try:
+        store, warning, fallback = hub_mod.read_target(start)
+    except Exception:
+        store, warning = None, None
+    if warning:
+        click.echo(f"vouch: {warning}", err=True)
     if store is None:
         return
     cfg = recall_mod.load_config(store)
     if not cfg.enabled:
         return
-    digest = recall_mod.build_digest(store, max_chars=cfg.max_chars)
+    stats: dict[str, int] = {}
+    digest = recall_mod.build_digest(
+        store, max_chars=cfg.max_chars, stats=stats, personal=fallback
+    )
+    if stats.get("hidden"):
+        # stderr only — stdout is injected into the host turn and must stay
+        # clean. Scope filtering must never be silent.
+        click.echo(
+            f"vouch: digest hid {stats['hidden']} artifact(s) outside this "
+            "KB's viewer scope (see retrieval.scope / VOUCH_PROJECT)",
+            err=True,
+        )
     if digest.strip():
         click.echo(digest)
 
@@ -2364,14 +3199,20 @@ def search(
         )
         used = "embedding" if hits else used
     if not hits and backend in ("auto", "fts5"):
-        hits = index_db.search(store.kb_dir, q, limit=fetch_limit)
-        used = "fts5" if hits else used
+        try:
+            hits = index_db.search(store.kb_dir, q, limit=fetch_limit)
+            used = "fts5" if hits else used
+        except sqlite3.Error:
+            hits = []
     if not hits and backend in ("auto", "substring"):
         hits = store.search_substring(q, limit=fetch_limit)
         used = "substring"
     if backend == "hybrid":
         emb = index_db.search_semantic(store.kb_dir, q, limit=fetch_limit * 2)
-        fts = index_db.search(store.kb_dir, q, limit=fetch_limit * 2)
+        try:
+            fts = index_db.search(store.kb_dir, q, limit=fetch_limit * 2)
+        except sqlite3.Error:
+            fts = []
         hits = rrf_fuse(emb, fts, limit=fetch_limit)
         used = "hybrid"
 
@@ -2472,20 +3313,43 @@ def context(
 def context_hook() -> None:
     """Emit relevant KB context for a host UserPromptSubmit hook (reads stdin).
 
-    Wired by the claude-code adapter; not meant to be run by hand. Reads the
-    host's JSON hook payload on stdin, prints an additionalContext envelope,
-    and always exits 0 so it can never block a turn.
+    Wired by the claude-code and codex adapters (#425); not meant to be run
+    by hand. Both hosts emit the same {"prompt", "session_id", ...} shape on
+    stdin and expect the same additionalContext envelope back, so one
+    command serves both. Always exits 0 so it can never block a turn.
     """
     import sys
 
     from . import hooks
 
     stdin_text = sys.stdin.read()
-    store = _capture_store()
+    # Read plane: recall must survive the personal-role guard (warn, don't
+    # go dark) — a silent context-hook is indistinguishable from vouch
+    # being broken — and follows capture into the personal fallback so a
+    # KB-less folder recalls the knowledge it captures. Capture commands
+    # stay on the refusing _capture_target. Resolution starts at the
+    # payload's cwd when given: under a global install the hook process
+    # cwd is not guaranteed to be the project.
+    start: Path | None = None
+    try:
+        loaded = json.loads(stdin_text) if stdin_text.strip() else {}
+        if isinstance(loaded, dict):
+            start, _ok = _hook_start(loaded)
+    except json.JSONDecodeError:
+        start = None
+    fallback = False
+    try:
+        store, warning, fallback = hub_mod.read_target(start)
+    except Exception:
+        store, warning = None, None
+    if warning:
+        click.echo(f"vouch: {warning}", err=True)
     out = ""
     if store is not None:
         try:
-            out = hooks.build_claude_prompt_hook(store, stdin_text)
+            out = hooks.build_claude_prompt_hook(
+                store, stdin_text, personal=fallback
+            )
         except Exception:
             out = ""
     if out:
@@ -2496,12 +3360,17 @@ def context_hook() -> None:
 @click.argument("query")
 @click.option("--depth", default=3, show_default=True, type=int)
 @click.option("--max-chars", default=4000, show_default=True, type=int)
-def synthesize(query: str, depth: int, max_chars: int) -> None:
-    """Answer a query from approved claims only, with inline citations."""
+@click.option(
+    "--llm", "use_llm", is_flag=True,
+    help="Draft the answer with the configured compile.llm_cmd, grounded in "
+    "pages and approved claims (citations still verified mechanically).",
+)
+def synthesize(query: str, depth: int, max_chars: int, use_llm: bool) -> None:
+    """Answer a query from the KB, with inline citations."""
     store = _load_store()
     with _cli_errors():
         result = synth.synthesize(
-            store, query=query, depth=depth, max_chars=max_chars,
+            store, query=query, depth=depth, max_chars=max_chars, llm=use_llm,
         )
     _emit_json(result)
 
@@ -2862,15 +3731,12 @@ def detect_themes_cmd(
         )
 
 
-# --- hub sync ---------------------------------------------------------------
+# --- hub sync (link/push/pull with a VouchHub) ------------------------------
+# These subcommands attach to the `hub` group defined above (the machine
+# registry); together they form the full `vouch hub …` surface.
 
 
-@cli.group()
-def hub() -> None:
-    """Sync this KB's approved knowledge with a VouchHub."""
-
-
-def _hub_link_or_die(store) -> "hub_client.HubLink":
+def _hub_link_or_die(store) -> hub_client.HubLink:
     link = hub_client.load_link(store.kb_dir)
     if link is None:
         raise click.ClickException(
@@ -3410,13 +4276,28 @@ def serve(
 
     GET /health, /healthz, and /capabilities are always unauthenticated.
     """
-    _load_store()  # fail fast with a clear message if no .vouch/ KB is present
-
     if transport == "stdio":
+        # No fail-fast here: a user-scope (machine-wide) registration launches
+        # this from every folder, most of which have no KB — exiting 2 would
+        # show a permanently failed MCP server in every non-vouch project.
+        # server._store() re-resolves per tool call and surfaces a clean
+        # "run `vouch init`" error instead, and a mid-session `vouch init`
+        # works on the very next call.
+        try:
+            discover_root()
+        except KBNotFoundError as e:
+            click.echo(
+                f"vouch serve: no KB yet ({e}) — serving anyway; kb_* tools "
+                "will say so until `vouch init` is run in the project.",
+                err=True,
+            )
         from .server import run_stdio
 
         run_stdio()
         return
+
+    _load_store()  # fail fast with a clear message if no .vouch/ KB is present
+
     if transport == "jsonl":
         from .jsonl_server import run_jsonl
 
@@ -3674,6 +4555,117 @@ def pr_cache_show(repo: str, state: str, limit: int, as_json: bool, cache_dir: s
 # --- install-mcp: drop the right adapter files into a project tree --------
 
 
+def _offer_personal_fallback(personal_fallback: bool | None) -> None:
+    """The one-question opt-in after a --global install.
+
+    An already-registered personal KB is reported (and re-flagged only when
+    a flag was passed explicitly). Otherwise: an explicit flag decides; a
+    terminal gets ONE question (default no); non-interactive installs stay
+    off with a hint. Failures here never fail the install — the global
+    wiring already landed.
+    """
+    try:
+        entry = hub_mod.personal_entry()
+    except Exception:
+        entry = None
+    if entry is not None and (Path(entry.path) / ".vouch").is_dir():
+        root = Path(entry.path)
+        if personal_fallback is not None:
+            try:
+                hub_mod.set_personal_fallback(root, personal_fallback)
+            except (OSError, ValueError) as e:
+                click.echo(f"warning: could not update fallback flag: {e}", err=True)
+        state = "on" if hub_mod.personal_fallback_enabled(root) else "off"
+        click.echo(f"Personal KB: {entry.path} (fallback capture {state})")
+        return
+    wanted = personal_fallback
+    if wanted is None:
+        if sys.stdin.isatty():
+            wanted = click.confirm(
+                "Folders without a project KB currently don't capture at all. "
+                "Create a personal catch-all KB so they do? It is ONE store "
+                "shared by every KB-less folder — its knowledge is recalled in "
+                "all of them (`vouch adopt` moves a folder's share into a "
+                "project KB later)",
+                default=False,
+            )
+        else:
+            click.echo(
+                "Optional: `vouch hub init-personal --fallback` adds a "
+                "personal catch-all KB for folders without a project KB."
+            )
+            return
+    if not wanted:
+        return
+    try:
+        _init_personal_kb(True)
+    except Exception as e:
+        # The machine-wide wiring already landed and is what the command is
+        # for; a personal-KB failure is a warning with a retry, never a
+        # non-zero exit that reads as "the install failed".
+        message = e.message if isinstance(e, click.ClickException) else str(e)
+        click.echo(
+            f"warning: could not set up the personal KB: {message} — "
+            "the global install itself is complete; retry with "
+            "`vouch hub init-personal --fallback`.",
+            err=True,
+        )
+
+
+def _install_mcp_global(
+    host: str, *, tier: str, approve: bool, personal_fallback: bool | None = None
+) -> None:
+    """The --global path: user-level wiring once, no project target at all.
+
+    Deliberately no project-KB bootstrap — there is no project here. Each
+    session resolves its own project's `.vouch` (run `vouch init` once per
+    project); a folder without one no-ops with a hint — or, after the
+    one-question personal opt-in below, captures into the personal
+    catch-all KB instead.
+    """
+    try:
+        result, target = install_mod.install_global(host, tier=tier, approve=approve)
+    except install_mod.AdapterError as e:
+        raise click.ClickException(str(e)) from e
+
+    for f in result.written:
+        click.echo(f"  + {f}")
+    for f in result.appended:
+        click.echo(f"  ~ {f}  (appended fenced block)")
+    for f in result.merged:
+        click.echo(f"  ~ {f}  (merged into existing)")
+    for f in result.registered:
+        click.echo(f"  ⚑ {f}  (user scope — serves every project)")
+    for f in result.skipped:
+        click.echo(f"  · {f}  (already present)")
+    for f in result.failed:
+        click.echo(f"  ✗ {f}  (could not install — left unchanged)")
+    click.echo(
+        f"Done — {len(result.written)} written, "
+        f"{len(result.appended)} appended, {len(result.merged)} merged, "
+        f"{len(result.registered)} registered, "
+        f"{len(result.skipped)} skipped, {len(result.failed)} failed "
+        f"under {target}"
+    )
+    click.echo(
+        "Global install: every Claude session now captures + recalls into "
+        "the nearest project .vouch/. Run `vouch init` once in each project "
+        "you want vouch in; projects with an existing per-project install "
+        "keep working (duplicate hooks collapse; capture dedups by event)."
+    )
+    if result.registered:
+        click.echo(
+            "Reload your editor window so it picks up the vouch MCP server "
+            "(VS Code: Developer: Reload Window)."
+        )
+    if result.failed:
+        raise click.ClickException(
+            f"{len(result.failed)} file(s) could not be installed: "
+            + ", ".join(result.failed)
+        )
+    _offer_personal_fallback(personal_fallback)
+
+
 @cli.command(name="install-mcp", context_settings={"ignore_unknown_options": False})
 @click.argument("host", required=False)
 @click.option("--list", "list_hosts", is_flag=True, help="List available hosts and exit.")
@@ -3700,15 +4692,62 @@ def pr_cache_show(repo: str, state: str, limit: int, as_json: bool, cache_dir: s
     "T2 = +CLAUDE.md/AGENTS.md, T3 = +slash commands, "
     "T4 = +host hooks/settings. Tiers stack.",
 )
+@click.option(
+    "--init/--no-init",
+    "auto_init",
+    default=True,
+    show_default=True,
+    help="Initialise a .vouch/ KB at the target when none is discoverable, "
+    "so install-mcp is a one-command setup.",
+)
+@click.option(
+    "--approve/--no-approve",
+    "approve",
+    default=True,
+    show_default=True,
+    help="Register vouch as a local-scope MCP server in ~/.claude.json so the "
+    "Claude Code extension loads it without a manual approval it never prompts "
+    "for. --no-approve leaves only the project .mcp.json (needs manual approval).",
+)
+@click.option(
+    "--global",
+    "global_install",
+    is_flag=True,
+    default=False,
+    help="Install once for the whole machine: user-level hooks/commands "
+    "(e.g. ~/.claude/) + a user-scope MCP server. Every session in every "
+    "folder then captures + recalls into that folder's own project KB "
+    "(run `vouch init` once per project). Coexists safely with per-project "
+    "installs.",
+)
+@click.option(
+    "--personal-fallback/--no-personal-fallback",
+    "personal_fallback",
+    default=None,
+    help="With --global: also create the personal catch-all KB so folders "
+    "without a project KB capture into it (adopt into a project later with "
+    "`vouch adopt`). Without either flag: one question on a terminal, "
+    "otherwise off.",
+)
 def install_mcp(
-    host: str | None, list_hosts: bool, path: str, target_alias: str | None, tier: str
+    host: str | None,
+    list_hosts: bool,
+    path: str,
+    target_alias: str | None,
+    tier: str,
+    auto_init: bool,
+    approve: bool,
+    global_install: bool,
+    personal_fallback: bool | None,
 ) -> None:
     """Install vouch into HOST (claude-code, cursor, …) idempotently.
 
     \b
     Examples:
       vouch install-mcp --list              # show known hosts
-      vouch install-mcp claude-code         # write T1..T4 into cwd
+      vouch install-mcp claude-code         # one command: init .vouch/ if
+                                            # missing + write T1..T4 into cwd
+      vouch install-mcp claude-code --global  # once per machine, all projects
       vouch install-mcp cursor --tier T2    # stop at AGENTS.md
       vouch install-mcp claude-desktop      # drop a paste-ready config
       vouch install-mcp windsurf --path /abs/path/to/project
@@ -3730,9 +4769,71 @@ def install_mcp(
             "missing HOST; run `vouch install-mcp --list` to see the catalogue"
         )
 
+    if global_install:
+        if target_alias is not None or path != ".":
+            raise click.UsageError(
+                "--global is machine-wide; --path/--target do not apply "
+                "(each project's KB comes from `vouch init` in that project)"
+            )
+        _install_mcp_global(
+            host, tier=tier, approve=approve, personal_fallback=personal_fallback
+        )
+        return
+
+    if personal_fallback is not None:
+        raise click.UsageError(
+            "--personal-fallback/--no-personal-fallback only applies with "
+            "--global (per-project installs capture into the project KB)"
+        )
+
     target = Path(target_alias or path).resolve()
+    if host in hosts and install_mod.wants_kb_bootstrap(host):
+        # a wired host without a KB is worse than a failed install: every
+        # installed hook is `|| true` (silent no-op forever) and `vouch serve`
+        # exits 2, with nothing left to tell the user why. unknown hosts skip
+        # this so the AdapterError below stays the first and only error;
+        # staging-dir hosts (manifest `kb_bootstrap: false`) skip it because
+        # their target is not project wiring. the probe ignores VOUCH_KB_PATH:
+        # the question is what this tree resolves to, not this shell.
+        if os.environ.get("VOUCH_KB_PATH"):
+            click.echo(
+                "note: VOUCH_KB_PATH is set — it takes precedence over the "
+                "project KB wherever that variable is exported.",
+                err=True,
+            )
+        try:
+            kb_root = discover_root(target, respect_env=False)
+        except KBNotFoundError:
+            if auto_init:
+                try:
+                    store, seed, _tmpl = _bootstrap_kb(target)
+                except Exception as e:
+                    # cli boundary: a half-done setup must read as an error,
+                    # not a traceback. remove the partial kb (it did not exist
+                    # before this call — discover_root just said so), or a
+                    # rerun would find it and skip bootstrap forever.
+                    shutil.rmtree(target / ".vouch", ignore_errors=True)
+                    raise click.ClickException(
+                        f"could not initialise a KB at {target}: {e} — fix the "
+                        "cause and rerun, run `vouch init` yourself, or pass "
+                        "--no-init"
+                    ) from e
+                click.echo(f"No .vouch/ found — initialised KB at {store.kb_dir}")
+                if seed.created_anything:
+                    click.echo(f"Seeded starter claim: {seed.claim_id}")
+            else:
+                click.echo(
+                    f"warning: no .vouch/ at or above {target} — unless "
+                    "VOUCH_KB_PATH is exported at runtime, the installed hooks "
+                    "and MCP server will do nothing until you run `vouch init` "
+                    "there.",
+                    err=True,
+                )
+        else:
+            if kb_root != target:
+                click.echo(f"Using existing KB at {kb_root / '.vouch'}")
     try:
-        result = install_mod.install(host, target=target, tier=tier)
+        result = install_mod.install(host, target=target, tier=tier, approve=approve)
     except install_mod.AdapterError as e:
         raise click.ClickException(str(e)) from e
 
@@ -3742,14 +4843,39 @@ def install_mcp(
         click.echo(f"  ~ {f}  (appended fenced block)")
     for f in result.merged:
         click.echo(f"  ~ {f}  (merged into existing)")
+    for f in result.registered:
+        click.echo(f"  ⚑ {f}  (registered in ~/.claude.json)")
     for f in result.skipped:
         click.echo(f"  · {f}  (already present)")
+    for f in result.failed:
+        click.echo(f"  ✗ {f}  (could not install — left unchanged)")
     click.echo(
         f"Done — {len(result.written)} written, "
         f"{len(result.appended)} appended, {len(result.merged)} merged, "
-        f"{len(result.skipped)} skipped "
+        f"{len(result.registered)} registered, "
+        f"{len(result.skipped)} skipped, {len(result.failed)} failed "
         f"under {target}"
     )
+    if result.registered:
+        # the extension reads MCP servers once, at window start — a running
+        # window won't see the new registration until it reloads.
+        click.echo(
+            "Reload your editor window so it picks up the vouch MCP server "
+            "(VS Code: Developer: Reload Window)."
+        )
+    elif approve and host == "claude-code" and not result.failed:
+        # already registered on a prior run — still remind, harmlessly.
+        click.echo(
+            "vouch is registered for Claude Code. If the kb_* tools aren't "
+            "visible, reload your editor window."
+        )
+    if result.failed:
+        # a failed install is not a no-op: exit non-zero so scripts (and the
+        # user) notice vouch was NOT wired into these files.
+        raise click.ClickException(
+            f"{len(result.failed)} file(s) could not be installed: "
+            f"{', '.join(result.failed)}"
+        )
 
 
 # --- sync: bidirectional vouch <-> Obsidian-style vault -------------------
@@ -3879,6 +5005,71 @@ def _resolve_auth_token(auth: str | None) -> str | None:
             )
         return env_token
     return auth
+
+
+@cli.command(name="console")
+@click.option(
+    "--bind",
+    "bind",
+    default="127.0.0.1:5173",
+    show_default=True,
+    help="host:port to bind. A non-loopback host (e.g. 0.0.0.0) also "
+    "requires --allow-remote so the proxy bridge isn't exposed openly.",
+)
+@click.option(
+    "--allow-remote",
+    is_flag=True,
+    help="Drop the loopback guard on the /proxy bridge. Only for a deployment "
+    "behind its own auth — a same-origin page could otherwise drive a "
+    "local reviewer's backends.",
+)
+@click.option(
+    "--open-browser/--no-open-browser",
+    default=True,
+    show_default=True,
+    help="Open the browser to the console on startup.",
+)
+def console(bind: str, allow_remote: bool, open_browser: bool) -> None:
+    """Serve the vouch web console (the React review UI) locally.
+
+    Ships the built SPA and a same-origin /proxy bridge to your
+    `vouch serve --transport http` backends — one `pip install 'vouch-kb[web]'`,
+    no node. Add a backend from the connect dialog in the UI.
+    """
+    from .web import _require_console_deps
+
+    try:
+        _require_console_deps()
+    except ImportError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    from .web.console import ConsoleError, resolve_console_dir, serve_console
+
+    host, sep, port_raw = bind.partition(":")
+    if not sep:
+        raise click.ClickException(f"invalid --bind {bind!r}; expected host:port")
+    try:
+        port = int(port_raw)
+    except ValueError as exc:
+        raise click.ClickException(f"invalid port in --bind {bind!r}") from exc
+    host = host or "127.0.0.1"
+    if host not in ("127.0.0.1", "::1", "localhost") and not allow_remote:
+        raise click.ClickException(
+            f"--bind {bind} is non-loopback; pass --allow-remote to expose the "
+            "proxy bridge (only behind your own auth)."
+        )
+
+    url = f"http://{host}:{port}/"
+    if open_browser and resolve_console_dir() is not None:
+        import threading
+        import webbrowser
+
+        threading.Timer(0.6, lambda: webbrowser.open(url)).start()
+    click.echo(f"vouch console → {url}")
+    try:
+        serve_console(host=host, port=port, allow_remote=allow_remote)
+    except ConsoleError as exc:
+        raise click.ClickException(str(exc)) from exc
 
 
 @cli.command(name="review-ui")

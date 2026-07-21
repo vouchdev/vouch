@@ -1,0 +1,76 @@
+name: comment-command
+# slash-command trigger: the owner comments `/auto-merge` on a PR to arm
+# auto-merge, as an alternative to applying the auto-merge label. review is done
+# by CodeRabbit + ci; this only arms native auto-merge for non-core PRs.
+on:
+  issue_comment:
+    types: [created]
+permissions: {}
+concurrency:
+  group: comment-command-${{ github.event.issue.number }}
+  cancel-in-progress: false
+jobs:
+  parse:
+    # only PR comments, only the trusted owner, only the /auto-merge command.
+    if: >
+      github.event.issue.pull_request &&
+      github.event.comment.author_association == 'OWNER' &&
+      github.event.comment.user.login == 'plind-junior'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    outputs:
+      is_command: ${{ steps.cmd.outputs.is_command }}
+      klass: ${{ steps.meta.outputs.klass }}
+    steps:
+      - name: detect /auto-merge
+        id: cmd
+        env:
+          BODY: ${{ github.event.comment.body }}
+        run: |
+          if printf '%s' "$BODY" | grep -Eiq '(^|[[:space:]])/auto-merge([[:space:]]|$)'; then
+            echo "is_command=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_command=false" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        if: steps.cmd.outputs.is_command == 'true'
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        if: steps.cmd.outputs.is_command == 'true'
+        with:
+          python-version: "3.12"
+      - name: classify and mark authorized
+        id: meta
+        if: steps.cmd.outputs.is_command == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.issue.number }}
+        run: |
+          gh pr view "$PR" --repo "$REPO" --json files --jq '.files[].path' > changed.txt
+          klass="$(PYTHONPATH=src python -m vouch.pr_bot classify --files-file changed.txt --print-klass)"
+          # mark authorized (visible, and enables deauthorize-on-push). a label
+          # added via GITHUB_TOKEN does not re-trigger auto-merge.yml (GitHub's
+          # token-recursion guard), so this does not double-arm.
+          gh pr edit "$PR" --repo "$REPO" --add-label auto-merge || true
+          echo "klass=$klass" >> "$GITHUB_OUTPUT"
+
+  arm:
+    needs: parse
+    # core PRs are never armed — CODEOWNERS requires the owner's approval.
+    if: needs.parse.outputs.is_command == 'true' && needs.parse.outputs.klass != 'core'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: arm native auto-merge (non-core)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.issue.number }}
+        run: |
+          gh pr merge "$PR" --repo "$REPO" --auto --squash

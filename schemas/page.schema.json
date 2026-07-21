@@ -1,5 +1,40 @@
 {
   "$defs": {
+    "ArtifactScope": {
+      "description": "Structured scope: visibility tier plus optional project/agent binding.",
+      "properties": {
+        "agent": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Agent"
+        },
+        "project": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Project"
+        },
+        "visibility": {
+          "$ref": "#/$defs/Visibility",
+          "default": "project"
+        }
+      },
+      "title": "ArtifactScope",
+      "type": "object"
+    },
     "PageStatus": {
       "enum": [
         "draft",
@@ -8,6 +43,17 @@
         "archived"
       ],
       "title": "PageStatus",
+      "type": "string"
+    },
+    "Visibility": {
+      "description": "How widely an artifact is visible within retrieval surfaces.",
+      "enum": [
+        "private",
+        "project",
+        "team",
+        "public"
+      ],
+      "title": "Visibility",
       "type": "string"
     }
   },
@@ -47,6 +93,9 @@
       "additionalProperties": true,
       "title": "Metadata",
       "type": "object"
+    },
+    "scope": {
+      "$ref": "#/$defs/ArtifactScope"
     },
     "sources": {
       "items": {

@@ -1,4 +1,4 @@
-import { Activity, BadgeCheck, FileClock, Inbox, Library, MessageSquare, Plug, SunMoon } from 'lucide-react'
+import { Activity, BadgeCheck, FileClock, Inbox, LayoutDashboard, Library, MessageSquare, Plug, SunMoon } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { ConnectDialog } from '../connection/ConnectDialog'
@@ -9,6 +9,7 @@ import type { Proposal, SessionEntry } from '../lib/types'
 const THEME_KEY = 'vouch-ui.theme'
 
 const NAV = [
+  { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/chat', label: 'Chat', icon: MessageSquare },
   { to: '/review', label: 'Review', icon: FileClock },
   { to: '/pending', label: 'Pending', icon: Inbox },
@@ -19,10 +20,11 @@ const NAV = [
 
 const TITLES: Record<string, string> = {
   '/chat': 'Chat',
-  '/review': 'Review — sessions to summarize',
+  '/review': 'Review — session transcripts & summaries',
   '/pending': 'Pending review',
   '/claims': 'Approved claims',
   '/browse': 'Knowledge',
+  '/dashboard': 'Dashboard — KB activity',
   '/stats': 'Stats & health',
 }
 

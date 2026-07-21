@@ -1,0 +1,72 @@
+name: coderabbit-gate
+# CodeRabbit is the required review gate. this workflow turns CodeRabbit's review
+# verdict into the `coderabbit-approved` commit status the branch ruleset
+# requires (so native auto-merge waits for its approval), and auto-closes a
+# contributor pr CodeRabbit has requested changes on 3 times. it reads only
+# review metadata via the api and checks out the trusted base ref — no untrusted
+# head code is ever checked out or run.
+on:
+  pull_request_review:
+    types: [submitted, dismissed, edited]
+  pull_request_target: # zizmor: ignore[dangerous-triggers] no untrusted code runs here; only review metadata is read, a commit status is set, and a stale pr may be closed.
+    types: [opened, reopened, synchronize]
+permissions: {}
+# a newer event for the same pr supersedes an in-flight run (latest verdict wins).
+concurrency:
+  group: coderabbit-gate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read       # checkout base ref + run pr_bot
+      statuses: write       # publish the coderabbit-approved commit status
+      pull-requests: write  # comment + close after 3 rejected rounds
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - name: evaluate coderabbit verdict
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          gh api "repos/$REPO/pulls/$PR/reviews?per_page=100" > reviews.json
+          PYTHONPATH=src python -m vouch.pr_bot coderabbit-gate \
+            --reviews-file reviews.json --head-sha "$HEAD_SHA" --author "$AUTHOR" \
+            >> "$GITHUB_OUTPUT"
+      - name: publish coderabbit-approved status
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          STATE: ${{ steps.gate.outputs.state }}
+          VERDICT: ${{ steps.gate.outputs.verdict }}
+        run: |
+          case "$VERDICT" in
+            approved) desc="CodeRabbit approved this commit." ;;
+            changes)  desc="CodeRabbit requested changes — resolve them to merge." ;;
+            *)        desc="Waiting for CodeRabbit to review this commit." ;;
+          esac
+          gh api --method POST "repos/$REPO/statuses/$HEAD_SHA" \
+            -f state="$STATE" -f context="coderabbit-approved" -f description="$desc"
+      - name: auto-close after 3 rejected rounds
+        if: steps.gate.outputs.close == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          STRIKES: ${{ steps.gate.outputs.strikes }}
+        run: |
+          gh pr merge "$PR" --repo "$REPO" --disable-auto || true
+          gh pr edit "$PR" --repo "$REPO" --remove-label auto-merge || true
+          gh pr close "$PR" --repo "$REPO" --comment \
+            "CodeRabbit requested changes on this pr $STRIKES times without an approval, so it is being closed automatically. the feedback still stands — address it and reopen this pr (or open a fresh one) and it will be reviewed again."

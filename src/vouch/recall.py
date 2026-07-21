@@ -17,6 +17,7 @@ from dataclasses import dataclass
 import yaml
 
 from .context import _RETRACTED_CLAIM_STATUSES
+from .scoping import ViewerContext, is_visible, viewer_from
 from .storage import KBStore
 
 DEFAULT_ENABLED = True
@@ -49,22 +50,51 @@ def load_config(store: KBStore) -> RecallConfig:
     )
 
 
-def build_digest(store: KBStore, *, max_chars: int = DEFAULT_MAX_CHARS) -> str:
+def build_digest(
+    store: KBStore,
+    *,
+    max_chars: int = DEFAULT_MAX_CHARS,
+    viewer: ViewerContext | None = None,
+    stats: dict[str, int] | None = None,
+    personal: bool = False,
+) -> str:
     """Return an injectable digest of every live approved claim + page title.
 
     Empty string when the KB has no approved knowledge (nothing to inject).
+    Viewer-filtered like every other retrieval surface: the digest used to
+    inject every live claim regardless of scope, which is exactly the
+    cross-project leak the scope model exists to prevent. The default viewer
+    reads the KB as its own project (see ``scoping.viewer_from``).
+
+    ``stats``, when given, receives ``{"hidden": n}`` — how many live
+    artifacts the scope filter dropped — so CLI callers can say so on
+    stderr instead of filtering silently.
+
+    ``personal`` labels the digest as the machine-wide personal catch-all
+    rather than "this repo". A KB-less folder's session reads the personal
+    KB *whole* — that is what a catch-all is — so the header must not claim
+    the knowledge belongs to the current folder.
     """
-    claims = [
-        c for c in store.list_claims()
-        if c.status not in _RETRACTED_CLAIM_STATUSES
-    ]
-    pages = store.list_pages()
+    if viewer is None:
+        viewer = viewer_from(config_path=store.config_path)
+    live = [c for c in store.list_claims() if c.status not in _RETRACTED_CLAIM_STATUSES]
+    all_pages = store.list_pages()
+    claims = [c for c in live if is_visible(c.scope, viewer)]
+    pages = [p for p in all_pages if is_visible(p.scope, viewer)]
+    if stats is not None:
+        stats["hidden"] = (len(live) - len(claims)) + (len(all_pages) - len(pages))
     if not claims and not pages:
         return ""
 
+    whose = (
+        "in your machine-wide personal vouch KB (this folder has no project "
+        "KB; knowledge here is shared across every KB-less folder you work in)"
+        if personal
+        else "for this repo"
+    )
     lines: list[str] = [
         _OPEN_TAG,
-        f"# approved KB knowledge for this repo — {len(claims)} claim(s), "
+        f"# approved KB knowledge {whose} — {len(claims)} claim(s), "
         f"{len(pages)} page(s). reviewed, cited, durable. use kb_read_page / "
         "kb_search for detail; kb_propose_* (human-approved) to add more.",
     ]

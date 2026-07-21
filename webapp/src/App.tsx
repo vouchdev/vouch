@@ -6,6 +6,7 @@ import { ConnectionProvider } from './connection/ConnectionContext'
 import { BrowseView } from './views/BrowseView'
 import { ChatView } from './views/ChatView'
 import { ClaimsView } from './views/ClaimsView'
+import { DashboardView } from './views/DashboardView'
 import { PendingView } from './views/PendingView'
 import { ReviewView } from './views/ReviewView'
 import { StatsView } from './views/StatsView'
@@ -18,12 +19,13 @@ export default function App() {
           <BrowserRouter>
             <Routes>
               <Route element={<Shell />}>
-                <Route index element={<Navigate to="/chat" replace />} />
+                <Route index element={<Navigate to="/dashboard" replace />} />
                 <Route path="/chat" element={<ChatView />} />
                 <Route path="/review" element={<ReviewView />} />
                 <Route path="/pending" element={<PendingView />} />
                 <Route path="/claims" element={<ClaimsView />} />
                 <Route path="/browse/:kind?/:id?" element={<BrowseView />} />
+                <Route path="/dashboard" element={<DashboardView />} />
                 <Route path="/stats" element={<StatsView />} />
               </Route>
             </Routes>

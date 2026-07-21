@@ -29,7 +29,7 @@ import yaml
 
 from . import audit
 from .models import Claim, Entity, Evidence, Proposal, Relation, Session, Source
-from .storage import _deserialize_page, read_or_create_instance_id, sha256_hex
+from .storage import KBStore, _deserialize_page, read_or_create_instance_id, sha256_hex
 
 MANIFEST_NAME = "manifest.json"
 SPEC_VERSION = "vouch-bundle-0.1"
@@ -97,13 +97,39 @@ def _iter_export_files(kb_dir: Path, exclude: tuple[str, ...] = ()):
         yield cfg.relative_to(kb_dir), cfg
 
 
+def _strip_identity(body: bytes) -> bytes:
+    """config.yaml bytes without the `kb:` identity block.
+
+    Identity is per-KB and travels in the manifest's own `kb` field; the
+    config.yaml inside a bundle transfers *settings*. Without this, every
+    import would flag config.yaml as a conflict (ids always differ), and an
+    overwrite-import would re-identify the destination KB as the source.
+    """
+    try:
+        loaded = yaml.safe_load(body.decode("utf-8"))
+    except (UnicodeDecodeError, yaml.YAMLError):
+        return body
+    if not isinstance(loaded, dict) or "kb" not in loaded:
+        return body
+    stripped = dict(loaded)
+    stripped.pop("kb", None)
+    return _yaml_dump(stripped).encode("utf-8")
+
+
+def _export_file_bytes(rel: Path, abs_path: Path) -> bytes:
+    data = abs_path.read_bytes()
+    if rel.as_posix() == "config.yaml":
+        return _strip_identity(data)
+    return data
+
+
 def build_manifest(
     kb_dir: Path, exclude: tuple[str, ...] = (), *, kb_id: str | None = None
 ) -> dict[str, Any]:
     exclude = _check_exclude(exclude)
     files: list[dict[str, Any]] = []
     for rel, abs_path in _iter_export_files(kb_dir, exclude):
-        data = abs_path.read_bytes()
+        data = _export_file_bytes(rel, abs_path)
         files.append(
             {
                 # tarfile member names use POSIX `/` on every platform; the
@@ -119,10 +145,15 @@ def build_manifest(
     h = hashlib.sha256()
     for f in sorted(files, key=lambda f: f["path"]):
         h.update(f["sha256"].encode())
+    # Origin-KB identity (config.yaml `kb:`): keeps exported artifacts
+    # attributable to the KB that vouched for them. Absent for
+    # pre-identity KBs; additive, so older importers ignore it.
+    identity = KBStore(kb_dir.parent).identity()
     return {
         "spec": SPEC_VERSION,
         "bundle_id": h.hexdigest(),
         "kb_id": kb_id,
+        "kb": {"id": identity[0], "name": identity[1]} if identity else None,
         "files": files,
         "counts": {
             sub: sum(1 for f in files if f["path"].startswith(f"{sub}/")) for sub in EXPORT_SUBDIRS
@@ -134,6 +165,23 @@ def build_manifest(
             "has_audit_log": False,
         },
     }
+
+
+def fenced_bundle_path(store: KBStore, raw: str) -> Path:
+    """A client-supplied bundle/export path, confined to the project root on
+    remote surfaces.
+
+    Export writes to the path and import reads from it, so an unfenced path on
+    /rpc or /mcp is a remote arbitrary-file clobber (export) or read (import).
+    On remote trust the path is resolved and contained to the project root;
+    local CLI and stdio are unfenced by design, since a human choosing where to
+    write a backup is not a threat.
+    """
+    from . import trust
+
+    if trust.current().remote:
+        return store.resolve_under_root(raw)
+    return Path(raw)
 
 
 def export(
@@ -148,7 +196,12 @@ def export(
     dest.parent.mkdir(parents=True, exist_ok=True)
     with tarfile.open(dest, "w:gz") as tar:
         for rel, abs_path in _iter_export_files(kb_dir, exclude):
-            tar.add(abs_path, arcname=rel.as_posix())
+            # addfile from bytes (not tar.add) so config.yaml lands
+            # identity-stripped, matching its manifest hash.
+            data = _export_file_bytes(rel, abs_path)
+            member = tarfile.TarInfo(rel.as_posix())
+            member.size = len(data)
+            tar.addfile(member, io.BytesIO(data))
         manifest_bytes = json.dumps(manifest, indent=2, sort_keys=True).encode()
         info = tarfile.TarInfo(MANIFEST_NAME)
         info.size = len(manifest_bytes)
@@ -535,6 +588,76 @@ def _check_source_content_address(path: str, body: bytes, issues: list[str]) -> 
             )
 
 
+def _config_settings(body: bytes) -> dict[str, Any] | None:
+    """Parsed config mapping minus the `kb:` identity block; None if unparseable."""
+    try:
+        loaded = yaml.safe_load(body.decode("utf-8"))
+    except (UnicodeDecodeError, yaml.YAMLError):
+        return None
+    if not isinstance(loaded, dict):
+        return None
+    settings = dict(loaded)
+    settings.pop("kb", None)
+    return settings
+
+
+def _dest_matches(
+    path: str,
+    dest_bytes: bytes,
+    expected_sha: str | None,
+    bundle_bytes: bytes | None = None,
+) -> bool:
+    """Does the destination file already carry the bundled content?
+
+    config.yaml is compared modulo the `kb:` identity block, structurally on
+    BOTH sides when the bundle member's bytes are in hand — so two KBs with
+    the same settings but their own identities (or their own comments /
+    formatting / a pre-identity exporter) read as identical, not
+    conflicting, and an overwrite-import converges instead of reporting the
+    same conflict forever.
+    """
+    if sha256_hex(dest_bytes) == expected_sha:
+        return True
+    if path != "config.yaml":
+        return False
+    if sha256_hex(_strip_identity(dest_bytes)) == expected_sha:
+        return True
+    if bundle_bytes is None:
+        return False
+    dest_settings = _config_settings(dest_bytes)
+    bundle_settings = _config_settings(bundle_bytes)
+    return dest_settings is not None and dest_settings == bundle_settings
+
+
+def _merged_config_preserving_identity(dest: Path, body: bytes) -> bytes | None:
+    """Bundle config bytes with the destination KB's own identity kept.
+
+    A bundle import moves settings and artifacts, never identity: the
+    destination's `kb:` block survives, and a (legacy) bundle-borne `kb:`
+    block is dropped rather than adopted. Returns None when the destination
+    config exists but cannot be parsed — its identity may be latent in the
+    bytes, so the caller must skip the write and leave the file for the
+    user to repair rather than overwrite it.
+    """
+    try:
+        incoming = yaml.safe_load(body.decode("utf-8"))
+    except (UnicodeDecodeError, yaml.YAMLError):
+        return body
+    if not isinstance(incoming, dict):
+        return body
+    incoming.pop("kb", None)
+    if dest.exists():
+        try:
+            existing = yaml.safe_load(dest.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, yaml.YAMLError):
+            return None
+        if existing is not None and not isinstance(existing, dict):
+            return None
+        if isinstance(existing, dict) and isinstance(existing.get("kb"), dict):
+            incoming["kb"] = existing["kb"]
+    return _yaml_dump(incoming).encode("utf-8")
+
+
 def import_check(kb_dir: Path, bundle_path: Path) -> ImportCheckResult:
     """Diff a bundle against the destination KB without writing anything."""
     new_files: list[str] = []
@@ -554,18 +677,18 @@ def import_check(kb_dir: Path, bundle_path: Path) -> ImportCheckResult:
         issues.extend(_manifest_safety_issues(manifest))
         recorded = {f["path"]: f for f in manifest["files"]}
         manifest_paths = set(recorded)
-        for f in manifest["files"]:
-            try:
-                dest = _safe_member_path(kb_dir, f["path"])
-            except RuntimeError as exc:
-                issues.append(str(exc))
-                continue
-            if not dest.exists():
-                new_files.append(f["path"])
-            elif sha256_hex(dest.read_bytes()) == f.get("sha256"):
-                identical.append(f["path"])
-            else:
-                conflicts.append(f["path"])
+        # decided/ holds approved decisions; import writes members straight to
+        # disk, so a bundle carrying decided/ would land approved claims/pages
+        # without a receiving-side proposal — a write past the review gate.
+        # Refuse until gated import exists (roadmap 8.2). Scanned directly from
+        # the manifest rather than via a self-reported safety flag, which a
+        # hand-crafted bundle could lie about.
+        decided_members = sorted(p for p in manifest_paths if p.startswith("decided/"))
+        if decided_members:
+            issues.append(
+                "bundle carries decided/ members that cannot be imported past "
+                f"the review gate: {decided_members[0]}"
+            )
         for member in tar.getmembers():
             if member.name == MANIFEST_NAME or not member.isfile():
                 continue
@@ -589,6 +712,23 @@ def import_check(kb_dir: Path, bundle_path: Path) -> ImportCheckResult:
                 tar.getmember(path)
             except KeyError:
                 issues.append(f"manifest lists missing file: {path}")
+        # Classify after extraction so config.yaml can be compared
+        # structurally against the actual member bytes (see _dest_matches).
+        for f in manifest["files"]:
+            try:
+                dest = _safe_member_path(kb_dir, f["path"])
+            except RuntimeError as exc:
+                issues.append(str(exc))
+                continue
+            if not dest.exists():
+                new_files.append(f["path"])
+            elif _dest_matches(
+                f["path"], dest.read_bytes(), f.get("sha256"),
+                bundle_bytes=incoming.get(f["path"]),
+            ):
+                identical.append(f["path"])
+            else:
+                conflicts.append(f["path"])
     # Graph-integrity pass: the storage layer's put_relation / put_page
     # validators run on direct writes, but import_apply writes member
     # bytes straight to disk, so the only place to enforce referential
@@ -641,14 +781,6 @@ def import_apply(
                 continue
             dest = _safe_member_path(kb_dir, member.name)
             expected_sha = recorded[member.name].get("sha256")
-            if (
-                dest.exists()
-                and on_conflict == "skip"
-                and sha256_hex(dest.read_bytes()) != expected_sha
-            ):
-                skipped.append(member.name)
-                continue
-            dest.parent.mkdir(parents=True, exist_ok=True)
             body = tar.extractfile(member).read()  # type: ignore[union-attr]
             # Re-verify the manifest sha256 at write time as defence in
             # depth against a TOCTOU between import_check (which already
@@ -661,11 +793,35 @@ def import_apply(
                 raise RuntimeError(
                     f"refusing to import: hash mismatch at write time: {member.name}"
                 )
+            if dest.exists():
+                if _dest_matches(
+                    member.name, dest.read_bytes(), expected_sha, bundle_bytes=body
+                ):
+                    # Already carries this content (reported by import_check
+                    # as identical). Never rewrite: for config.yaml a
+                    # rewrite would normalize away the destination's
+                    # comments and formatting for zero content gain.
+                    continue
+                if on_conflict == "skip":
+                    skipped.append(member.name)
+                    continue
             val_issues: list[str] = []
             _validate_content(member.name, body, val_issues)
             if val_issues:
                 skipped.append(member.name)
                 continue
+            if member.name == "config.yaml":
+                # after hash verification, before write: settings move,
+                # identity never does.
+                merged = _merged_config_preserving_identity(dest, body)
+                if merged is None:
+                    # dest config exists but is unparseable — its identity
+                    # may be latent in the bytes; leave it for the user to
+                    # repair instead of overwriting.
+                    skipped.append(member.name)
+                    continue
+                body = merged
+            dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_bytes(body)
             written.append(member.name)
     result = {
@@ -859,5 +1015,5 @@ def import_as_proposals(
     }
 
 
-def _yaml_dump(obj: Any) -> str:  # pragma: no cover — kept for symmetry
+def _yaml_dump(obj: Any) -> str:
     return yaml.safe_dump(obj, sort_keys=False, allow_unicode=True)

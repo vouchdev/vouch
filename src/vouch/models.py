@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 
 def utcnow() -> datetime:
@@ -209,6 +209,14 @@ class Evidence(BaseModel):
     locator: str = Field(description="span ref: 'L10-L20', 't=00:14:23', '#section-3'")
     quote: str | None = None
     hash: str | None = None
+    # The byte-offset receipt: the half-open range [byte_start, byte_end) into
+    # the cited source's raw bytes that `quote` was taken from. When both are
+    # set alongside `quote`, the citation is mechanically verifiable — the
+    # quoted span is in the source at those offsets or it is not, checked by
+    # string comparison with no judge (see receipts.verify_receipt). Absent on
+    # legacy/free-text citations, which carry no receipt.
+    byte_start: int | None = Field(default=None, ge=0)
+    byte_end: int | None = Field(default=None, ge=0)
     created_at: datetime = Field(default_factory=utcnow)
 
 
@@ -267,6 +275,8 @@ class Claim(BaseModel):
     updated_at: datetime = Field(default_factory=utcnow)
     last_confirmed_at: datetime | None = None
     approved_by: str | None = None  # vouch: review-gate audit
+    proposed_by: str | None = None  # vouch: tracks who proposed this claim
+    auto_approved: bool = False  # vouch: true if approved by proposer (trusted-agent mode)
 
     @field_validator("scope", mode="before")
     @classmethod
@@ -328,6 +338,10 @@ class Page(BaseModel):
     claims: list[str] = Field(default_factory=list)
     entities: list[str] = Field(default_factory=list)
     sources: list[str] = Field(default_factory=list)
+    # Pages carry scope like claims/sources do: session summaries are as
+    # project-bound as the claims they aggregate, and an unscoped kind would
+    # be a cross-KB leak channel once multi-KB recall exists.
+    scope: ArtifactScope = Field(default_factory=ArtifactScope)
     tags: list[str] = Field(default_factory=list)
     # Per-kind frontmatter (e.g. a meeting-notes kind's `attendees`). Empty for
     # the built-in kinds; serialized into the on-disk YAML frontmatter.
@@ -351,6 +365,22 @@ class Page(BaseModel):
         # store.put_page and bundle import accepting title="" / whitespace.
         return _require_non_empty(v, "page title")
 
+    @field_validator("scope", mode="before")
+    @classmethod
+    def _coerce_scope(cls, v: object) -> object:
+        # Tolerant, unlike Claim: page frontmatter is hand-editable (vault
+        # mirrors, Obsidian), and a legacy stray `scope: whatever` key must
+        # not make get_page raise / list_pages skip the whole page. Write
+        # gates stay strict — proposals validate explicit scopes before a
+        # Page is ever constructed.
+        coerced = _coerce_artifact_scope(v)
+        if isinstance(coerced, ArtifactScope):
+            return coerced
+        try:
+            return ArtifactScope.model_validate(coerced)
+        except ValidationError:
+            return ArtifactScope()
+
 
 # --- audit + sessions -----------------------------------------------------
 
@@ -366,6 +396,10 @@ class AuditEvent(BaseModel):
     dry_run: bool = False
     reversible: bool = True
     data: dict[str, Any] = Field(default_factory=dict)
+    # The instance id of the KB this event was written in (config.yaml `kb.id`).
+    # Events from one KB stay attributable after a bundle export lands them
+    # next to another KB's history; None on events predating kb identity.
+    kb_id: str | None = None
     prev_hash: str | None = None
     hash: str | None = None
 
@@ -500,12 +534,23 @@ class Capabilities(BaseModel):
         default_factory=list,
         description="OpenClaw context engines exposed (see openclaw.plugin.json)",
     )
+    mcp: dict[str, Any] = Field(
+        default_factory=lambda: {"publish_skills": True},
+        description=(
+            "mcp surface flags mirrored from config.yaml `mcp:` block. "
+            "`publish_skills` gates kb.list_skills / kb.get_skill."
+        ),
+    )
     host_compat: dict[str, Any] = Field(
         default_factory=dict,
         description=(
             "Per-host compatibility ranges (#237). Mirrors the "
-            "`openclaw.compat` block in openclaw.plugin.json so non-OpenClaw "
+            "`openclaw.compat` block in package.json so non-OpenClaw "
             "clients can detect compat without parsing the manifest, e.g. "
             '{"openclaw": {"pluginApi": ">=2026.4.0"}}.'
         ),
+    )
+    hot_memory: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Hot-memory sidebar contract on read-side kb.* responses",
     )

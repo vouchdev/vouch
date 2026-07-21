@@ -1,0 +1,19 @@
+# the review-gate core — kept in sync with pr_bot.CORE_GLOBS
+# (tests/test_pr_bot.py::test_codeowners_covers_every_core_glob asserts parity).
+# every core-touching PR requires the owner's review and is never merged by
+# automation. the guard directory (.github) is core too, so a PR cannot weaken
+# these rules in the same change.
+/src/vouch/proposals.py    @plind-junior
+/src/vouch/lifecycle.py    @plind-junior
+/src/vouch/storage.py      @plind-junior
+/src/vouch/audit.py        @plind-junior
+/src/vouch/models.py       @plind-junior
+/src/vouch/capabilities.py @plind-junior
+/src/vouch/server.py       @plind-junior
+/src/vouch/jsonl_server.py @plind-junior
+/src/vouch/http_server.py  @plind-junior
+/src/vouch/cli.py          @plind-junior
+/src/vouch/pr_bot.py       @plind-junior
+/src/vouch/migrations/     @plind-junior
+/migrations/               @plind-junior
+/.github/                  @plind-junior

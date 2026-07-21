@@ -31,6 +31,7 @@ READ_METHODS: tuple[str, ...] = (
     "kb.capabilities",
     "kb.status",
     "kb.stats",
+    "kb.activity",
     "kb.search",
     "kb.context",
     "kb.read_page",

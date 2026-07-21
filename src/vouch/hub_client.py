@@ -43,7 +43,8 @@ class HubError(RuntimeError):
 class HubConflict(HubError):
     def __init__(self, conflicts: list[str]):
         super().__init__(
-            f"{len(conflicts)} conflicting artifact(s) on the hub — pull, resolve locally, push again"
+            f"{len(conflicts)} conflicting artifact(s) on the hub — "
+            "pull, resolve locally, push again"
         )
         self.conflicts = conflicts
 
@@ -135,7 +136,8 @@ def _request(
     for k, v in (headers or {}).items():
         req.add_header(k, v)
     try:
-        with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:  # noqa: S310 — user-configured hub url
+        # urlopen target is the user-configured hub url, not attacker-controlled
+        with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
             return resp.status, dict(resp.headers.items()), resp.read()
     except urllib.error.HTTPError as e:
         return e.code, dict(e.headers.items()), e.read()

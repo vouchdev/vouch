@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -292,6 +293,59 @@ def test_search_substring_backend_label(store: KBStore, monkeypatch: pytest.Monk
     result = runner.invoke(cli, ["search", "findable"])
     assert result.exit_code == 0, result.output
     assert "(substring)" in result.output
+
+
+def test_search_auto_falls_back_when_fts_raises(
+    store: KBStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Auto search should mirror context/server resilience on FTS errors."""
+    from vouch import index_db
+    from vouch.proposals import approve as do_approve
+    from vouch.proposals import propose_claim
+
+    src = store.put_source(b"e")
+    pr = propose_claim(store, text="findable token", evidence=[src.id], proposed_by="agent")
+    do_approve(store, pr.id, approved_by="reviewer")
+    monkeypatch.setattr(
+        index_db,
+        "search",
+        lambda *a, **k: (_ for _ in ()).throw(sqlite3.Error("fts unavailable")),
+    )
+    monkeypatch.setattr(index_db, "search_semantic", lambda *a, **k: [])
+
+    result = CliRunner().invoke(cli, ["search", "findable"])
+
+    assert result.exit_code == 0, result.output
+    assert "(substring)" in result.output
+
+
+def test_search_hybrid_keeps_semantic_hits_when_fts_raises(
+    store: KBStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Hybrid search should degrade to semantic-only when FTS5 is unavailable."""
+    from vouch import index_db
+    from vouch.models import Claim
+
+    src = store.put_source(b"e")
+    store.put_claim(Claim(id="c1", text="semantic token", evidence=[src.id]))
+    monkeypatch.setattr(
+        index_db,
+        "search_semantic",
+        lambda *a, **k: [("claim", "c1", "semantic token", 0.9)],
+    )
+    monkeypatch.setattr(
+        index_db,
+        "search",
+        lambda *a, **k: (_ for _ in ()).throw(sqlite3.Error("fts unavailable")),
+    )
+
+    result = CliRunner().invoke(cli, ["search", "semantic", "--backend", "hybrid"])
+
+    assert result.exit_code == 0, result.output
+    assert "claim/c1" in result.output
+    assert "(hybrid)" in result.output
 
 
 def test_crystallize_cli_all_failures_exits_1(store: KBStore) -> None:
@@ -647,3 +701,65 @@ def test_cli_survives_non_utf8_stdio(tmp_path: Path, args: list[str], needle: st
     assert proc.returncode == 0, proc.stderr
     assert "UnicodeEncodeError" not in proc.stderr, proc.stderr
     assert needle in proc.stdout, proc.stdout
+
+
+# --- three-surface parity: cli mirrors added for kb.* methods ---------------
+
+
+def test_source_list_lists_registered_sources(store: KBStore) -> None:
+    src = store.put_source(b"listing test", title="doc one")
+    result = CliRunner().invoke(cli, ["source", "list"])
+    assert result.exit_code == 0, result.output
+    assert src.id in result.output
+    assert "doc one" in result.output
+
+
+def test_source_list_empty(store: KBStore) -> None:
+    result = CliRunner().invoke(cli, ["source", "list"])
+    assert result.exit_code == 0, result.output
+    assert "no sources found" in result.output
+
+
+def test_propose_delete_files_pending_proposal(store: KBStore) -> None:
+    src = store.put_source(b"evidence")
+    pr = propose_claim(
+        store, text="deletable fact", evidence=[src.id], proposed_by="agent"
+    )
+    from vouch.proposals import approve
+
+    claim = approve(store, pr.id, approved_by="human")
+    result = CliRunner().invoke(cli, ["propose-delete", "claim", claim.id])
+    assert result.exit_code == 0, result.output
+    proposal_id = result.output.strip().splitlines()[-1]
+    pending = {p.id: p for p in store.list_proposals(ProposalStatus.PENDING)}
+    assert proposal_id in pending
+    assert pending[proposal_id].kind == ProposalKind.DELETE
+
+
+def test_propose_delete_unknown_target_is_clean_error(store: KBStore) -> None:
+    result = CliRunner().invoke(cli, ["propose-delete", "claim", "no-such-claim"])
+    _assert_clean_error(result, "no-such-claim")
+
+
+def test_session_list_empty(store: KBStore) -> None:
+    result = CliRunner().invoke(cli, ["session", "list"])
+    assert result.exit_code == 0, result.output
+    assert "no sessions found" in result.output
+
+
+def test_session_transcript_missing_session_degrades_to_json(store: KBStore) -> None:
+    # mirrors the jsonl surface: an unknown session returns the degraded
+    # transcript shape (observation fallback), never a traceback.
+    result = CliRunner().invoke(cli, ["session", "transcript", "no-such-session"])
+    assert result.exit_code == 0, result.output
+    assert "Traceback" not in result.output, result.output
+    assert isinstance(json.loads(result.output), dict)
+
+
+def test_session_summarize_missing_session_degrades_to_json(store: KBStore) -> None:
+    # mirrors the jsonl surface: summarizing an absent buffer reports a
+    # no-op result rather than erroring.
+    result = CliRunner().invoke(cli, ["session", "summarize", "no-such-session"])
+    assert result.exit_code == 0, result.output
+    assert "Traceback" not in result.output, result.output
+    assert isinstance(json.loads(result.output), dict)

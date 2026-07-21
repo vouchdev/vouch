@@ -21,7 +21,8 @@ Repo: https://github.com/vouchdev/vouch · PyPI: `vouch-kb` · CLI: `vouch`
 
 ## Quick start and onboarding
 
-- [docs/getting-started.md](https://raw.githubusercontent.com/vouchdev/vouch/main/docs/getting-started.md): Agent-side loop — register a source, propose a claim, get it approved.
+- [docs/INSTALL_FOR_AGENTS.md](https://raw.githubusercontent.com/vouchdev/vouch/main/docs/INSTALL_FOR_AGENTS.md): Imperative, agent-followable install checklist — detect host, `install-mcp`, verify `capabilities`, init KB, propose → (human) approve smoke test. Distinct from the human-facing getting-started walkthrough below.
+- [docs/getting-started.md](https://raw.githubusercontent.com/vouchdev/vouch/main/docs/getting-started.md): Human-oriented quickstart — register a source, propose a claim, get it approved.
 - [docs/example-session.md](https://raw.githubusercontent.com/vouchdev/vouch/main/docs/example-session.md): End-to-end captured walkthrough that the demo gif is recorded from.
 - [docs/faq.md](https://raw.githubusercontent.com/vouchdev/vouch/main/docs/faq.md): "Why not Notion / Obsidian / a vector DB" and other recurring asks.
 

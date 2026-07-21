@@ -12,6 +12,7 @@ import logging
 from pathlib import Path
 
 from . import __version__
+from . import hot_memory as hot_mod
 from .models import Capabilities
 from .openclaw.context_engine import describe_engine
 
@@ -31,9 +32,11 @@ METHODS = [
     "kb.capabilities",
     "kb.status",
     "kb.stats",
+    "kb.activity",
     "kb.digest",
     "kb.search",
     "kb.neighbors",
+    "kb.experts",
     "kb.context",
     "kb.synthesize",
     "kb.read_page",
@@ -63,11 +66,13 @@ METHODS = [
     "kb.contradict",
     "kb.archive",
     "kb.confirm",
+    "kb.clear_claims",
     "kb.cite",
     "kb.source_verify",
     "kb.session_start",
     "kb.session_end",
     "kb.list_sessions",
+    "kb.session_transcript",
     "kb.volunteer_context",
     "kb.crystallize",
     "kb.summarize_session",
@@ -77,7 +82,8 @@ METHODS = [
     "kb.export",
     "kb.export_check",
     "kb.import_check",
-    "kb.import_apply",
+    # kb.import_apply intentionally absent — it writes past the review gate, so
+    # it is a human-only CLI command, not an agent method (roadmap step 0.2).
     "kb.audit",
     "kb.reindex_embeddings",
     "kb.dedup_scan",
@@ -91,6 +97,8 @@ METHODS = [
     "kb.detect_themes",
     "kb.propose_theme",
     "kb.compile",
+    "kb.list_skills",
+    "kb.get_skill",
 ]
 
 
@@ -115,7 +123,7 @@ def _load_host_compat() -> dict[str, dict[str, str]]:
     return {"openclaw": {k: str(v) for k, v in compat.items()}}
 
 
-def capabilities() -> Capabilities:
+def capabilities(*, publish_skills: bool = True) -> Capabilities:
     retrieval = ["fts5", "substring"]
     try:
         from .embeddings import get_embedder
@@ -137,5 +145,11 @@ def capabilities() -> Capabilities:
             "config_path": "retrieval.scope",
         },
         context_engines=[describe_engine()],
+        mcp={"publish_skills": publish_skills},
         host_compat=_load_host_compat(),
+        hot_memory={
+            "sidebar_key": "vouch_hot_memory",
+            "list_envelope": True,
+            "covered_methods": sorted(hot_mod.HOT_MEMORY_COVERED),
+        },
     )

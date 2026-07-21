@@ -45,6 +45,36 @@ def test_export_import_round_trip(store: KBStore, tmp_path: Path) -> None:
     assert dest.get_claim("c1").text == "alpha"
 
 
+def test_import_rejects_bundle_carrying_decided_members(
+    store: KBStore, tmp_path: Path
+) -> None:
+    """A bundle with decided/ members is a write past the review gate.
+
+    decided/ holds approved decisions; import writes members straight to disk,
+    so importing decided/ lands approved claims/pages without a receiving-side
+    proposal. Until gated import exists (roadmap 8.2), any such bundle is
+    refused — by import_check (issue) and therefore import_apply (raises).
+    """
+    from vouch.proposals import approve, propose_claim
+
+    src = store.put_source(b"e", title="d")
+    pid = propose_claim(
+        store, text="alpha", evidence=[src.id], proposed_by="a"
+    ).id
+    approve(store, pid, approved_by="b")
+    assert any((store.kb_dir / "decided").glob("*")), "decided/ should be populated"
+
+    bundle_path = tmp_path / "out.tar.gz"
+    bundle.export(store.kb_dir, dest=bundle_path)
+
+    dest = KBStore.init(tmp_path / "dest")
+    diff = bundle.import_check(dest.kb_dir, bundle_path)
+    assert not diff.ok
+    assert any("decided" in issue for issue in diff.issues)
+    with pytest.raises(RuntimeError):
+        bundle.import_apply(dest.kb_dir, bundle_path)
+
+
 def test_manifest_paths_match_tar_member_names(store: KBStore, tmp_path: Path) -> None:
     # Regression for the Windows path-separator bug: when build_manifest used
     # str(rel) the manifest stored "sources\<sha>\meta.yaml" while the tar

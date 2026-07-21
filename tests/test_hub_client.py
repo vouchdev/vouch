@@ -9,6 +9,7 @@ import tarfile
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
@@ -40,7 +41,10 @@ def make_bundle(files: dict[str, bytes]) -> tuple[bytes, str]:
     manifest = {
         "spec": "vouch-bundle-0.1",
         "bundle_id": bundle_id,
-        "files": [{"path": p, "size": len(d), "sha256": hashes[p]} for p, d in sorted(files.items())],
+        "files": [
+            {"path": p, "size": len(d), "sha256": hashes[p]}
+            for p, d in sorted(files.items())
+        ],
         "counts": {},
         "excluded": ["config.yaml", "decided", "sessions"],
         "safety": {"has_proposed": False, "has_state_db": False, "has_audit_log": False},
@@ -73,14 +77,14 @@ def exported_files(kb_dir: Path, tmp_path: Path) -> dict[str, bytes]:
 class FakeHub(BaseHTTPRequestHandler):
     """Scripted hub speaking the v2 wire contract for one KB."""
 
-    files: dict[str, bytes] = {}
+    files: ClassVar[dict[str, bytes]] = {}
     token = "vhp_test"
-    conflicts_on_push: list[str] = []
+    conflicts_on_push: ClassVar[list[str]] = []
 
     def _authed(self) -> bool:
         return self.headers.get("Authorization") == f"Bearer {self.token}"
 
-    def do_GET(self) -> None:  # noqa: N802 — BaseHTTPRequestHandler API
+    def do_GET(self) -> None:  # BaseHTTPRequestHandler API name
         if not self._authed():
             self.send_response(401)
             self.end_headers()
@@ -98,7 +102,7 @@ class FakeHub(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(gz)
 
-    def do_PUT(self) -> None:  # noqa: N802
+    def do_PUT(self) -> None:  # BaseHTTPRequestHandler API name
         if not self._authed():
             self.send_response(401)
             self.end_headers()
@@ -307,7 +311,9 @@ def test_cli_unlinked_errors_clearly(
 # --- status ---------------------------------------------------------------------
 
 
-def test_status_reports_sync_state(store: KBStore, fake_hub: str, home: Path, tmp_path: Path) -> None:
+def test_status_reports_sync_state(
+    store: KBStore, fake_hub: str, home: Path, tmp_path: Path
+) -> None:
     src = store.put_source(b"e")
     store.put_claim(Claim(id="c1", text="local knowledge", evidence=[src.id]))
     link = _link(store, fake_hub)

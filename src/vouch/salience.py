@@ -139,8 +139,15 @@ def compute_salience(
         return []
 
     # Claims referencing each matched entity, by claim id (for stable picking).
+    # Viewer-filtered like every other read surface: the sidebar must not
+    # resurface claim ids that scope filtering hides from search/digest.
+    from .scoping import is_visible, viewer_from
+
+    viewer = viewer_from(config_path=store.config_path)
     claims_by_entity: dict[str, list[str]] = {}
     for claim in store.list_claims():
+        if not is_visible(claim.scope, viewer):
+            continue
         for eid in claim.entities:
             if eid in scores:
                 claims_by_entity.setdefault(eid, []).append(claim.id)

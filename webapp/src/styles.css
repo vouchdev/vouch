@@ -11,6 +11,13 @@
   --accent-2: #ff7c60;
   --rule: #2a2320;
   --ok: #86c06c;
+  /* Sequential "ember" ramp for activity heatmaps (Dashboard). One hue,
+     monotonic lightness against the dark paper surface; step 0 = no data. */
+  --heat-0: #201917;
+  --heat-1: #4a2018;
+  --heat-2: #7d3020;
+  --heat-3: #b84428;
+  --heat-4: #ff5a3d;
 }
 
 :root[data-theme="light"] {
@@ -24,6 +31,11 @@
   --accent-2: #ff5a3d;
   --rule: #e5ddd2;
   --ok: #4e8a37;
+  --heat-0: #f0e9e0;
+  --heat-1: #ffd9cf;
+  --heat-2: #ff9e85;
+  --heat-3: #f06542;
+  --heat-4: #c23a1d;
 }
 
 @theme inline {

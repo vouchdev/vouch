@@ -1,0 +1,34 @@
+name: workflow-lint
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/**"
+      - ".github/actionlint.yaml"
+      - ".github/zizmor.yml"
+  push:
+    branches: [main, test]
+    paths:
+      - ".github/workflows/**"
+permissions:
+  contents: read
+jobs:
+  zizmor:
+    name: zizmor (workflow security)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - name: zizmor
+        run: pipx run zizmor==1.27.0 --offline --persona regular .github/workflows/
+  actionlint:
+    name: actionlint (workflow correctness)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - name: actionlint
+        run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          "$(go env GOPATH)/bin/actionlint" -color

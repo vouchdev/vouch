@@ -9,11 +9,32 @@
 # T4 = `.claude/settings.json`: SessionStart (kb status + capture review banner +
 #      recall digest of approved knowledge), PostToolUse (capture observe),
 #      SessionEnd (capture finalize), plus read-only kb_* auto-allow.
+#
+# user_mcp = a local-scope MCP registration written to the user's
+#      `~/.claude.json` under `projects[<abs project>].mcpServers`. The `.mcp.json`
+#      from T1 is a *project*-scope server, and Claude Code only loads a
+#      project-scope server after a per-user approval — which the VS Code
+#      extension never surfaces a prompt for, so `.mcp.json` alone leaves the
+#      `kb_*` tools invisible in the extension (they sit at "pending approval").
+#      A local-scope entry is trusted on sight (no approval gate), so writing one
+#      is what makes a fresh install actually connect in the extension. This is
+#      exactly what `claude mcp add vouch -- vouch serve` does; install-mcp does
+#      it for you (opt out with `--no-approve`).
 host: claude-code
 pretty: Claude Code
 fence:
   begin: "<!-- BEGIN vouch -->"
   end: "<!-- END vouch -->"
+user_mcp:
+  config: .claude.json      # relative to the user's home directory
+  scope: project            # keyed under projects[<abs project>].mcpServers
+  name: vouch
+  spec:
+    type: stdio
+    command: vouch
+    args: ["serve"]
+    env:
+      VOUCH_AGENT: claude-code
 tiers:
   T1:
     - { src: .mcp.json, dst: .mcp.json }
@@ -31,3 +52,36 @@ tiers:
     - { src: .claude/commands/vouch-standup.md, dst: .claude/commands/vouch-standup.md }
   T4:
     - { src: .claude/settings.json, dst: .claude/settings.json, json_merge: true }
+
+# `vouch install-mcp claude-code --global`: user-level wiring under
+# ~/.claude/, written once for the whole machine. Every session in every
+# folder then gets capture + recall into that folder's OWN project KB
+# (nearest .vouch; a folder without one no-ops with a `vouch init` hint).
+# The MCP server registers at USER scope (top-level mcpServers in
+# ~/.claude.json) instead of the per-project entry.
+#
+# No T1 here: a project-scope .mcp.json makes no sense machine-wide.
+# The T4 src MUST stay the same file as the project tier's — byte-identical
+# hook command strings are what lets Claude Code collapse user-level and
+# legacy project-level hooks into one execution instead of double-firing
+# (pinned by tests/test_install_adapter.py).
+global:
+  target: .claude
+  tiers:
+    T2:
+      # machine-wide wording — the project snippet says "this repo uses
+      # vouch", which is wrong in a user-level CLAUDE.md that every
+      # session on the machine reads.
+      - { src: CLAUDE.md.global.snippet, dst: CLAUDE.md, fenced_append: true }
+    T3:
+      - { src: .claude/commands/vouch-recall.md, dst: commands/vouch-recall.md }
+      - { src: .claude/commands/vouch-status.md, dst: commands/vouch-status.md }
+      - { src: .claude/commands/vouch-resolve-issue.md, dst: commands/vouch-resolve-issue.md }
+      - { src: .claude/commands/vouch-propose-from-pr.md, dst: commands/vouch-propose-from-pr.md }
+      - { src: .claude/commands/vouch-ask.md, dst: commands/vouch-ask.md }
+      - { src: .claude/commands/vouch-remember.md, dst: commands/vouch-remember.md }
+      - { src: .claude/commands/vouch-record.md, dst: commands/vouch-record.md }
+      - { src: .claude/commands/vouch-followup.md, dst: commands/vouch-followup.md }
+      - { src: .claude/commands/vouch-standup.md, dst: commands/vouch-standup.md }
+    T4:
+      - { src: .claude/settings.json, dst: settings.json, json_merge: true }

@@ -6,6 +6,474 @@ All notable changes to vouch are documented here. Format follows
 
 ## [Unreleased]
 
+### Changed
+- **the per-prompt hook now lets the model decide how much of a turn
+  vouch takes** (`retrieval.prompt_gate`). recall used to inject an
+  unconditional "open with From vouch memory:" block on *every* prompt,
+  so "fix the failing test" spent its reply opener announcing a memory
+  search nobody asked for. rather than have the hook guess the prompt's
+  intent with a verb list (which never covers the next phrasing), it now
+  hands the host model ONE conditional instruction and lets the model —
+  which already reads the prompt — choose per turn: a *question* the
+  items answer opens with "From vouch memory:" and quotes them; a *task*
+  (fix / build / change / run anything, known verb or not) uses them
+  silently as background, citing an id inline only where relied on, with
+  no banner; *irrelevant* items are ignored. on a miss the same judgment
+  applies — "Nothing in vouch on this." for a question, silence for a
+  task. chatter with no informative tokens ("ok thanks", "which one is
+  better?") injects nothing at all (retrieval ORs every query token, so
+  those matched noise on `one`). no per-turn model call and no latency —
+  the decision rides in the instruction text the model already
+  processes; it generalizes to any phrasing or language because it no
+  longer depends on recognizing the verb. compliance measured on real
+  `claude -p` across haiku / sonnet / opus (KB-backed block): coding
+  tasks are never wrongly announced. new KBs get it on; existing KBs
+  keep the unconditional block until they add the key.
+- **personal catch-all KB + `vouch adopt`** (global vouch, phase 3):
+  `vouch hub init-personal` creates and registers a personal KB at
+  `~/.local/share/vouch/personal` (`XDG_DATA_HOME` honoured;
+  `VOUCH_PERSONAL_KB` overrides). with its opt-in flag on
+  (`personal.fallback_capture` in the KB's own config — one question at
+  `install-mcp --global`, or `--personal-fallback`, or `vouch hub
+  fallback on`), sessions in folders WITHOUT a project KB capture into
+  it instead of nowhere: every captured source records the folder it
+  came from (`metadata.origin_path`), the session-start banner announces
+  the routing, and per-prompt recall in those folders reads the same KB
+  back. strictly double-opt-in (registry role `personal` + the KB's own
+  config flag) and fail-closed: no personal KB, no flag, a corrupt
+  registry, or a guard refusal (discovery landing on a personal KB from
+  below — the hijack shape) all mean capture stays off exactly as
+  before. `vouch adopt`, run inside a project that now has its own KB,
+  drains those captures home THROUGH the project's review gate: sources
+  copy byte-identically (content-addressed ids are stable across KBs),
+  each live personal claim is re-proposed against the copied source, its
+  byte-offset receipt re-verifies mechanically, and the project's own
+  review config decides durability — auto-approve on receipt where
+  enabled, pending for a human otherwise; adoption never bypasses
+  review. idempotent in both directions (a claim already durable *or*
+  already queued in the project is skipped, so re-running never doubles
+  the review queue); `--dry-run` previews against the project's real
+  gate; `--from-path` adopts a moved project's captures; `--retire`
+  archives only the personal copies that actually landed durable —
+  retiring a merely-pending one would strand it if the proposal is
+  later rejected or expires; session rollups are reported, not moved
+  (an unreviewed summary is not knowledge yet, so it stays where it was
+  filed); both KBs log a `kb.adopt` audit event carrying the other
+  side's id. the personal KB is ONE store shared by every KB-less
+  folder — recall there reads all of it, and the digest header, the
+  per-prompt block, the session banner, `vouch status` and the opt-in
+  question all say so rather than calling it "this repo's" knowledge.
+
+## [1.5.0] — 2026-07-20
+
+### Added
+- **`vouch install-mcp claude-code --global`** — install once for the
+  whole machine. writes user-level hooks, `/vouch-*` commands, and a
+  fenced CLAUDE.md snippet under `~/.claude/`, and registers vouch as a
+  *user-scope* MCP server (top-level `mcpServers` in `~/.claude.json`),
+  so every claude session in every folder gets capture + per-prompt
+  recall into that folder's **own** project `.vouch/` — the data stays
+  per project; run `vouch init` once per project. a folder without a KB
+  never captures anywhere: its session opens with a one-line "run
+  `vouch init`" note (the session-start banner), and `vouch serve` now
+  starts without a KB for the stdio transport (per-tool-call errors
+  instead of a machine-wide failed server in every non-vouch folder).
+  declared by a manifest `global:` block, so other hosts opt in as pure
+  manifest work; the user-level CLAUDE.md snippet is machine-wide-worded.
+  safe next to existing per-project installs, guarded three ways: the
+  global settings template is byte-for-byte the project one (claude code
+  collapses duplicate hook commands; a sync test freezes them), capture
+  dedups on the event's `tool_use_id` (exact, window-free — catches
+  drifted wiring too), and the hook commands (capture
+  observe/answer/finalize/finalize-all/banner, context-hook, recall,
+  ingest-codex) resolve the KB from the hook payload's `cwd` — with
+  `VOUCH_PROJECT_DIR` keeping precedence, and a payload naming a
+  nonexistent cwd refusing capture rather than falling back to the
+  process cwd. a malformed existing settings.json now reports as
+  *failed* (vouch is not wired) instead of "already present".
+- **KB instance identity**: `vouch init` mints a durable id (uuid, stored
+  in `config.yaml` under `kb:` next to a display name) and stamps it onto
+  every new audit event and bundle manifest, so history and exported
+  artifacts stay attributable to the KB that produced them once knowledge
+  starts moving between KBs. existing KBs are backfilled on re-init or
+  `vouch hub register` (an additive `kb.identity` audit event — never a
+  history rewrite); pre-identity audit chains still verify. bundle
+  imports move settings, never identity: the destination's `kb:` block
+  survives even an overwrite-import, and same-settings configs no longer
+  read as conflicts just because ids differ (config.yaml is compared
+  structurally, modulo `kb:`, on both sides). compat note: a *pre-identity*
+  vouch importing a new bundle uses the old byte-compare and may report
+  config.yaml as a conflict — its default skip mode leaves the file
+  untouched, so nothing breaks; upgrade the importer to converge.
+- **machine registry** (`vouch hub register / list / unregister`): a
+  machine-local list of known KBs at `~/.config/vouch/registry.yaml`
+  (honours `XDG_CONFIG_HOME`; override with `VOUCH_REGISTRY_PATH`) with a
+  role per KB — `project`, `personal`, or `team`. advisory routing state
+  only: authority stays in each KB's own `.vouch/`, and a missing or
+  corrupt registry degrades to per-project behaviour. this is the
+  substrate for global (install-once) vouch and the local seed of the
+  vouchhub registry of connected KBs.
+- **scope stamped at write time**: every new claim and page proposal — and
+  every captured session-answer source — records the KB's own project scope
+  at the propose gate, so knowledge knows which project it belongs to
+  before KBs ever start sharing artifacts (scope cannot be retrofitted
+  later). the stamp and the read-side viewer resolve through ONE chain
+  (`VOUCH_PROJECT` > `retrieval.scope` > the durable `kb.id`), so what a KB
+  writes it can always read back — the mutable `kb.name` is never
+  load-bearing for visibility, and a rename cannot orphan stamped
+  knowledge. pages join claims and sources as scoped kinds, closing a
+  cross-KB leak channel (vault edits carry the durable page's scope
+  through, never a restamp; hand-edited legacy `scope:` frontmatter
+  degrades to unscoped instead of breaking the page). malformed explicit
+  scopes are refused at the gate, and a malformed scope already on disk
+  degrades to unscoped instead of crashing the audit read path. the
+  SessionStart digest (`vouch recall`) is viewer-filtered like every other
+  retrieval surface — it used to inject every live claim regardless of
+  scope — and reports on stderr how many artifacts scope filtering hid,
+  never filtering silently; the salience sidebar honours the same filter.
+  existing unscoped artifacts behave exactly as before. explicit `scope=`
+  overrides are accepted by `propose_claim` / `propose_quoted_claim` /
+  `propose_page`.
+- **hijack-proof KB resolution**: the upward `.vouch` walk never ascends
+  past `$HOME` any more, so a stray home-directory KB can no longer
+  silently capture every project below it (a recorded incident class).
+  starting *in* `$HOME` still resolves its KB; `VOUCH_KB_PATH` and a
+  `global: {allow_home_kb: true}` opt-in in the home KB's config remain
+  deliberate escape hatches. a registry entry with role `personal` adds a
+  second belt: ambient capture into it from another directory is refused
+  (reads warn). host adapters can now pin the walk's start with
+  `VOUCH_PROJECT_DIR`; `vouch discover` and `vouch status` report the
+  resolution chain (`why`) and the KB's id/name.
+- the per-prompt recall hook (`vouch context-hook`) is now instructional
+  and always visible: with relevant approved items it tells the model to
+  open its reply with **"From vouch memory:"** and ground in the cited
+  items; with no relevant items it says so explicitly ("Nothing in vouch
+  on this.") instead of injecting nothing — so recall can never be
+  silently mistaken for "vouch did nothing". an opt-in confidence
+  short-circuit (`retrieval.short_circuit.{enabled,min_confidence}`)
+  lets a high-confidence non-action lookup collapse to a verbatim
+  vouched answer; "do work" prompts never short-circuit.
+- `vouch install-mcp claude-code` now registers vouch as a **local-scope**
+  MCP server in `~/.claude.json` (`projects[<abs project>].mcpServers`),
+  the same thing `claude mcp add` does. a committed `.mcp.json` is a
+  *project*-scope server that Claude Code loads only after a per-user
+  approval — and the **VS Code extension never surfaces that approval
+  prompt**, so `.mcp.json` alone left the `kb_*` tools stuck at "pending
+  approval" in the extension while the hooks quietly ran (reads as
+  connected, isn't). the local-scope entry is trusted on sight, so a fresh
+  install now connects after a window reload with no manual step. verified
+  end-to-end: fresh project → `install-mcp` → `claude mcp list` reports
+  `✔ Connected` (was `⏸ Pending approval`). declared by a manifest
+  `user_mcp:` block (host-neutral core; only claude-code opts in);
+  idempotent and never clobbers a server you added yourself; opt out with
+  `--no-approve`.
+
+### Changed
+- the starter config now ships `review.auto_approve_on_receipt: true`
+  (and `require_human_approval: false`, an advisory key no code path
+  reads): a fresh KB auto-approves captured claims whose byte-offset
+  receipts verify against their source, so recall works out of the box
+  with no `vouch review` pass. the gate is unchanged for everything
+  the receipt check cannot vouch for — pages (session summaries
+  included), entities, relations, and claims that cannot quote their
+  source still wait for a human. existing KBs keep whatever their
+  `.vouch/config.yaml` says; set `auto_approve_on_receipt: false` to
+  restore the fully human gate.
+- the receipt drain now runs at every session start (`capture
+  finalize-all`), so verifiable claims left pending while the gate was
+  off are approved instead of stranded, and it is duplicate-safe: a
+  claim re-deriving text that is already durable is mechanically
+  rejected ("duplicate: identical claim already durable") rather than
+  crashing the drain or piling up in the review queue. a claim id held
+  by *different* text is a real conflict and stays pending for a human.
+  the same resolution now backs `capture answer`, which previously left
+  re-captured duplicates pending forever.
+
+## [1.4.0] — 2026-07-17
+
+### Added
+- `vouch install-mcp <host>` now bootstraps the KB when no `.vouch/` is
+  discoverable at or above the target, making install a one-command
+  setup. previously it exited 0 with "0 failed" in a fresh project while
+  every installed hook silently no-oped forever (`|| true`) and the mcp
+  server exited 2 — with nothing ever telling the user to run
+  `vouch init`. opt out with `--no-init` (a loud stderr warning then
+  names the remedy); an ancestor KB is reported ("Using existing KB
+  at …"), never shadowed by a second one; unknown hosts still fail
+  cleanly without planting a KB. staging-dir hosts opt out via a new
+  `kb_bootstrap: false` manifest key (claude-desktop does — its target
+  is a paste-ready staging dir, and a KB planted at an arbitrary cwd
+  would ambiently capture every child project). the preflight ignores
+  a shell-exported `VOUCH_KB_PATH` (it answers "what does this tree
+  resolve to", and notes the override on stderr instead). `vouch init`
+  and the auto-init share one code path so they cannot drift.
+- cli mirrors for the last five `kb.*` methods that had none —
+  `vouch propose-delete`, `vouch source list`, `vouch session list`,
+  `vouch session transcript`, `vouch session summarize` — and the
+  capabilities test now enforces cli parity alongside the existing
+  jsonl + mcp checks, so a new method cannot land without its cli
+  command (#475).
+- `retrieval.recency`: a half-life decay (default 90 days, whole-day
+  quantized) blended into fused context-pack scores so fresher knowledge
+  outranks equally-relevant stale knowledge. rescoring-only — an old
+  artifact loses at most half its score and never vanishes. enabled in
+  the starter config for new kbs; existing kbs keep byte-identical
+  ordering until they add the key (#476).
+- a `retrieval` block on `kb.search` and `kb.context` responses reports
+  the configured vs actually-used backend, whether semantic search is
+  available, and a `degraded` flag — a base install serving lexical hits
+  under a semantic-capable backend name now says so instead of labelling
+  them "hybrid" (#476).
+- ai auto-merge bot: the owner arms auto-merge on a pr with the `auto-merge`
+  label or by commenting `/auto-merge`; a non-core pr then merges once ci is
+  green and CodeRabbit approves. core paths always require owner review via
+  `.github/CODEOWNERS`; ui prs opened without before/after screenshots are
+  auto-closed. review is the gate, not just advice: CodeRabbit
+  (`.coderabbit.yaml`, free for this public repo) submits a formal review and
+  the `coderabbit-gate` workflow turns its verdict into the required
+  `coderabbit-approved` status check — so a fresh push voids a prior approval,
+  and a pr CodeRabbit requests changes on 3 times is auto-closed (owner and
+  bots exempt). a daily `stale-pr-reaper` also closes a pr whose author left a
+  CodeRabbit change request unaddressed (no new commit) for 2 days. no paid
+  model in the loop. deterministic decision logic lives in
+  `src/vouch/pr_bot.py` (pure stdlib). repo guards (branch ruleset + labels)
+  are configured by `scripts/setup_repo_guards.sh`. workflow security is linted
+  in ci with zizmor + actionlint.
+
+### Changed
+- `kb.search` is one implementation (`context.search_kb`) across mcp and
+  jsonl instead of three drifting copies; `auto` now fuses embedding +
+  fts5 via rrf with a substring fallback (it used to waterfall
+  embedding-first), and an omitted backend defers to `retrieval.backend`
+  in config.yaml (#476).
+
+### Fixed
+- approve/reject/expire record the audit event *before* moving the
+  proposal to decided/. a crash between the two used to leave a durable
+  decision with no authoritative history; it now leaves a pending
+  proposal with its decision event, which the approve retry path already
+  guards (#475).
+- demo image build: `hatch_build.py` (the build hook pyproject.toml
+  declares for console bundling) is copied into the docker build context;
+  the image had been unbuildable since the hook landed (#474).
+
+## [1.3.0] — 2026-07-14
+
+### Added
+- `vouch console`: serve the vendored React web console straight from the
+  installed package — a same-origin `/proxy` bridge (loopback-guarded) to
+  `vouch serve --transport http` backends, reimplementing the vite dev-proxy
+  in python. the built SPA is bundled into the wheel as `vouch/web/console`
+  (conditionally, via a hatch build hook), so `pip install 'vouch-kb[web]'`
+  then `vouch console` needs no node and no repo clone.
+- `kb.activity` read method (+ `vouch activity` CLI mirror): audit-log
+  activity buckets for dashboards — per-day counts with proposal/decision
+  breakdowns, an hour-of-week matrix, and actor/event histograms. windowed
+  in viewer-local calendar days (IANA `tz` or a fixed utc offset), scope-
+  filtered like `kb.audit`.
+- console Dashboard view: 12-month activity calendar, last-30-days bars,
+  hour-of-week heatmap, top actors and event mix, driven by `kb.activity`.
+- `kb.synthesize` llm backend: `llm=true` drafts the answer with the
+  deployment-configured `compile.llm_cmd`, grounded in retrieved kb pages
+  and approved claims. code still verifies every `[id]` citation against
+  the offered sources — invented ids are stripped, and a draft left with no
+  verifiable citation returns an empty answer rather than a guess. the wire
+  shape is unchanged plus additive `pages` and `_meta.synthesis_backend`
+  fields. cli mirror: `vouch synthesize --llm`; the jsonl/http surface
+  already forwarded the flag.
+- console Chat: llm answers activated — the chat asks `kb.synthesize` with
+  `llm: true` and falls back to deterministic claim synthesis when no
+  `compile.llm_cmd` is configured. page citations open the page drawer, and
+  llm answers carry an `llm` badge next to the confidence grade.
+- session transcript viewer: the console Review view opens the full
+  transcript of a captured session — thinking, per-tool call rendering
+  with diffs, code blocks, and subagent drill-down — via the new
+  `kb.session_transcript` read method. it locates the raw claude code
+  jsonl session file or codex rollout by id, parses it into normalized
+  blocks, and degrades to the observation buffer when the raw file is
+  gone.
+- review-gated artifact delete: `kb.propose_delete` files a delete
+  proposal for a claim, page, entity, or relation. execution happens only
+  through `proposals.approve()`, which checks the referenced-by matrix,
+  removes the file, deindexes it, and records exactly what was removed in
+  the decided proposal and audit event.
+- `kb.clear_claims` / `vouch claims-clear`: bulk-remove auto-approved
+  claims (`--auto-only`, `--before`, `--dry-run`, and a confirm gate) for
+  cleaning up capture noise in one pass (#433).
+- session-split summaries: large captured sessions are split into topical
+  summary pages by a deployment-configured llm (`capture.split` in
+  `config.yaml`; the split `llm_cmd` falls back to `compile.llm_cmd`),
+  each filed as its own pending summary. `kb.summarize_session` runs the
+  pass on demand, `kb.list_sessions` lists captured sessions for the
+  review pipeline, and a filed mechanical summary can be llm-narrated in
+  place.
+- codex adapter: `vouch install-mcp codex` now wires the full tier — a
+  `toml_merge` install strategy for `.codex/config.toml`, an agents.md
+  fenced snippet, skills mirroring the vouch slash commands, and hook
+  wiring for automatic session capture. codex session rollouts are
+  ingested into review-gated summaries.
+- codex: wired `UserPromptSubmit` to `vouch context-hook` for the first
+  time, reusing the existing command unmodified — codex's hook
+  payload/response shape matches claude-code's exactly. (#425)
+- `kb.list_skills` / `kb.get_skill` — agents can enumerate the Claude Code
+  slash-command and `SKILL.md` catalogue visible at `<kb_root>/.claude/` and
+  `~/.claude/` over MCP, then fetch the full body of one by name (project-local
+  entries override user-global on collision). Exposed across MCP (`kb_list_skills`
+  / `kb_get_skill`), JSONL, and the CLI (`vouch list-skills` / `vouch get-skill`).
+- `mcp.publish_skills` config flag (default `true`) — gates the skill catalogue
+  for "company-brain" deployments where the catalogue itself is sensitive. When
+  `false`, `kb.list_skills` returns an empty list and `kb.get_skill` errors with
+  `permission_denied`; the flag is read fresh on every call so flipping it hides
+  the catalogue without restarting the server, and is surfaced on
+  `kb.capabilities.mcp.publish_skills` so clients can detect the gate. An
+  existing KB with no `mcp:` block stays default-on (#235).
+- mcp serves a **minimal tool profile by default** (8 core tools) instead
+  of the full method surface; widen with `VOUCH_TOOL_PROFILE=standard|full`
+  or `mcp.tool_profile` in `config.yaml`. approve/reject and maintenance
+  tools live in `standard`/`full` — they stay human/cli actions, not agent
+  defaults. the jsonl and cli surfaces are unaffected.
+- per-prompt auto-recall: the claude-code adapter's `UserPromptSubmit`
+  hook (`vouch context-hook`) injects relevant kb context on every
+  prompt, so recall no longer depends on the agent remembering to ask.
+- `kb.experts` — rank the entities carrying the most matched evidence on
+  a free-text topic (count, recency, and citation weightings). read-only;
+  answers "who/what does this kb actually know about X" (#315).
+- `kb.triage_pending` — advisory triage scoring over the pending-review
+  queue. scores each pending proposal on fit, citation quality,
+  duplication risk, and contradiction risk, then attaches a
+  `_meta.vouch_triage` block to help a reviewer prioritize a long
+  `kb.list_pending`. read-only and advisory only: it never approves,
+  rejects, or moves a proposal — a human still decides. degrades to a
+  `difflib` heuristic without the `[embeddings]` extra. opt-in via
+  `triage.enabled: true`; `vouch triage` mirrors it on the cli (#322).
+- opt-in cross-encoder rerank of the context pack: enable with
+  `retrieval.rerank.enabled: true` in `config.yaml`; `retrieval.rerank.top_k`
+  bounds the rerank window. off by default (#436).
+- `kb.diff` is registered at all four `kb.*` surface sites (mcp tool,
+  jsonl handler, capabilities, cli) instead of cli-only (#327).
+- dual-solve web ui: file-changes tree view in the candidate panes — a compact
+  folders-first file tree drives a per-file diff pane, replacing the flat
+  changed-files list and the stacked all-files diff. selection is
+  per-candidate, so inspecting claude's diff never moves the codex pane.
+  (#294)
+- ``_meta.vouch_hot_memory`` on every primary read-side ``kb.*`` response
+  (``kb.search``, ``kb.context``, ``kb.read_*``, ``kb.list_*``): a TTL-cached
+  sidebar of recently approved claims, query-biased where the tool has a
+  natural anchor (entity name/aliases, page title/tags, claim text, search
+  query). ``kb.list_pending`` uses recency only. Meta-tools, write paths, and
+  lifecycle ops are excluded by design (#225).
+- demo: dual-path llm configuration — compile & summarize run through
+  session-capture replay or directly against the api via a stdlib shim
+  wired as `compile.llm_cmd` with a byo `ANTHROPIC_API_KEY`.
+
+### Changed
+- ``kb.list_*`` JSONL/MCP responses now use a dict envelope
+  ``{"items": [...], "_meta": {...}}`` instead of a bare list. A one-release
+  deprecation note lives at ``_meta.deprecation``; read ``result.items`` instead
+  of treating ``result`` as the list. When the KB has recent approved claims,
+  ``_meta.vouch_hot_memory`` carries the same recency sidebar as other read
+  tools (#225).
+- ``kb.capabilities`` advertises the hot-memory contract under ``hot_memory``
+  (sidebar key, list-envelope flag, covered method list).
+- retrieval `auto`/`hybrid` now **fuses embedding + fts5** results via
+  reciprocal rank fusion instead of a waterfall (embedding-first,
+  fts5-fallback), with near-duplicate suppression over the fused list —
+  the highest-scored near-duplicate wins, caller order is preserved for
+  the context pack.
+- mcp serves one-line tool descriptions under non-full profiles, keeping
+  the default surface cheap in agent context windows.
+
+### Fixed
+- audit: `log_event` serialises appends with a file lock, so concurrent
+  writers cannot fork the hash chain (#263).
+- `lifecycle.contradict()` no longer lets a claim contradict itself. calling
+  it with the same claim id on both sides previously wrote a self-loop
+  `contradicts` reference and flipped the claim to `contested` with no
+  actual counterparty; it now raises `LifecycleError`, mirroring the
+  existing guard in `supersede()`.
+- rpc internal errors no longer leak tracebacks over the wire; they log
+  server-side and return a clean error envelope.
+- models reject empty `text`/`name`/`title` on claim, entity, and page at
+  validation time instead of filing empty artifacts.
+- `kb.crystallize` retries are idempotent for summary pages — a re-run
+  after a partial failure no longer files a duplicate page proposal.
+- `session.crystallize`: retrying on a session that hasn't been ended rewrote
+  the `session-<id>` summary page with a fresh wall-clock `Ended:` stamp each
+  time (and needlessly re-embedded it), so the "idempotent retry" wasn't. an
+  open session now renders a stable marker, so retries produce an identical
+  body.
+- claude-code: the `UserPromptSubmit` context hook computed retrieval but
+  never fed the entity-salience reflex (#223) — `salience.record_query`
+  was never called from the hook path, leaving the reflex permanently
+  dormant for every claude-code session. OpenClaw's context engine already
+  called it correctly; cursor's `beforeSubmitPrompt` hook cannot accept
+  injected context at all, so it is not wired. (#425)
+- `vouch search` tolerates fts index errors instead of crashing — a
+  broken or stale fts table degrades to the substring path (#438).
+- `list_pages` skips corrupt page files instead of failing the whole
+  listing, so one bad yaml no longer takes down every kb-wide caller
+  (#360).
+- context: the `require_citations` gate is computed after the `max_chars`
+  budget is applied, so a claim trimmed out by the budget can no longer
+  satisfy (or fail) the citation requirement on the pack (#268).
+- `vouch digest --limit` now caps the followups-due section like the
+  pending, decisions, and stale sections — it previously returned every
+  due followup regardless of the limit, contradicting the `--limit` help.
+- `kb.capabilities.host_compat` always reported `{}`: `_load_host_compat`
+  (#237) read `openclaw.compat` from `openclaw.plugin.json`, but that
+  manifest may not carry a top-level `openclaw` key at all (enforced by
+  `test_manifest_carries_no_dead_dialect_fields`) — `openclaw.compat.pluginApi`
+  has only ever lived in `package.json`. Repointed `_load_host_compat` (now
+  reading `_PACKAGE_JSON_PATH`) at `package.json`, where the value has been
+  present all along.
+- the dual-solve diff renderer dropped added/removed lines whose content
+  starts with `++`/`--` (e.g. an added `++counter` line) by treating them as
+  `+++`/`---` file headers; the header skip now requires the trailing
+  space-and-path form. (#294)
+- `compile_kb()` could file two page proposals for the same title when the
+  LLM's batch drafted the same topic (or same slug, e.g. "Retry Policy" vs
+  "retry policy") twice — `taken_names` was only seeded from on-disk pages
+  and pending proposals, never updated as drafts were accepted within the
+  batch. Approving the second proposal would silently route through
+  `update_page()` and overwrite the first. (#439)
+- volunteer scoring treats hybrid relevance as rank-relative instead of
+  assuming pre-normalized scores.
+- `kb.capabilities` reads `openclaw.compat` from `package.json` instead
+  of a stale manifest field (#417).
+- the context hook never raises on a non-dict payload or a missing kb —
+  a broken hook environment degrades to no injection instead of failing
+  the host prompt.
+- `context` and `lifecycle` catch only the exceptions they can handle
+  (sqlite errors on fts5 fallback, missing-artifact on citation lookup)
+  instead of blanket `except Exception`.
+- `vouch install-mcp <host>` (codex `toml_merge`): a `config.toml` the minimal
+  serializer couldn't faithfully re-emit (a non-BMP string value, a `nan`/`inf`
+  float) was bucketed as `skipped` and printed as `(already present)` with a
+  clean `Done`, so the user believed vouch was wired into codex when it wasn't.
+  serializer-failure now lands in a distinct `failed` bucket, is reported as
+  such, and the command exits non-zero — "already installed" and "install
+  failed" no longer look the same.
+- `vouch install-mcp <host>`: a manifest `dst` that escaped the target tree
+  (via `..` or an absolute path) is now refused with an `AdapterError` instead
+  of writing outside `target` (defense in depth for the manifest file writer;
+  shipped adapters are unaffected).
+- dual-solve review-ui: the recommendation hint rendered "neither engine
+  produced a usable diff" for the entire duration of a still-running job — the
+  hint was computed over the not-yet-populated candidate list on every poll.
+  it is now omitted until candidates exist.
+- `vouch capture ingest-codex`: rollout parsing had no size cap and could read
+  an oversized (or newline-free blob) rollout whole into memory. the file is
+  now bounded to 64 MiB up front, mirroring the byte caps on other untrusted
+  reads.
+
+### Security
+- `kb.register_source_from_path` blocks path traversal: the path is
+  resolved (following symlinks) and must land inside the kb root before
+  reading, with `O_NOFOLLOW` + `fstat` closing the toctou window between
+  the containment check and the read. previously any file the process
+  could access was registrable as a "source" and retrievable via
+  `kb.cite` / `kb.list_sources` (#421).
+
 ## [1.2.2] — 2026-07-07
 
 ### Packaging
@@ -266,6 +734,11 @@ All notable changes to vouch are documented here. Format follows
   KB under `eval/fixture-kb/`, and an `eval` workflow gating retrieval changes
   (#226).
 ### Fixed
+- `build_context_pack` now evaluates the `require_citations` gate (and
+  `quality.uncited_items`) after the `max_chars` budget drops tail items, so
+  the pack is never failed for uncited claims the caller did not receive.
+  Fixes #174.
+- `audit.log_event` now holds an exclusive cross-process lock around read-prev-hash → derive → append, closing a TOCTOU race where two concurrent writers observed the same `prev_hash` and forked the chain — `verify_chain` then reported "previous hash mismatch" at the second concurrent event forever, breaking the tamper-evidence guarantee from #244 under ordinary multi-writer usage (`vouch serve` + concurrent CLI, multiple agents on JSONL, scripted backgrounded approvals). Uses `fcntl.flock` on POSIX and `msvcrt.locking` on Windows against a sibling `audit.log.jsonl.lock` file so the audit log itself is never opened in a mode that could truncate it. Fixes #262.
 - `parse_since` (the `--since` parser behind `vouch metrics`/`vouch audit`) now raises a clean `MetricsError` for a duration too large to represent (e.g. `--since 1000000000000d`), instead of letting an uncaught `OverflowError` traceback escape — restoring the documented "clean error, not a traceback" contract.
 - `sync_apply` now loads the sync source exactly once and passes the same `_SyncSource` instance into `sync_check`, closing a TOCTOU window where a bundle replaced on disk between the two `_load_source` calls could cause the validation and write phases to operate on different snapshots. Also eliminates redundant directory walks (KB sources) and triple tarball opens (bundle sources). Fixes #217.
 - `vault_to_kb` now passes `slug_hint=page_id` to `propose_page` so vault edit proposals target the existing page id from frontmatter instead of a slugified copy of the title (fixes #219).

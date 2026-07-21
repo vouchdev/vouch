@@ -14,11 +14,12 @@ This implementation:
 from __future__ import annotations
 
 import sqlite3
+from datetime import UTC, datetime
 from typing import Any, Literal, cast
 
 import yaml
 
-from . import graph, index_db
+from . import graph, hot_memory, index_db
 from .embeddings.fusion import rrf_fuse
 from .models import ClaimStatus, ContextItem, ContextPack, ContextQuality
 from .scoping import (
@@ -44,6 +45,7 @@ _RETRACTED_CLAIM_STATUSES = frozenset({
 ContextItemKind = Literal["claim", "page", "entity", "relation", "source"]
 
 _VALID_BACKENDS = ("auto", "hybrid", "embedding", "fts5", "substring")
+_RERANKER_CACHE: Any | None = None
 
 
 def _configured_backend(store: KBStore) -> str:
@@ -74,6 +76,171 @@ def _configured_backend(store: KBStore) -> str:
     return "auto"
 
 
+def _configured_rerank(store: KBStore, *, limit: int) -> tuple[bool, int]:
+    """Resolve the optional context rerank stage from config.yaml.
+
+    Defaults to disabled so existing KBs keep byte-identical ordering unless
+    they opt in with ``retrieval.rerank.enabled: true``. ``top_k`` is the
+    window to reorder; by default it is the caller's context limit.
+    """
+    try:
+        loaded = yaml.safe_load(store.config_path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        return False, limit
+    if not isinstance(loaded, dict):
+        return False, limit
+    retrieval = loaded.get("retrieval")
+    if not isinstance(retrieval, dict):
+        return False, limit
+    rerank = retrieval.get("rerank")
+    if not isinstance(rerank, dict):
+        return False, limit
+
+    enabled = rerank.get("enabled", False)
+    enabled = enabled if isinstance(enabled, bool) else False
+
+    top_k = rerank.get("top_k", limit)
+    top_k = (
+        top_k
+        if isinstance(top_k, int) and not isinstance(top_k, bool) and top_k > 0
+        else limit
+    )
+    return enabled, top_k
+
+
+def _configured_recency(store: KBStore) -> tuple[bool, float]:
+    """Resolve the optional recency-decay stage from config.yaml.
+
+    Defaults to disabled so existing KBs keep byte-identical ordering unless
+    they opt in with ``retrieval.recency.enabled: true`` (new KBs get it from
+    the starter config). ``half_life_days`` is the age at which an artifact's
+    score contribution halves; <= 0 falls back to the 90-day default.
+    """
+    try:
+        loaded = yaml.safe_load(store.config_path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        return False, 90.0
+    if not isinstance(loaded, dict):
+        return False, 90.0
+    retrieval = loaded.get("retrieval")
+    if not isinstance(retrieval, dict):
+        return False, 90.0
+    recency = retrieval.get("recency")
+    if not isinstance(recency, dict):
+        return False, 90.0
+
+    enabled = recency.get("enabled", False)
+    enabled = enabled if isinstance(enabled, bool) else False
+
+    half_life = recency.get("half_life_days", 90.0)
+    half_life = (
+        float(half_life)
+        if isinstance(half_life, (int, float)) and not isinstance(half_life, bool)
+        and half_life > 0
+        else 90.0
+    )
+    return enabled, half_life
+
+
+def _artifact_timestamp(store: KBStore, kind: str, artifact_id: str) -> datetime | None:
+    try:
+        if kind == "claim":
+            claim = store.get_claim(artifact_id)
+            return claim.updated_at or claim.created_at
+        if kind == "page":
+            page = store.get_page(artifact_id)
+            return page.updated_at or page.created_at
+        if kind == "entity":
+            entity = store.get_entity(artifact_id)
+            return entity.updated_at or entity.created_at
+    except (ArtifactNotFoundError, OSError):
+        return None
+    return None
+
+
+def _maybe_recency(
+    store: KBStore,
+    *,
+    hits: list[tuple[str, str, str, float]],
+) -> list[tuple[str, str, str, float]]:
+    """Blend a recency half-life decay into hit scores, newest-favouring.
+
+    Rescoring-only: ``score * (0.5 + 0.5 * decay)`` keeps every hit in the
+    set (an old artifact loses at most half its score, it never vanishes),
+    and artifacts with no readable timestamp are left at full weight.
+    """
+    enabled, half_life_days = _configured_recency(store)
+    if not enabled or not hits:
+        return hits
+    now = datetime.now(UTC)
+    rescored: list[tuple[str, str, str, float]] = []
+    for kind, artifact_id, summary, score in hits:
+        ts = _artifact_timestamp(store, kind, artifact_id)
+        if ts is None:
+            rescored.append((kind, artifact_id, summary, score))
+            continue
+        # Whole days only: sub-day age is noise at a 90-day half-life, and
+        # quantizing keeps repeat queries byte-identical within a day
+        # (fresh artifacts decay 1.0, so same-day scores never drift).
+        age_days = float(int(max((now - ts).total_seconds() / 86400.0, 0.0)))
+        decay = 0.5 ** (age_days / half_life_days)
+        rescored.append((kind, artifact_id, summary, score * (0.5 + 0.5 * decay)))
+    rescored.sort(key=lambda h: h[3], reverse=True)
+    return rescored
+
+
+def _default_reranker_cached() -> Any:
+    global _RERANKER_CACHE
+    if _RERANKER_CACHE is None:
+        from .embeddings.rerank import default_reranker
+
+        _RERANKER_CACHE = default_reranker()
+    return _RERANKER_CACHE
+
+
+def _maybe_rerank(
+    store: KBStore,
+    *,
+    query: str,
+    hits: list[tuple[str, str, str, float]],
+    limit: int,
+) -> list[tuple[str, str, str, float]]:
+    enabled, top_k = _configured_rerank(store, limit=limit)
+    if not enabled or not hits or top_k <= 0:
+        return hits
+
+    window_size = min(top_k, len(hits))
+    window = hits[:window_size]
+    try:
+        from .embeddings.rerank import rerank as do_rerank
+
+        reranked = do_rerank(
+            query=query,
+            hits=window,
+            reranker=_default_reranker_cached(),
+            top_k=window_size,
+        )
+    except ImportError:
+        return hits
+
+    # Keep reranking as an ordering-only stage: the configured window may move,
+    # but it must not add/drop artifacts from the already-scoped result set.
+    original_by_key = {(hit[0], hit[1]): hit for hit in window}
+    seen: set[tuple[str, str]] = set()
+    ordered: list[tuple[str, str, str, float]] = []
+    for hit in reranked:
+        key = (hit[0], hit[1])
+        if key in original_by_key and key not in seen:
+            ordered.append(original_by_key[key])
+            seen.add(key)
+    for hit in window:
+        key = (hit[0], hit[1])
+        if key not in seen:
+            ordered.append(hit)
+            seen.add(key)
+    return ordered + hits[window_size:]
+
+
 def _retrieve(
     store: KBStore,
     query: str,
@@ -101,6 +268,8 @@ def _retrieve(
         fused = rrf_fuse(sem, lex, limit=fetch_limit)
         if fused:
             filtered = filter_hits(store, fused, viewer, limit=limit)
+            filtered = _maybe_recency(store, hits=filtered)
+            filtered = _maybe_rerank(store, query=query, hits=filtered, limit=limit)
             return [(k, i, s, sc, "hybrid") for k, i, s, sc in filtered]
         # both retrievers empty -> fall through to the substring scan below.
 
@@ -124,6 +293,106 @@ def _retrieve(
     substring_hits = store.search_substring(query, limit=fetch_limit)
     filtered = filter_hits(store, substring_hits, viewer, limit=limit)
     return [(k, i, s, sc, "substring") for k, i, s, sc in filtered]
+
+
+def search_kb(
+    store: KBStore,
+    *,
+    query: str,
+    limit: int = 10,
+    backend: str | None = None,
+    min_score: float = 0.0,
+    project: str | None = None,
+    agent: str | None = None,
+) -> dict[str, Any]:
+    """The one `kb.search` implementation every surface delegates to.
+
+    MCP, JSONL, and the CLI used to carry three copies of the backend
+    waterfall and drifted (fusion landed in one, not the others). Keep the
+    logic here only.
+
+    ``backend=None`` defers to ``retrieval.backend`` in config.yaml; "auto"
+    then fuses embedding + FTS5 via RRF and falls back to a substring scan
+    only when both are empty. The ``retrieval`` block reports what actually
+    served the query — a base install degrades to "fts5" and says so.
+    """
+    backend_arg = backend or _configured_backend(store)
+    viewer = viewer_from(
+        config_path=store.config_path,
+        project=project,
+        agent=agent,
+    )
+    fetch_limit = scoped_fetch_limit(limit, viewer)
+    hits: list[tuple[str, str, str, float]] = []
+    used = backend_arg
+
+    valid_backends = {"auto", "embedding", "fts5", "substring", "hybrid"}
+    if backend_arg not in valid_backends:
+        raise ValueError(
+            f"unknown backend: {backend_arg!r} "
+            f"(expected one of {sorted(valid_backends)})"
+        )
+
+    if backend_arg in ("auto", "hybrid"):
+        emb = index_db.search_semantic(
+            store.kb_dir, query, limit=fetch_limit * 2, min_score=min_score,
+        )
+        try:
+            fts = index_db.search(store.kb_dir, query, limit=fetch_limit * 2)
+        except sqlite3.Error:
+            fts = []
+        hits = rrf_fuse(emb, fts, limit=fetch_limit)
+        if emb and fts:
+            used = "hybrid"
+        elif emb:
+            used = "embedding"
+        elif fts:
+            used = "fts5"
+        if not hits and backend_arg == "auto":
+            hits = store.search_substring(query, limit=fetch_limit)
+            used = "substring"
+    elif backend_arg == "embedding":
+        hits = index_db.search_semantic(
+            store.kb_dir, query, limit=fetch_limit, min_score=min_score,
+        )
+        used = "embedding"
+    elif backend_arg == "fts5":
+        try:
+            hits = index_db.search(store.kb_dir, query, limit=fetch_limit)
+        except sqlite3.Error:
+            hits = []
+        used = "fts5"
+    else:  # substring
+        hits = store.search_substring(query, limit=fetch_limit)
+        used = "substring"
+
+    semantic_ok = index_db.semantic_search_available()
+    scoped = filter_hits(store, hits, viewer, limit=limit)
+    hits_list = [
+        {"kind": k, "id": i, "snippet": sn, "score": sc, "backend": used}
+        for k, i, sn, sc in scoped
+    ]
+    result: dict[str, Any] = {
+        "backend": used,
+        "retrieval": {
+            "configured": backend_arg,
+            "used": used,
+            "semantic_available": semantic_ok,
+            "degraded": (
+                backend_arg in ("auto", "hybrid", "embedding")
+                and not semantic_ok
+            ),
+        },
+        "viewer": {"project": viewer.project, "agent": viewer.agent},
+        "hits": hits_list,
+    }
+    # The single search path serves both agent-facing surfaces (MCP + JSONL),
+    # so the hot-memory sidebar (#261) is attached here rather than duplicated
+    # at each call site.
+    return hot_memory.attach_hot_memory(  # type: ignore[no-any-return]
+        result, store, query=query,
+        exclude_ids=[str(hit["id"]) for hit in hits_list],
+    )
 
 
 def _enrich_summary(store: KBStore, kind: str, artifact_id: str, summary: str) -> str:
@@ -310,11 +579,6 @@ def build_context_pack(
     budget_clipped = 0
     budget_omitted = 0
 
-    if require_citations:
-        for it in items:
-            if it.type == "claim" and not it.citations:
-                uncited.append(it.id)
-
     if max_chars is not None:
         total = sum(len(i.summary) for i in items)
         if total > max_chars:
@@ -327,6 +591,14 @@ def build_context_pack(
             while items and sum(len(i.summary) for i in items) > max_chars:
                 items.pop()
                 budget_omitted += 1
+
+    # Compute the citation gate over the items actually returned — after the
+    # max_chars budget has dropped tail items — so the gate never fails on (or
+    # reports in uncited_items) claims the consumer did not receive.
+    if require_citations:
+        uncited = [
+            it.id for it in items if it.type == "claim" and not it.citations
+        ]
 
     if len(items) < min_items:
         warnings.append(f"only {len(items)} items, minimum {min_items}")
@@ -367,6 +639,21 @@ def build_context_pack(
     origins = sorted({it.origin for it in items if it.origin})
     if origins:
         result["origins"] = origins
+    # Honesty block: say when a semantic-capable backend actually served
+    # lexical-only results (embeddings extra absent / no embedder registered)
+    # instead of letting "hybrid" imply semantic coverage that never happened.
+    configured = _configured_backend(store)
+    semantic_ok = index_db.semantic_search_available()
+    recency_enabled, _ = _configured_recency(store)
+    result["retrieval"] = {
+        "configured": configured,
+        "used": result["backend"],
+        "semantic_available": semantic_ok,
+        "degraded": (
+            configured in ("auto", "hybrid", "embedding") and not semantic_ok
+        ),
+        "recency": recency_enabled,
+    }
     if explain:
         result["explain"] = [
             {"kind": k, "id": i, "score": sc, "backend": hits[0][4] if hits else "none"}

@@ -12,7 +12,6 @@
   <a href="https://github.com/mcp/vouchdev/vouch"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fregistry.modelcontextprotocol.io%2Fv0.1%2Fservers%3Fsearch%3Dio.github.vouchdev%2Fvouch&query=%24.servers%5B0%5D.server.version&label=MCP%20Registry&logo=modelcontextprotocol&logoColor=white&color=6E56CF&prefix=v" alt="MCP Registry"></a>
   <a href="https://pypi.org/project/vouch-kb/"><img src="https://img.shields.io/pypi/pyversions/vouch-kb.svg" alt="Python versions"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/vouchdev/vouch.svg" alt="MIT licensed"></a>
-  <a href="https://x.com/vouch_dev"><img src="https://img.shields.io/badge/follow-%40vouch__dev-000000?logo=x&logoColor=white" alt="Follow @vouch_dev on X"></a>
   <a href="https://gittensor.io/miners/repository?name=vouchdev/vouch"><img src="https://api.gittensor.io/repos/vouchdev%2Fvouch/badge.svg" alt="Gittensor impact"></a>
 </p>
 
@@ -21,6 +20,32 @@
 `vouch` gives LLM agents durable memory with an explicit **review gate**: sessions capture themselves, agents *propose* writes, and nothing becomes durable knowledge until you approve it. Approved artifacts are plain files under `.vouch/` — YAML claims, markdown pages — so the KB lives in your repo, is reviewed like code, diffs cleanly, and travels with `git clone`.
 
 The destination is the one [Andrej Karpathy's llm-wiki idea file](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) sketches: stop using LLMs as search engines that rediscover your documents on every question — use them as tireless knowledge engineers that compile, cross-reference, and maintain a living wiki, while humans curate and think. vouch is that idea with the write path made trustworthy. `vouch compile` has an LLM draft the topic pages, but every page cites approved claims, every `[claim: …]` citation is machine-verified before the draft is filed, and the drafts pass through the same review gate as every other write. The LLM compiles; the human approves; the wiki compounds.
+
+## "I can do this with one prompt"
+
+Often true — and worth being honest about. If you want your agent to remember things, a paragraph in `CLAUDE.md`, a memory file, or your host's built-in auto-memory gets you most of the way, costs nothing, and needs no install. Reach for that first. Recall is not a hard problem.
+
+What is hard is *trust in the write path*, and that's a different problem than memory. Single-writer memory needs no trust model: you're the only author, and a bad line costs you a shrug. The moment writes come from **more than one author** — several agents, a teammate, a future you who forgot the context — the question stops being "what did we say?" and becomes "**who decided this was true, on what evidence, and can I audit it later?**" A prompt cannot answer that, no matter how good the prompt is.
+
+That's the whole of vouch:
+
+| | one prompt / memory file | vouch |
+|---|---|---|
+| **Who can write** | whatever the agent decides to save | agents *propose*; a human approves — nothing else lands |
+| **Why believe a line** | vibes | every claim cites a content-hashed source; uncited is a validation error |
+| **When it's wrong** | edit and hope | supersede / contradict / archive, with the old version still in history |
+| **Who changed it** | file mtime | append-only audit log: who proposed, who approved, citing what, when |
+| **At n ≥ 2 writers** | last write wins, silently | one gate, one reviewed history, shared by `git clone` |
+| **What you read** | a growing pile of notes | compiled topic pages with verified citations — a wiki, not a log |
+
+The same argument as a picture — at one writer the two are the same thing; the gap opens at the second writer and only widens:
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/trust-vs-writers-dark.svg">
+  <img src="docs/img/trust-vs-writers-light.svg" width="760" alt="Illustrative line chart of trust in what you read as writers are added. At one writer, a memory file and vouch are identical. From two writers on, the memory file's line decays toward low (last write wins, silently) while vouch's line stays high (every landed write reviewed).">
+</picture>
+
+So the honest pitch: **vouch is not a better place to put memory — it's a review gate in front of one, and a wiki on the other side of it.** If you're solo and happy, one prompt is genuinely fine; vouch's session capture runs passively alongside whatever your host already remembers, rather than replacing it. But once a fleet of agents writes to shared knowledge — or a team does — that pile of notes needs an editor, and an editor is not something you can prompt your way to. The case in full: [docs/review-gate.md](docs/review-gate.md).
 
 ## Watch it work (110 seconds)
 
@@ -41,6 +66,16 @@ docker run --rm -p 127.0.0.1:5173:5173 -v vouch-demo-data:/data ghcr.io/plind-ju
 
 Pre-seeded KB + full webapp console, zero setup. Pass `-e ANTHROPIC_API_KEY=sk-ant-...` to enable LLM features.
 
+**For the full UI without Docker** — Python only, no clone, no node:
+
+```bash
+pipx install 'vouch-kb[web]'                  # the browser console ships inside the wheel
+vouch serve --transport http --port 8731 &    # a backend for the current .vouch/
+vouch console                                 # console at http://localhost:5173 — connect it to :8731
+```
+
+`vouch console` serves the same React console as the Docker demo, straight from the installed package.
+
 **For CLI + Claude Code integration** (most common ongoing workflow):
 
 ```bash
@@ -60,19 +95,43 @@ docker run -i --rm -v "$PWD:/data" ghcr.io/vouchdev/vouch:latest          # stdi
 docker run --rm -v "$PWD:/data" ghcr.io/vouchdev/vouch:latest status      # any CLI command
 ```
 
+**For local development** — CLI and webapp, both running from source:
+
+```bash
+git clone https://github.com/vouchdev/vouch
+cd vouch
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e '.[dev,web]'    # dev,web is what CI installs — make check needs both
+vouch --version                # the CLI now runs straight from src/ — edits apply without reinstalling
+
+make console                   # webapp in dev mode: vouch backend on :8731 + live-reload
+                               # console at http://localhost:5173 — Ctrl-C stops both
+
+make check                     # the CI gate: lint + type + test
+```
+
+`make console` needs node — it starts `vouch serve --transport http` and the Vite dev server as a pair, installing the console's node deps automatically on first run. To instead serve the console the way a release wheel does (no dev server), run `make webapp-build` once, then `vouch console`. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full dev workflow.
+
 ## Reproduce the loop on your project
 
 After exploring the demo above, set up vouch in your own project:
 
-**1. Set up the KB and wire Claude Code** (one-time, per repo):
+**1. Set up the KB and wire Claude Code** (one command, one-time, per repo):
 
 ```bash
 cd /path/to/your/project
-vouch init                          # creates .vouch/ with starter config
-vouch install-mcp claude-code       # wires capture hooks into Claude Code
+vouch install-mcp claude-code       # creates .vouch/ (if missing) + wires Claude Code
 ```
 
-`install-mcp` writes `.mcp.json` (the `kb.*` MCP tools), the `/vouch-*` slash commands, and three hooks — `PostToolUse` capture, `SessionEnd` rollup, `SessionStart` recall. Restart Claude Code so they load.
+`install-mcp` initialises the KB when no `.vouch/` is discoverable (pass `--no-init` to skip; `vouch init` still exists for KB-only setup), then writes `.mcp.json` (the `kb.*` MCP tools), the `/vouch-*` slash commands, and five hooks — `SessionStart` recall, `UserPromptSubmit` per-prompt recall, `PostToolUse` capture, `Stop` answer capture, `SessionEnd` rollup. It also registers vouch as a local-scope MCP server in `~/.claude.json` (the `⚑` line in the output). **Reload your editor window** (VS Code: *Developer: Reload Window*) so it loads.
+
+> **Why the extra registration?** A committed `.mcp.json` is a *project*-scope server, and Claude Code only loads one after a per-user approval — which the **VS Code extension never prompts for**, so `.mcp.json` alone leaves the `kb_*` tools invisible in the extension (they sit at "pending approval", while the hooks quietly work — easy to misread as "connected"). The local-scope entry `install-mcp` writes is trusted on sight, so a fresh install just connects. Verify with `claude mcp list` (`vouch … ✔ Connected`). Pass `--no-approve` to skip it and approve `.mcp.json` yourself.
+
+> **What you'll see.** Every prompt is checked against the KB first. When vouch knows something relevant, the answer opens with **"From vouch memory:"**, grounded in the cited items; when it doesn't, it opens with *"Nothing in vouch on this."* — recall is visible on every turn, never silent. (A fresh KB knows almost nothing yet: work a session or two so capture fills it, then ask about the project again.)
+
+> **Prefer one install for every project?** `vouch install-mcp claude-code --global` wires vouch once, machine-wide: user-level hooks and commands in `~/.claude/` plus a user-scope MCP server in `~/.claude.json`. Every Claude session in every folder then captures + recalls into *that folder's own* `.vouch/` — data stays per project. Run `vouch init` once in each project you want vouch in; by default a folder without a KB never captures anywhere — its session opens with a one-line "run `vouch init` to enable durable memory here" note and the `kb_*` tools say the same. Safe next to existing per-project installs: duplicate hooks collapse and capture dedups by event id.
+
+> **Optionally, a personal catch-all KB.** The global install asks one question (or pass `--personal-fallback`; later: `vouch hub init-personal --fallback`): opt in, and folders *without* a project KB capture into a personal KB at `~/.local/share/vouch/personal` instead of nowhere — each captured source stamped with the folder it came from, and the session banner saying exactly where the knowledge is going. It is **one store shared by every KB-less folder**: recall in any of them reads the whole personal KB, so knowledge captured while working in one such folder can surface in another (the injected block says so). Projects with their own `.vouch/` are never affected. When such a folder later becomes a real project, `vouch init` + **`vouch adopt`** moves its captures into the new project KB *through that KB's own review gate*: sources copy byte-identically, every claim is re-proposed and its byte-offset receipt re-verified, and the project's review config decides durability — adoption never bypasses review. Strictly opt-in; without it, nothing changes.
 
 **2. Point `compile` at an LLM** — the only step that needs a model. In `.vouch/config.yaml`:
 
@@ -93,36 +152,17 @@ compile:
 vouch review                    # walk pending proposals one at a time
 ```
 
-**Want a browser UI for reviewing and proposing?** The video shows the **vouch webapp** — chat, review queue, claims, and stats. You have three options:
+Receipt-verified claims skip the queue by default (`review.auto_approve_on_receipt: true` in the starter config): each session's captured answers become recallable memory with no review pass. What lands in `vouch review` is everything the mechanical check can't vouch for — session-summary pages, entities, relations, and claims that can't quote their source. Set the flag to `false` in `.vouch/config.yaml` to put every write behind the gate.
 
-- **No setup**: Use the Docker demo (recommended)
-- **Local development**: Clone the repo, run `make console`, open http://localhost:5173
-- **CLI-only**: Use `vouch review`, `vouch show <id>`, `vouch approve <id>` commands instead
+**Want a browser UI for reviewing and proposing?** The video shows the **vouch webapp** — chat, review queue, claims, and stats. Your options:
 
-**Point the webapp at your existing KB:**
+- **No setup**: the Docker demo above
+- **pip, no clone**: `pipx install 'vouch-kb[web]'` then `vouch console` (Python only, no Docker, no node) — open http://localhost:5173
+- **Local development**: clone the repo, run `make console`
+- **Lighter built-in queue**: `vouch review-ui` (also in the `[web]` extra)
+- **CLI-only**: `vouch pending`, `vouch show <id>`, `vouch approve <id>`, `vouch reject <id> --reason "…"`
 
-```bash
-# Terminal 1: start the vouch server pointing at your .vouch/
-cd /path/to/your/project
-vouch serve --transport http --port 8731
-
-# Terminal 2: run the Docker UI pointing at that server
-docker run --rm -p 127.0.0.1:5173:5173 \
-  -e VOUCH_TARGET=http://host.docker.internal:8731 \
-  ghcr.io/plind-junior/vouch-demo
-# then open http://localhost:5173
-```
-
-Or to skip Docker entirely and use the CLI tools:
-
-```bash
-vouch review                    # walk pending proposals
-vouch show <id>                 # inspect a claim or page
-vouch approve <id>              # approve a proposal
-vouch reject <id> --reason "…"  # reject with feedback
-```
-
-Lighter alternatives ship with vouch itself: `vouch review-ui` (a built-in browser queue; `pipx install 'vouch-kb[web]'` for the extra), or piecemeal `vouch pending`, `vouch show <id>`, `vouch approve <id>`, `vouch reject <id> --reason "…"`.
+To point any of them at an existing KB, start a backend in your project — `vouch serve --transport http --port 8731` — then connect the console to `:8731` (for the Docker demo, pass `-e VOUCH_TARGET=http://host.docker.internal:8731`).
 
 **5. Compile the wiki.**
 
