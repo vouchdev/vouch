@@ -22,7 +22,11 @@ All notable changes to vouch are documented here. Format follows
   applies — "Nothing in vouch on this." for a question, silence for a
   task. chatter with no informative tokens ("ok thanks", "which one is
   better?") injects nothing at all (retrieval ORs every query token, so
-  those matched noise on `one`). no per-turn model call and no latency —
+  those matched noise on `one`). an anaphoric command whose object is a
+  bare pronoun ("fix it", "run that", "explain this") is skipped for the
+  same reason — its referent lives in the conversation the isolated
+  prompt cannot see, so the hook stays quiet and lets the model resolve
+  it from the transcript. no per-turn model call and no latency —
   the decision rides in the instruction text the model already
   processes; it generalizes to any phrasing or language because it no
   longer depends on recognizing the verb. compliance measured on real

@@ -91,6 +91,36 @@ def _informative_tokens(prompt: str) -> list[str]:
     return out
 
 
+# Anaphora — pronouns whose referent lives in the conversation, not the prompt.
+# All are stopwords already (so they never survive into _informative_tokens),
+# but a prompt that leans on one AND names no concrete noun of its own is
+# ambiguous by construction: the hook sees only the isolated prompt, so "it" /
+# "that" is unresolvable here. See _anaphoric_without_referent.
+_ANAPHORA = frozenset(
+    [
+        "it", "its", "that", "this", "these", "those",
+        "them", "they", "their", "theirs", "there",
+    ]
+)
+
+
+def _anaphoric_without_referent(prompt: str, tokens: list[str]) -> bool:
+    """True for an anaphoric command with nothing concrete to search on.
+
+    The prompt uses a pronoun (it/that/this/those/…) and, once stopwords are
+    stripped, at most a bare verb remains ("fix it", "explain that", "run it
+    again", "undo this"). The pronoun's target is in the conversation the hook
+    cannot see, and a lone verb is not a retrieval query — so the gated path
+    injects nothing and lets the session model, which HAS the transcript,
+    resolve the reference (and kb_search the real term if it needs to). A
+    prompt that names a real noun alongside the pronoun ("update those files")
+    keeps >1 informative token and is NOT treated as ambiguous.
+    """
+    if len(tokens) > 1:
+        return False
+    return any(t in _ANAPHORA for t in _TOKEN_RE.findall(prompt.lower()))
+
+
 def _render(pack: dict[str, Any]) -> str:
     lines: list[str] = []
     for item in pack.get("items", []):
@@ -330,6 +360,12 @@ def _gated_injection(
     if not tokens:
         # Nothing worth searching on ("ok thanks", "which one is better?").
         # Retrieval ORs every token, so these matched noise on "one"/"better".
+        return ""
+    if _anaphoric_without_referent(prompt, tokens):
+        # Anaphoric command with no concrete referent ("fix it", "run that").
+        # The pronoun's target is unknowable from the isolated prompt and the
+        # lone verb is nothing to search on — skip. The model resolves the
+        # reference from the transcript it can see.
         return ""
     pack, body = _retrieve_body(store, " ".join(tokens))
     whose = _whose_kb(personal)

@@ -408,6 +408,53 @@ def test_chatter_injects_nothing(
     assert _hook(store, prompt) == ""
 
 
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "fix it",
+        "run that",
+        "explain this",   # non-action verb — the rule is not a verb allowlist
+        "undo it",
+        "revert those",
+        "run it again",
+    ],
+)
+def test_anaphoric_command_injects_nothing(
+    store: KBStore, monkeypatch: pytest.MonkeyPatch, prompt: str
+) -> None:
+    """An anaphoric command ("fix it") is ambiguous from the isolated prompt:
+    the pronoun's target is in the conversation the hook cannot see. Even with a
+    hit available, the gated path skips — proving the skip is pre-retrieval."""
+    _enable_gate(store)
+    _force_hit(monkeypatch)
+    assert _hook(store, prompt) == ""
+
+
+def test_concrete_noun_beside_a_pronoun_still_injects(
+    store: KBStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The filter keys on ambiguity, not on the mere presence of a pronoun: a
+    prompt that names a real noun alongside the anaphor ("update those files")
+    keeps >1 informative token and is retrieved normally."""
+    _enable_gate(store)
+    _force_hit(monkeypatch)
+    out = _hook(store, "update those deploy scripts")
+    assert "deploys run on tuesdays" in json.loads(out)[
+        "hookSpecificOutput"
+    ]["additionalContext"]
+
+
+def test_anaphoric_helper_needs_both_a_pronoun_and_no_concrete_noun() -> None:
+    assert hooks._anaphoric_without_referent("fix it", ["fix"]) is True
+    assert hooks._anaphoric_without_referent("explain that", ["explain"]) is True
+    # a real object noun beside the pronoun → not ambiguous
+    assert hooks._anaphoric_without_referent(
+        "update those files", ["update", "files"]
+    ) is False
+    # a bare verb with no pronoun is objectless but not anaphoric → not skipped
+    assert hooks._anaphoric_without_referent("deploy", ["deploy"]) is False
+
+
 def test_gate_uses_one_pack_size(
     store: KBStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
