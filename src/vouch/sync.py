@@ -14,6 +14,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from . import audit, bundle
 from .storage import sha256_hex
 
@@ -286,12 +288,107 @@ def _write_conflict_report(
     return str(report_path.relative_to(kb_dir))
 
 
+def _source_origin(src: _SyncSource) -> str:
+    """Provenance label for a sync source: the bundle's manifest kb_id or the
+    source KB's instance id, falling back to its content-hash source_id."""
+    if src.bundle_path is not None:
+        return bundle._manifest_kb_id(src.bundle_path) or src.source_id
+    if src.root is not None:
+        from .storage import read_or_create_instance_id
+
+        return read_or_create_instance_id(src.root)
+    return src.source_id
+
+
+def _sync_apply_as_proposals(
+    kb_dir: Path, src: _SyncSource, check: SyncCheckResult, *, origin: str, actor: str
+) -> dict[str, Any]:
+    """Land another KB's NEW knowledge as pending proposals (federation-safe).
+
+    Claims become proposals via ``bundle.propose_inbound_claim``; sources and
+    evidence are registered as substrate so those claims can cite them; pages,
+    entities, relations, sessions and decided records are reported as deferred,
+    never written. Conflicts are left to the human (surfaced in
+    ``check.conflicts``), so nothing here overwrites reviewed knowledge or
+    bypasses ``proposals.approve()``.
+    """
+    from .models import Evidence
+    from .proposals import ProposalError
+    from .storage import KBStore
+
+    store = KBStore(kb_dir.parent)
+    new = sorted(check.new_files)
+    proposed: list[str] = []
+    failed: list[dict[str, str]] = []
+    sources_registered = 0
+    evidence_registered = 0
+    deferred = {"pages": 0, "entities": 0, "relations": 0, "sessions": 0, "decided": 0}
+    deferred_key = {
+        "page": "pages", "entity": "entities", "relation": "relations",
+        "session": "sessions", "decided-proposal": "decided",
+    }
+
+    # Pass 1: substrate registered directly so claim proposals can cite it.
+    for path in new:
+        kind, _ = _artifact_kind(path)
+        if kind == "source" and path.endswith("/content"):
+            store.put_source(_read_source_file(src, path))
+            sources_registered += 1
+        elif kind == "evidence":
+            ev = Evidence.model_validate(yaml.safe_load(_read_source_file(src, path)))
+            store.put_evidence(ev)
+            evidence_registered += 1
+
+    # Pass 2: claims -> proposals; every other durable kind is deferred, not written.
+    for path in new:
+        kind, _ = _artifact_kind(path)
+        if kind == "claim":
+            body = _read_source_file(src, path)
+            try:
+                proposed.append(
+                    bundle.propose_inbound_claim(store, body, origin=origin, actor=actor)
+                )
+            except ProposalError as e:
+                failed.append({"claim": bundle.inbound_claim_id(body), "error": str(e)})
+        elif kind in deferred_key:
+            deferred[deferred_key[kind]] += 1
+
+    audit.log_event(
+        kb_dir,
+        event="sync.apply_proposals",
+        actor=actor,
+        object_ids=[check.source_id],
+        data={
+            "origin": origin,
+            "proposed": len(proposed),
+            "failed": len(failed),
+            "sources": sources_registered,
+            "evidence": evidence_registered,
+            "deferred": deferred,
+        },
+    )
+    return {
+        "mode": "as_proposals",
+        "source_type": check.source_type,
+        "source_id": check.source_id,
+        "origin": origin,
+        "proposed": proposed,
+        "failed": failed,
+        "sources_registered": sources_registered,
+        "evidence_registered": evidence_registered,
+        "deferred": deferred,
+        "conflicts": [asdict(c) for c in check.conflicts],
+    }
+
+
 def sync_apply(
     kb_dir: Path,
     source_path: Path,
     *,
     on_conflict: str = "fail",
     actor: str = "vouch-sync",
+    as_proposals: bool = False,
+    origin_kb: str | None = None,
 ) -> dict[str, Any]:
     """Apply non-conflicting incoming files from another KB or bundle.
 
@@ -299,6 +396,15 @@ def sync_apply(
     - ``fail``: abort if any incoming path conflicts.
     - ``skip``: import new files and leave conflicts untouched.
     - ``propose``: import new files and write a local sync conflict report.
+
+    With ``as_proposals=True`` the review gate is upheld like
+    ``bundle.import_as_proposals``: new inbound claims become PENDING proposals
+    (sources/evidence are registered as substrate), nothing is written to the
+    committed store, and conflicts are reported rather than resolved -- so no
+    ``on_conflict`` policy applies. This is the federation-safe mode
+    (`sync --as-proposals`, ROADMAP.md step 8.2/10); the direct-write default
+    remains for a human reconciling their own KBs, the same posture as
+    ``import-apply``.
     """
     if on_conflict not in {"fail", "skip", "propose"}:
         raise ValueError(f"on_conflict must be fail|skip|propose, got {on_conflict}")
@@ -307,6 +413,10 @@ def sync_apply(
     check = _sync_check_with_src(kb_dir, src)
     if check.issues:
         raise RuntimeError(f"refusing to sync: {check.issues[0]}")
+    if as_proposals:
+        return _sync_apply_as_proposals(
+            kb_dir, src, check, origin=origin_kb or _source_origin(src), actor=actor
+        )
     if on_conflict == "fail" and check.conflicts:
         raise RuntimeError(f"refusing to sync: {len(check.conflicts)} conflicts")
 

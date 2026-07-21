@@ -3284,8 +3284,26 @@ def sync_check_cmd(source_path: str) -> None:
     show_default=True,
     type=click.Choice(["fail", "skip", "propose"]),
 )
-def sync_apply_cmd(source_path: str, on_conflict: str) -> None:
-    """Apply non-conflicting files from another .vouch directory or bundle."""
+@click.option(
+    "--as-proposals",
+    is_flag=True,
+    default=False,
+    help="Federation-safe: new inbound claims become pending proposals for review "
+    "instead of direct writes. Nothing lands without `vouch review`.",
+)
+@click.option(
+    "--origin-kb",
+    default=None,
+    help="Provenance label for the source KB (defaults to its instance id).",
+)
+def sync_apply_cmd(
+    source_path: str, on_conflict: str, as_proposals: bool, origin_kb: str | None
+) -> None:
+    """Apply files from another .vouch directory or bundle.
+
+    Default is a direct reconcile of your own KBs. Use --as-proposals to accept
+    another KB's knowledge through this KB's review gate (the federation path).
+    """
     store = _load_store()
     try:
         r = sync_mod.sync_apply(
@@ -3293,6 +3311,8 @@ def sync_apply_cmd(source_path: str, on_conflict: str) -> None:
             Path(source_path),
             on_conflict=on_conflict,
             actor=_whoami(),
+            as_proposals=as_proposals,
+            origin_kb=origin_kb,
         )
     except (RuntimeError, ValueError) as e:
         raise click.ClickException(str(e)) from e

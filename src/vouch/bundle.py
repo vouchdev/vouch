@@ -705,6 +705,48 @@ def _manifest_kb_id(bundle_path: Path) -> str | None:
     return str(kb_id) if kb_id else None
 
 
+def inbound_claim_id(claim_bytes: bytes) -> str:
+    """The id of an inbound claim (raw claim yaml), for failure reporting."""
+    from .models import Claim
+
+    return Claim.model_validate(yaml.safe_load(claim_bytes)).id
+
+
+def propose_inbound_claim(store: Any, claim_bytes: bytes, *, origin: str, actor: str) -> str:
+    """File one inbound claim (raw claim yaml) as a pending proposal.
+
+    Shared by the two gated receive paths -- bundle import and sync -- so both
+    stamp identical provenance: the proposing ``actor`` and an ``origin:<kb>``
+    tag that survives approval. Propagates ``proposals.ProposalError`` (e.g. a
+    claim that cannot cite a resolvable source) so the caller can record it as a
+    failure rather than dropping it silently. Returns the pending proposal's id.
+    """
+    from . import proposals as _proposals
+    from .models import Claim
+
+    claim = Claim.model_validate(yaml.safe_load(claim_bytes))
+    tags = list(claim.tags)
+    origin_tag = f"origin:{origin}"
+    if origin_tag not in tags:
+        tags.append(origin_tag)
+    res = _proposals.propose_claim(
+        store,
+        text=claim.text,
+        evidence=list(claim.evidence),
+        proposed_by=actor,
+        claim_type=claim.type.value,
+        confidence=claim.confidence,
+        entities=list(claim.entities),
+        tags=tags,
+        slug_hint=claim.id,
+        rationale=(
+            f"imported from KB '{origin}' via gated import; review before it "
+            "becomes durable knowledge here"
+        ),
+    )
+    return res.proposal.id
+
+
 def import_as_proposals(
     kb_dir: Path,
     bundle_path: Path,
@@ -736,7 +778,7 @@ def import_as_proposals(
     # Local imports: proposals/storage import from this module's siblings, and a
     # top-level import here would risk a cycle at package load.
     from . import proposals as _proposals
-    from .models import Claim, Evidence
+    from .models import Evidence
     from .storage import KBStore
 
     check = import_check(kb_dir, bundle_path)
@@ -774,36 +816,17 @@ def import_as_proposals(
                 evidence_registered += 1
 
         # Pass 2: file each inbound claim as a PENDING proposal.
-        origin_tag = f"origin:{origin}"
         for m in members:
             if m.name.startswith("claims/") and m.name.endswith(".yaml"):
-                claim = Claim.model_validate(
-                    yaml.safe_load(tar.extractfile(m).read())  # type: ignore[union-attr]
-                )
-                tags = list(claim.tags)
-                if origin_tag not in tags:
-                    tags.append(origin_tag)
+                body = tar.extractfile(m).read()  # type: ignore[union-attr]
                 try:
-                    res = _proposals.propose_claim(
-                        store,
-                        text=claim.text,
-                        evidence=list(claim.evidence),
-                        proposed_by=proposing_actor,
-                        claim_type=claim.type.value,
-                        confidence=claim.confidence,
-                        entities=list(claim.entities),
-                        tags=tags,
-                        slug_hint=claim.id,
-                        rationale=(
-                            f"imported from KB '{origin}' via gated hub import; "
-                            "review before it becomes durable knowledge here"
-                        ),
+                    proposed.append(
+                        propose_inbound_claim(store, body, origin=origin, actor=proposing_actor)
                     )
-                    proposed.append(res.proposal.id)
                 except _proposals.ProposalError as e:
                     # One un-citable claim must not sink the whole import; record
                     # it rather than abort (and never silently drop it).
-                    failed.append({"claim": claim.id, "error": str(e)})
+                    failed.append({"claim": inbound_claim_id(body), "error": str(e)})
             elif m.name.startswith("pages/"):
                 deferred["pages"] += 1
             elif m.name.startswith("entities/"):
