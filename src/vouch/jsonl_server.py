@@ -661,17 +661,20 @@ def _h_doctor(_: dict) -> dict:
 
 def _h_export(p: dict) -> dict:
     s = _store()
+    exclude = tuple(p.get("exclude") or ())
     dest = bundle.fenced_bundle_path(s, p["out_path"])
-    manifest = bundle.export(s.kb_dir, dest=dest, actor=_agent())
+    manifest = bundle.export(s.kb_dir, dest=dest, actor=_agent(), exclude=exclude)
     return {"bundle_id": manifest["bundle_id"],
-            "files": len(manifest["files"]), "out": p["out_path"]}
+            "files": len(manifest["files"]), "out": p["out_path"],
+            "excluded": manifest["excluded"]}
 
 
 def _h_export_check(p: dict) -> dict:
     s = _store()
     r = bundle.export_check(bundle.fenced_bundle_path(s, p["bundle_path"]))
     return {"ok": r.ok, "bundle_id": r.bundle_id,
-            "files_checked": r.files_checked, "issues": r.issues}
+            "files_checked": r.files_checked, "issues": r.issues,
+            "counts": r.counts, "excluded": r.excluded}
 
 
 def _h_import_check(p: dict) -> dict:

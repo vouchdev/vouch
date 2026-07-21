@@ -29,6 +29,19 @@
       "title": "Id",
       "type": "string"
     },
+    "origin": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "vouch: the KB that vouched for this item, when it arrived via gated federation import (from the claim's origin:<kb> tag). None for locally-authored knowledge.",
+      "title": "Origin"
+    },
     "score": {
       "default": 0.0,
       "title": "Score",
