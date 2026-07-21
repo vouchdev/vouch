@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import re
 from typing import Any
 
 import yaml
@@ -31,6 +32,63 @@ _log = logging.getLogger("vouch")
 
 _MAX_ITEMS = 8
 _MAX_CHARS = 2000
+
+_TOKEN_RE = re.compile(r"\w+")
+
+# Retrieval ORs every query token (see index_db._quote_match), so a prompt
+# like "which one is better?" matched claims on "one" and injected noise on
+# every conversational turn. Search only on informative tokens; a prompt
+# with none is not a retrieval request at all.
+_STOPWORDS = frozenset(
+    [
+        "a", "an", "the", "this", "that", "these", "those", "there", "here", "some",
+        "any", "each", "every", "either", "neither", "both", "few", "more", "most",
+        "other", "such", "own", "same", "all", "only", "very", "too", "not", "no",
+        "nor", "one", "ones", "two", "first", "second", "also", "even", "still",
+        "ever", "never", "always", "already", "i", "me", "my", "mine", "we", "us",
+        "our", "ours", "you", "your", "yours", "he", "him", "his", "she", "her",
+        "hers", "it", "its", "they", "them", "their", "theirs", "myself", "yourself",
+        "ourselves", "themselves", "itself", "am", "is", "are", "was", "were", "be",
+        "been", "being", "do", "does", "did", "doing", "done", "have", "has", "had",
+        "having", "will", "would", "shall", "should", "can", "could", "may", "might",
+        "must", "ought", "and", "or", "but", "so", "yet", "if", "then", "else",
+        "because", "while", "until", "although", "when", "where", "why", "how",
+        "what", "which", "who", "whom", "whose", "than", "as", "of", "to", "in",
+        "on", "at", "by", "for", "with", "about", "against", "between", "into",
+        "through", "during", "before", "after", "above", "below", "from", "up",
+        "down", "out", "off", "over", "under", "again", "further", "once", "think",
+        "thinks", "thinking", "thought", "want", "wants", "wanted", "wanna", "need",
+        "needs", "needed", "really", "honestly", "actually", "just", "like", "maybe",
+        "perhaps", "please", "okay", "ok", "yes", "yeah", "hey", "hi", "hello",
+        "thanks", "thank", "sure", "kind", "kinda", "sort", "sorta", "stuff",
+        "thing", "things", "good", "better", "best", "great", "nice", "way", "ways",
+        "lot", "lots", "bit", "gonna", "gotta", "lets", "let", "make", "makes",
+        "made", "making", "get", "gets", "got", "getting", "go", "goes", "going",
+        "gone", "went", "come", "comes", "came", "coming", "know", "knows", "knew",
+        "knowing", "see", "sees", "saw", "seen", "look", "looks", "looked",
+        "looking", "tell", "tells", "told", "say", "says", "said", "much", "many",
+        "little", "anything", "something", "everything", "nothing", "anyone",
+        "someone", "everyone",
+        # filler interjections — a turn that is only these is not a query
+        "hmm", "hm", "huh", "um", "umm", "uh", "ah", "oh", "eh", "wow", "cool",
+        "right", "yep", "yup", "nope", "nah", "wait", "hold", "done", "great",
+    ]
+)
+
+
+def _informative_tokens(prompt: str) -> list[str]:
+    """Order-preserving informative tokens: no stopwords, digits, one-char."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for tok in _TOKEN_RE.findall(prompt.lower()):
+        # keep multi-digit tokens — issue ids (#12345), error codes (404/500),
+        # and ports (8080) are exactly the terms a technical query needs;
+        # len < 2 already drops single-digit noise.
+        if len(tok) < 2 or tok in _STOPWORDS or tok in seen:
+            continue
+        seen.add(tok)
+        out.append(tok)
+    return out
 
 
 def _render(pack: dict[str, Any]) -> str:
@@ -68,6 +126,8 @@ _ACTION_VERBS = frozenset({
     "rewrite", "optimize", "optimise", "debug", "configure", "rebase", "push",
     "revert", "bump", "replace", "integrate", "scaffold", "draft", "compile",
     "set", "apply", "convert", "extract", "split", "rework", "port", "cut",
+    "proceed", "resume", "retry", "finish", "ship", "land", "publish", "tag",
+    "continue", "go", "keep", "carry",
 })
 
 
@@ -91,6 +151,20 @@ def short_circuit_cfg(cfg: dict) -> tuple[bool, float]:
     return (enabled, threshold)
 
 
+def prompt_gate_cfg(cfg: dict) -> bool:
+    """Read ``retrieval.prompt_gate.enabled`` defensively.
+
+    Absent (the shape every pre-1.6 KB has on disk) means today's behaviour:
+    every prompt gets an injected block. The starter config ships it on, so
+    fresh KBs are quiet on prompts that are not asking the KB anything.
+    """
+    retrieval = cfg.get("retrieval") if isinstance(cfg, dict) else None
+    gate = retrieval.get("prompt_gate") if isinstance(retrieval, dict) else None
+    if not isinstance(gate, dict):
+        return False
+    return bool(gate.get("enabled", False))
+
+
 def _confidence(score: float) -> float:
     """Squash an unbounded retrieval score into a 0-1 heuristic confidence."""
     if score <= 0:
@@ -111,14 +185,39 @@ def _top_confidence(pack: Any) -> float:
     return best
 
 
+# Politeness and discourse lead-ins sit in front of the real imperative
+# ("please fix …", "ok now refactor …", "can you add …"). Skipping them is
+# what makes the first-word test survive how people actually type.
+_LEAD_INS = frozenset({
+    "please", "pls", "now", "then", "also", "next", "ok", "okay", "so", "and",
+    "hey", "hi", "quick", "quickly", "just", "first", "finally", "lets", "let",
+    "can", "could", "would", "will", "you", "we", "i", "im", "id", "maybe",
+    "actually", "again", "still", "ahead", "on", "it", "that", "this",
+})
+
+
 def _looks_like_action(prompt: str) -> bool:
-    """True when the prompt's first real word is an imperative 'do work' verb."""
-    for tok in prompt.strip().lower().split():
+    """True when the prompt reads as an imperative 'do work' request.
+
+    Scans past politeness / discourse lead-ins to the first substantive word
+    and tests it against the imperative verb list. A question word reached
+    that way ("can you tell me what the cadence is") stops the scan: it is a
+    lookup wearing an imperative's clothes, and lookups keep full recall.
+    """
+    saw_lead_in = False
+    for tok in prompt.strip().lower().split()[:6]:
         word = "".join(ch for ch in tok if ch.isalpha())
         if not word:
             continue  # skip leading punctuation / emoji tokens
-        return word in _ACTION_VERBS
-    return False
+        if word in _ACTION_VERBS:
+            return True
+        if word in _LEAD_INS:
+            saw_lead_in = True
+            continue
+        return False
+    # Nothing but discourse tokens ("continue", "ok now", "go ahead"): a
+    # continuation of the work in progress, not a question for the KB.
+    return saw_lead_in
 
 
 def _envelope(block: str) -> str:
@@ -187,17 +286,97 @@ def build_claude_prompt_hook(
             # Best-effort reflex feed: recording must never break a
             # working hook (module contract -- see docstring).
             _log.warning("context-hook: salience record_query failed", exc_info=True)
+    # The prompt gate (retrieval.prompt_gate) decides how vouch spends the
+    # turn. OFF (every pre-1.6 KB on disk) → the unconditional 1.6-era block,
+    # exactly as before. ON (starter default) → hand the MODEL one conditional
+    # instruction and let it choose, per turn, whether to surface memory
+    # loudly (a question), use it silently (a task), or ignore it (irrelevant).
+    # No verb lists, no per-turn model call — just instruction text the model
+    # already reads. Measured compliance (real claude -p, 3 tiers): tasks are
+    # never wrongly announced; questions are announced by haiku/opus, and by
+    # sonnet once the block is KB-backed (not a hand-crafted test string).
     try:
-        pack = build_context_pack(
-            store,
-            query=prompt,
-            limit=_MAX_ITEMS,
-            max_chars=_MAX_CHARS,
-        )
+        if not prompt_gate_cfg(cfg):
+            return _legacy_injection(store, prompt, cfg, personal)
+        return _gated_injection(store, prompt, cfg, personal)
     except Exception:
-        _log.warning("context-hook: build_context_pack failed", exc_info=True)
+        # Fail-safe: any retrieval/render error injects NOTHING, never a false
+        # "nothing in vouch" claim on a path where the search did not complete.
+        _log.warning("context-hook: injection failed", exc_info=True)
         return ""
-    body = _render(pack) if isinstance(pack, dict) else ""
+
+
+def _retrieve_body(store: KBStore, query: str) -> tuple[Any, str]:
+    """Run the context-pack retrieval; returns (pack, rendered_body).
+
+    Raises on retrieval failure — the caller must NOT treat a broken index or
+    bad config as an empty result. A genuine empty search asserts "nothing in
+    vouch" to the model; a retrieval error must stay silent (inject nothing),
+    exactly as the pre-gate hook did, so vouch never makes a false claim about
+    KB contents on a fail-safe path.
+    """
+    pack = build_context_pack(
+        store, query=query, limit=_MAX_ITEMS, max_chars=_MAX_CHARS,
+    )
+    return pack, (_render(pack) if isinstance(pack, dict) else "")
+
+
+def _gated_injection(
+    store: KBStore, prompt: str, cfg: dict[str, Any], personal: bool
+) -> str:
+    """Model-delegated recall: retrieve, hand over ONE conditional instruction,
+    let the model decide loud vs silent vs ignore from the prompt itself."""
+    tokens = _informative_tokens(prompt)
+    if not tokens:
+        # Nothing worth searching on ("ok thanks", "which one is better?").
+        # Retrieval ORs every token, so these matched noise on "one"/"better".
+        return ""
+    pack, body = _retrieve_body(store, " ".join(tokens))
+    whose = _whose_kb(personal)
+    if not body:
+        # A miss leaves the visible-recall promise to the MODEL: say "Nothing
+        # in vouch" only if this turn was actually a question; a task or small
+        # talk gets a clean answer with no vouch mention.
+        return _envelope(
+            f"[vouch memory] I searched {whose} for this prompt and found "
+            "nothing relevant. If this turn is a direct QUESTION to project "
+            'memory, briefly say "Nothing in vouch on this." then answer from '
+            "your own knowledge. Otherwise (a task, or small talk) answer "
+            "normally and do not mention vouch."
+        )
+    sc_enabled, min_conf = short_circuit_cfg(cfg)
+    stop_clause = ""
+    if sc_enabled and _top_confidence(pack) >= min_conf:
+        # A high-confidence hit MAY collapse — but only for a question the item
+        # fully answers. A task never "fully answers", so the model won't stop.
+        stop_clause = (
+            "\n- If a single item fully and directly answers a QUESTION here, "
+            'you may reply with just its "From vouch memory:" quote and stop.'
+        )
+    return _envelope(
+        f"[vouch memory] I checked {whose} for this prompt. Related approved "
+        "items are below. Decide, from THIS prompt, how to use them:\n"
+        "- If the prompt is ASKING something these items answer, treat them as "
+        'the answer: open your reply with the exact words "From vouch memory:" '
+        "and render each item you use as its own markdown blockquote line "
+        "ending in its [id]. That visible opener is how the user sees recall "
+        "ran.\n"
+        "- If the prompt is a TASK (fix / build / change / run something), use "
+        "the items silently as background: cite an item's [id] inline only "
+        "where you actually rely on it, and do NOT open with a memory banner — "
+        "answer as the work.\n"
+        "- If none are actually relevant to this prompt, ignore them and answer "
+        "normally without mentioning vouch." + stop_clause + "\n\n" + body
+    )
+
+
+def _legacy_injection(
+    store: KBStore, prompt: str, cfg: dict[str, Any], personal: bool
+) -> str:
+    """Pre-gate behaviour, unchanged for existing KBs: an unconditional recall
+    block (or the explicit "Nothing in vouch" note), with the opt-in confidence
+    short-circuit gated on the imperative-verb heuristic."""
+    pack, body = _retrieve_body(store, prompt)
     if not body:
         # Say so explicitly even when empty — the user wants to see that vouch
         # was consulted, not silence that looks like vouch did nothing.
@@ -207,7 +386,6 @@ def build_claude_prompt_hook(
             'the exact words "Nothing in vouch on this." — even if you use tools '
             "or explore the codebase first — then answer from your own knowledge."
         )
-
     sc_enabled, min_conf = short_circuit_cfg(cfg)
     if sc_enabled and not _looks_like_action(prompt) and _top_confidence(pack) >= min_conf:
         # High-confidence lookup: let the model collapse to a near-instant
