@@ -48,14 +48,16 @@ def test_relevant_prompt_yields_additional_context(
 def test_relevant_prompt_banner_instructs_from_vouch_memory(
     store: KBStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The block is instructional: the model is told to open its reply with
-    "From vouch memory:" and ground in the cited items — that visible opener
-    is the user-facing proof recall ran."""
+    """The block is instructional: for a question the model is told to open
+    with "From vouch memory:" and render items as blockquotes — that visible
+    opener is the user-facing proof recall ran. (The starter `store` fixture
+    ships the prompt gate on, so this is the model-delegated conditional
+    block; the legacy unconditional wording is covered separately.)"""
     _force_hit(monkeypatch)
     out = hooks.build_claude_prompt_hook(store, json.dumps({"prompt": "when do deploys run"}))
     ctx = json.loads(out)["hookSpecificOutput"]["additionalContext"]
     assert ctx.startswith("[vouch memory]")
-    assert 'MUST open with the exact words "From vouch memory:"' in ctx
+    assert 'open your reply with the exact words "From vouch memory:"' in ctx
     # recalled facts must render visually distinct from the model's own words
     assert "markdown blockquote" in ctx
 
@@ -311,55 +313,65 @@ def test_lookup_prompts_are_not_classified_as_work(prompt: str) -> None:
     assert hooks._looks_like_action(prompt) is False
 
 
-def test_work_prompt_with_a_miss_injects_nothing(
-    store: KBStore, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The whole point: a coding command the KB knows nothing about must not
-    spend the turn's opener announcing an empty search."""
-    _enable_gate(store)
-    monkeypatch.setattr(context.index_db, "search_semantic", lambda *a, **k: [])
-    monkeypatch.setattr(context.index_db, "search", lambda *a, **k: [])
-    assert _hook(store, "fix the flaky websocket reconnect") == ""
+def _enable_gate_and_short_circuit(store: KBStore, min_conf: float = 0.8) -> None:
+    import yaml
+
+    cfg = yaml.safe_load(store.config_path.read_text(encoding="utf-8"))
+    retrieval = cfg.setdefault("retrieval", {})
+    retrieval["prompt_gate"] = {"enabled": True}
+    retrieval["short_circuit"] = {"enabled": True, "min_confidence": min_conf}
+    store.config_path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
 
 
-def test_work_prompt_with_a_hit_is_advisory_not_a_contract(
+def test_gate_hit_injects_one_conditional_block(
     store: KBStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Recall still helps the work — it just must not force the reply shape."""
+    """Model-delegated: a hit hands the model ONE block carrying all three
+    branches (announce / silent / ignore) — not a fixed reply contract."""
     _enable_gate(store)
     _force_hit(monkeypatch)
     out = _hook(store, "fix the tuesday deploy script")
-    assert out  # context is still injected
     block = json.loads(out)["hookSpecificOutput"]["additionalContext"]
-    assert "deploys run on tuesdays" in block
-    assert "work request" in block
-    assert "Do NOT open your reply with a memory banner" in block
-    assert "MUST open with" not in block
-    assert "From vouch memory:" not in block
+    assert "deploys run on tuesdays" in block  # the item rode along
+    # question branch — announce
+    assert 'open your reply with the exact words "From vouch memory:"' in block
+    # task branch — stay silent
+    assert "do NOT open with a memory banner" in block
+    # irrelevant branch — ignore
+    assert "ignore them" in block
+    # NOT the old unconditional contract
+    assert "MUST open with the exact words" not in block
 
 
-def test_lookup_prompt_keeps_the_visible_recall_contract(
+def test_gate_injects_the_same_block_for_task_and_question(
     store: KBStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """The hook no longer classifies intent: the SAME conditional block is
+    injected whether the prompt looks like a task or a question — the model
+    makes the call, which is what lets it generalize to any phrasing."""
     _enable_gate(store)
     _force_hit(monkeypatch)
-    out = _hook(store, "what day do deploys run?")
-    block = json.loads(out)["hookSpecificOutput"]["additionalContext"]
-    assert 'MUST open with the exact words "From vouch memory:"' in block
-    assert "work request" not in block
+    task = json.loads(_hook(store, "vendorize the deploy deps"))
+    ques = json.loads(_hook(store, "what day do deploys run?"))
+    assert (
+        task["hookSpecificOutput"]["additionalContext"]
+        == ques["hookSpecificOutput"]["additionalContext"]
+    )
 
 
-def test_lookup_prompt_with_a_miss_still_says_so(
+def test_gate_miss_defers_the_nothing_message_to_the_model(
     store: KBStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A question the KB cannot answer keeps the honest 'nothing' answer —
-    silence there is indistinguishable from vouch being broken."""
+    """On a miss the model decides: say "Nothing in vouch" only for a
+    question; stay silent (no vouch mention) for a task."""
     _enable_gate(store)
     monkeypatch.setattr(context.index_db, "search_semantic", lambda *a, **k: [])
     monkeypatch.setattr(context.index_db, "search", lambda *a, **k: [])
-    out = _hook(store, "what is our incident escalation policy?")
+    out = _hook(store, "fix the flaky websocket reconnect")
     block = json.loads(out)["hookSpecificOutput"]["additionalContext"]
-    assert '"Nothing in vouch on this."' in block
+    assert "found nothing relevant" in block
+    assert '"Nothing in vouch on this."' in block  # only if a question
+    assert "do not mention vouch" in block  # otherwise silent
 
 
 @pytest.mark.parametrize("prompt", ["ok thanks", "yes", "which one is better?", "hmm"])
@@ -372,41 +384,71 @@ def test_chatter_injects_nothing(
     assert _hook(store, prompt) == ""
 
 
-def test_work_prompts_get_a_smaller_pack(
+def test_gate_uses_one_pack_size(
     store: KBStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Recall should inform the work, not crowd the turn it is helping."""
+    """Model-delegation retrieves ONE pack and lets the model select from it —
+    there is no task/question pack-size split to get wrong."""
     _enable_gate(store)
     _force_hit(monkeypatch)
-    seen: dict[str, int] = {}
-
+    seen: list[tuple] = []
     real = context.build_context_pack
 
     def _spy(store_arg, **kwargs):
-        seen["limit"] = kwargs.get("limit")
-        seen["max_chars"] = kwargs.get("max_chars")
+        seen.append((kwargs.get("limit"), kwargs.get("max_chars")))
         return real(store_arg, **kwargs)
 
     monkeypatch.setattr(hooks, "build_context_pack", _spy)
-    _hook(store, "fix the tuesday deploy script")
-    assert seen["limit"] == hooks._WORK_MAX_ITEMS
-    assert seen["max_chars"] == hooks._WORK_MAX_CHARS
+    _hook(store, "fix the deploy script")
     _hook(store, "what day do deploys run?")
-    assert seen["limit"] == hooks._MAX_ITEMS
-    assert seen["max_chars"] == hooks._MAX_CHARS
+    assert set(seen) == {(hooks._MAX_ITEMS, hooks._MAX_CHARS)}
 
 
-def test_gate_absent_keeps_todays_behaviour(
+def test_gate_short_circuit_adds_a_stop_clause(
     store: KBStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Existing KBs have no prompt_gate key on disk and must not change."""
+    """A high-confidence hit under the gate gains a 'you may stop' clause — but
+    scoped to a question the item fully answers, so a task can't collapse."""
+    _enable_gate_and_short_circuit(store)
+    _stub_pack(monkeypatch, score=50.0)  # conf ~1.0 >= 0.8
+    out = _hook(store, "what day do deploys run?")
+    block = json.loads(out)["hookSpecificOutput"]["additionalContext"]
+    assert "you may reply with just its" in block
+    assert "and stop" in block
+    # without short_circuit the clause is absent
+    import yaml
+
+    cfg = yaml.safe_load(store.config_path.read_text(encoding="utf-8"))
+    cfg["retrieval"].pop("short_circuit", None)
+    store.config_path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+    out2 = _hook(store, "what day do deploys run?")
+    assert "you may reply with just its" not in (
+        json.loads(out2)["hookSpecificOutput"]["additionalContext"]
+    )
+
+
+def test_gate_absent_hit_keeps_legacy_contract(
+    store: KBStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Existing KBs (no prompt_gate key) keep the unconditional 1.5-era block."""
+    _disable_gate(store)
+    _force_hit(monkeypatch)
+    out = _hook(store, "fix the flaky websocket reconnect")
+    block = json.loads(out)["hookSpecificOutput"]["additionalContext"]
+    assert 'MUST open with the exact words "From vouch memory:"' in block
+    assert "Decide, from THIS prompt" not in block  # not the conditional block
+
+
+def test_gate_absent_miss_forces_the_nothing_banner(
+    store: KBStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
     _disable_gate(store)
     monkeypatch.setattr(context.index_db, "search_semantic", lambda *a, **k: [])
     monkeypatch.setattr(context.index_db, "search", lambda *a, **k: [])
     out = _hook(store, "fix the flaky websocket reconnect")
     block = json.loads(out)["hookSpecificOutput"]["additionalContext"]
     assert '"Nothing in vouch on this."' in block
-    # chatter, too: unchanged without the key
+    # legacy does not gate chatter either — it still injects
     assert _hook(store, "ok thanks") != ""
 
 

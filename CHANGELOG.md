@@ -7,24 +7,28 @@ All notable changes to vouch are documented here. Format follows
 ## [Unreleased]
 
 ### Changed
-- **the per-prompt hook now decides how much of a turn it is entitled
-  to** (`retrieval.prompt_gate`). recall used to inject a block on every
-  prompt, so "fix the failing test" spent its opener announcing a memory
-  search nobody asked for. three cases now:
-  *chatter* with no informative tokens ("ok thanks", "which one is
-  better?") injects nothing — retrieval ORs every query token, so those
-  used to match on `one` and pull noise into turns that wanted none;
-  *"do work" imperatives* ("fix …", "refactor …", "run the tests",
-  "continue") get a smaller background pack (3 items / 700 chars) with
-  **no reply contract** — no "From vouch memory:" opener, no blockquote
-  ritual, cite an id inline only where it was actually used — and inject
-  nothing at all when the KB has no match; *lookups* — questions,
-  "what/why/how", anything not imperative — keep the full visible-recall
-  behaviour, including the honest "Nothing in vouch on this." on a miss.
-  the classifier is deterministic and llm-free (an imperative-verb test
-  that reads past politeness lead-ins like "please" / "ok now" / "can
-  you"), so it adds no latency to a turn. new KBs get it on; existing KBs
-  behave exactly as before until they add the key.
+- **the per-prompt hook now lets the model decide how much of a turn
+  vouch takes** (`retrieval.prompt_gate`). recall used to inject an
+  unconditional "open with From vouch memory:" block on *every* prompt,
+  so "fix the failing test" spent its reply opener announcing a memory
+  search nobody asked for. rather than have the hook guess the prompt's
+  intent with a verb list (which never covers the next phrasing), it now
+  hands the host model ONE conditional instruction and lets the model —
+  which already reads the prompt — choose per turn: a *question* the
+  items answer opens with "From vouch memory:" and quotes them; a *task*
+  (fix / build / change / run anything, known verb or not) uses them
+  silently as background, citing an id inline only where relied on, with
+  no banner; *irrelevant* items are ignored. on a miss the same judgment
+  applies — "Nothing in vouch on this." for a question, silence for a
+  task. chatter with no informative tokens ("ok thanks", "which one is
+  better?") injects nothing at all (retrieval ORs every query token, so
+  those matched noise on `one`). no per-turn model call and no latency —
+  the decision rides in the instruction text the model already
+  processes; it generalizes to any phrasing or language because it no
+  longer depends on recognizing the verb. compliance measured on real
+  `claude -p` across haiku / sonnet / opus (KB-backed block): coding
+  tasks are never wrongly announced. new KBs get it on; existing KBs
+  keep the unconditional block until they add the key.
 - **personal catch-all KB + `vouch adopt`** (global vouch, phase 3):
   `vouch hub init-personal` creates and registers a personal KB at
   `~/.local/share/vouch/personal` (`XDG_DATA_HOME` honoured;

@@ -33,11 +33,6 @@ _log = logging.getLogger("vouch")
 _MAX_ITEMS = 8
 _MAX_CHARS = 2000
 
-# A "do work" prompt gets a smaller pack: recall should inform the work, not
-# crowd the turn it is trying to help.
-_WORK_MAX_ITEMS = 3
-_WORK_MAX_CHARS = 700
-
 _TOKEN_RE = re.compile(r"\w+")
 
 # Retrieval ORs every query token (see index_db._quote_match), so a prompt
@@ -288,41 +283,89 @@ def build_claude_prompt_hook(
             # Best-effort reflex feed: recording must never break a
             # working hook (module contract -- see docstring).
             _log.warning("context-hook: salience record_query failed", exc_info=True)
-    # The prompt gate decides how much of a turn vouch is entitled to. Two
-    # kinds of prompt are not asking the KB anything:
-    #
-    #   * chatter with no informative tokens ("ok thanks", "which one?") —
-    #     retrieval ORs every token, so these used to match on "one" and
-    #     inject noise on turns that wanted none;
-    #   * "do work" imperatives ("fix the failing test", "run the suite") —
-    #     recall can still HELP these (conventions, architecture), but the
-    #     turn belongs to the work, so a miss stays silent and a hit arrives
-    #     as advice rather than as a reply contract.
-    #
-    # Lookups — questions, "what/why/how", anything not imperative — keep the
-    # full visible-recall behaviour, banner and opener included.
-    gate_on = prompt_gate_cfg(cfg)
-    tokens = _informative_tokens(prompt)
-    if gate_on and not tokens:
-        return ""
-    work_mode = gate_on and _looks_like_action(prompt)
-    query = " ".join(tokens) if (gate_on and tokens) else prompt
+    # The prompt gate (retrieval.prompt_gate) decides how vouch spends the
+    # turn. OFF (every pre-1.6 KB on disk) → the unconditional 1.6-era block,
+    # exactly as before. ON (starter default) → hand the MODEL one conditional
+    # instruction and let it choose, per turn, whether to surface memory
+    # loudly (a question), use it silently (a task), or ignore it (irrelevant).
+    # No verb lists, no per-turn model call — just instruction text the model
+    # already reads. Measured compliance (real claude -p, 3 tiers): tasks are
+    # never wrongly announced; questions are announced by haiku/opus, and by
+    # sonnet once the block is KB-backed (not a hand-crafted test string).
+    if not prompt_gate_cfg(cfg):
+        return _legacy_injection(store, prompt, cfg, personal)
+    return _gated_injection(store, prompt, cfg, personal)
+
+
+def _retrieve_body(store: KBStore, query: str) -> tuple[Any, str]:
+    """Run the context-pack retrieval; (pack, rendered_body). ("", "") on error."""
     try:
         pack = build_context_pack(
-            store,
-            query=query,
-            limit=_WORK_MAX_ITEMS if work_mode else _MAX_ITEMS,
-            max_chars=_WORK_MAX_CHARS if work_mode else _MAX_CHARS,
+            store, query=query, limit=_MAX_ITEMS, max_chars=_MAX_CHARS,
         )
     except Exception:
         _log.warning("context-hook: build_context_pack failed", exc_info=True)
+        return None, ""
+    return pack, (_render(pack) if isinstance(pack, dict) else "")
+
+
+def _gated_injection(
+    store: KBStore, prompt: str, cfg: dict[str, Any], personal: bool
+) -> str:
+    """Model-delegated recall: retrieve, hand over ONE conditional instruction,
+    let the model decide loud vs silent vs ignore from the prompt itself."""
+    tokens = _informative_tokens(prompt)
+    if not tokens:
+        # Nothing worth searching on ("ok thanks", "which one is better?").
+        # Retrieval ORs every token, so these matched noise on "one"/"better".
         return ""
-    body = _render(pack) if isinstance(pack, dict) else ""
+    pack, body = _retrieve_body(store, " ".join(tokens))
+    whose = _whose_kb(personal)
     if not body:
-        if work_mode:
-            # Nothing to offer a work request: say nothing at all rather than
-            # spend the turn's opener announcing an empty search.
-            return ""
+        # A miss leaves the visible-recall promise to the MODEL: say "Nothing
+        # in vouch" only if this turn was actually a question; a task or small
+        # talk gets a clean answer with no vouch mention.
+        return _envelope(
+            f"[vouch memory] I searched {whose} for this prompt and found "
+            "nothing relevant. If this turn is a direct QUESTION to project "
+            'memory, briefly say "Nothing in vouch on this." then answer from '
+            "your own knowledge. Otherwise (a task, or small talk) answer "
+            "normally and do not mention vouch."
+        )
+    sc_enabled, min_conf = short_circuit_cfg(cfg)
+    stop_clause = ""
+    if sc_enabled and _top_confidence(pack) >= min_conf:
+        # A high-confidence hit MAY collapse — but only for a question the item
+        # fully answers. A task never "fully answers", so the model won't stop.
+        stop_clause = (
+            "\n- If a single item fully and directly answers a QUESTION here, "
+            'you may reply with just its "From vouch memory:" quote and stop.'
+        )
+    return _envelope(
+        f"[vouch memory] I checked {whose} for this prompt. Related approved "
+        "items are below. Decide, from THIS prompt, how to use them:\n"
+        "- If the prompt is ASKING something these items answer, treat them as "
+        'the answer: open your reply with the exact words "From vouch memory:" '
+        "and render each item you use as its own markdown blockquote line "
+        "ending in its [id]. That visible opener is how the user sees recall "
+        "ran.\n"
+        "- If the prompt is a TASK (fix / build / change / run something), use "
+        "the items silently as background: cite an item's [id] inline only "
+        "where you actually rely on it, and do NOT open with a memory banner — "
+        "answer as the work.\n"
+        "- If none are actually relevant to this prompt, ignore them and answer "
+        "normally without mentioning vouch." + stop_clause + "\n\n" + body
+    )
+
+
+def _legacy_injection(
+    store: KBStore, prompt: str, cfg: dict[str, Any], personal: bool
+) -> str:
+    """Pre-gate behaviour, unchanged for existing KBs: an unconditional recall
+    block (or the explicit "Nothing in vouch" note), with the opt-in confidence
+    short-circuit gated on the imperative-verb heuristic."""
+    pack, body = _retrieve_body(store, prompt)
+    if not body:
         # Say so explicitly even when empty — the user wants to see that vouch
         # was consulted, not silence that looks like vouch did nothing.
         return _envelope(
@@ -331,19 +374,6 @@ def build_claude_prompt_hook(
             'the exact words "Nothing in vouch on this." — even if you use tools '
             "or explore the codebase first — then answer from your own knowledge."
         )
-    if work_mode:
-        # Advisory, not a reply contract: the user asked for work, so the
-        # answer must read as the work — no forced opener, no blockquote
-        # ritual. Cite only what is actually used.
-        return _envelope(
-            f"[vouch memory] This is a work request, so I checked "
-            f"{_whose_kb(personal)} for background only. Use the items below "
-            "if they are relevant to the change; ignore them if they are not. "
-            "Do NOT open your reply with a memory banner — answer as you "
-            "normally would, and cite an item's [id] inline only where you "
-            "actually relied on it.\n\n" + body
-        )
-
     sc_enabled, min_conf = short_circuit_cfg(cfg)
     if sc_enabled and not _looks_like_action(prompt) and _top_confidence(pack) >= min_conf:
         # High-confidence lookup: let the model collapse to a near-instant
