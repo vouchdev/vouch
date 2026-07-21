@@ -2923,24 +2923,20 @@ def hub_push() -> None:
 
 
 @hub.command("pull")
-@click.option(
-    "--on-conflict",
-    type=click.Choice(["skip", "overwrite"]),
-    default=None,
-    help="How to apply conflicting artifacts; default refuses and lists them.",
-)
-def hub_pull(on_conflict: str | None) -> None:
-    """Pull the hub copy and import it through this KB's gate."""
+def hub_pull() -> None:
+    """Pull the hub copy and file it as pending proposals for this KB's review.
+
+    Nothing lands durably here on pull: inbound knowledge becomes claim
+    proposals that must pass this KB's own review gate (`vouch review`).
+    """
     store = _load_store()
     link = _hub_link_or_die(store)
     token = _hub_token_or_die(link.url)
     try:
-        result = hub_client.pull(store, link, token, on_conflict=on_conflict)
+        result = hub_client.pull(store, link, token)
     except hub_client.HubError as e:
         raise click.ClickException(str(e)) from e
     _emit_json(result)
-    if result.get("status") == "conflicts":
-        sys.exit(1)
 
 
 @hub.command("status")
@@ -3037,6 +3033,30 @@ def import_apply_cmd(bundle_path: str, on_conflict: str) -> None:
         raise click.ClickException(str(e)) from e
     # Rebuild the index after a bulk import so search picks up new claims.
     health.rebuild_index(store)
+    _emit_json(r)
+
+
+@cli.command("import-proposals")
+@click.argument("bundle_path", type=click.Path(exists=True, dir_okay=False))
+@click.option(
+    "--origin-kb",
+    default=None,
+    help="Label for the source KB; defaults to the bundle's own instance id.",
+)
+def import_proposals_cmd(bundle_path: str, origin_kb: str | None) -> None:
+    """Import a bundle's knowledge as PENDING PROPOSALS for review.
+
+    The gated counterpart to import-apply: inbound claims are filed as proposals
+    that must pass this KB's own review gate, never written straight to the
+    durable store. This is the receiving-side gate federation requires -- nothing
+    lands without `vouch review`, so unlike import-apply it is safe to accept
+    knowledge from another KB with it.
+    """
+    store = _load_store()
+    try:
+        r = bundle.import_as_proposals(store.kb_dir, Path(bundle_path), origin_kb=origin_kb)
+    except RuntimeError as e:
+        raise click.ClickException(str(e)) from e
     _emit_json(r)
 
 

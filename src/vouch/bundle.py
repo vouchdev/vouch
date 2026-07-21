@@ -29,7 +29,7 @@ import yaml
 
 from . import audit
 from .models import Claim, Entity, Evidence, Proposal, Relation, Session, Source
-from .storage import _deserialize_page, sha256_hex
+from .storage import _deserialize_page, read_or_create_instance_id, sha256_hex
 
 MANIFEST_NAME = "manifest.json"
 SPEC_VERSION = "vouch-bundle-0.1"
@@ -97,7 +97,9 @@ def _iter_export_files(kb_dir: Path, exclude: tuple[str, ...] = ()):
         yield cfg.relative_to(kb_dir), cfg
 
 
-def build_manifest(kb_dir: Path, exclude: tuple[str, ...] = ()) -> dict[str, Any]:
+def build_manifest(
+    kb_dir: Path, exclude: tuple[str, ...] = (), *, kb_id: str | None = None
+) -> dict[str, Any]:
     exclude = _check_exclude(exclude)
     files: list[dict[str, Any]] = []
     for rel, abs_path in _iter_export_files(kb_dir, exclude):
@@ -120,6 +122,7 @@ def build_manifest(kb_dir: Path, exclude: tuple[str, ...] = ()) -> dict[str, Any
     return {
         "spec": SPEC_VERSION,
         "bundle_id": h.hexdigest(),
+        "kb_id": kb_id,
         "files": files,
         "counts": {
             sub: sum(1 for f in files if f["path"].startswith(f"{sub}/")) for sub in EXPORT_SUBDIRS
@@ -141,7 +144,7 @@ def export(
     exclude: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     exclude = _check_exclude(exclude)
-    manifest = build_manifest(kb_dir, exclude)
+    manifest = build_manifest(kb_dir, exclude, kb_id=read_or_create_instance_id(kb_dir))
     dest.parent.mkdir(parents=True, exist_ok=True)
     with tarfile.open(dest, "w:gz") as tar:
         for rel, abs_path in _iter_export_files(kb_dir, exclude):
@@ -684,6 +687,153 @@ def import_apply(
         },
     )
     return result
+
+
+def _manifest_kb_id(bundle_path: Path) -> str | None:
+    """The exporting KB's instance id, if the bundle manifest carries one.
+
+    Older bundles predate `kb_id`; returns None so the caller can fall back to an
+    explicitly-supplied origin.
+    """
+    try:
+        with tarfile.open(bundle_path, "r:gz") as tar:
+            raw = tar.extractfile(tar.getmember(MANIFEST_NAME)).read()  # type: ignore[union-attr]
+        manifest = json.loads(raw.decode())
+    except (OSError, tarfile.TarError, KeyError, json.JSONDecodeError):
+        return None
+    kb_id = manifest.get("kb_id")
+    return str(kb_id) if kb_id else None
+
+
+def import_as_proposals(
+    kb_dir: Path,
+    bundle_path: Path,
+    *,
+    origin_kb: str | None = None,
+    actor: str | None = None,
+) -> dict[str, Any]:
+    """Land a bundle's knowledge as PENDING PROPOSALS, never as committed writes.
+
+    The gated counterpart to `import_apply`. Instead of writing claims straight
+    into the decided store, every inbound claim is filed as a pending claim
+    proposal via `proposals.propose_claim`, so nothing lands without passing this
+    KB's own `proposals.approve()` -- the receiving-side gate the federation
+    invariant requires (ROADMAP.md step 10: "any data path that lands writes
+    without a receiving-side proposal is wrong").
+
+    Sources and evidence -- raw substrate, not vouched knowledge -- are
+    registered directly (the same shape `inbox.scan` uses before it proposes a
+    page), because a claim proposal must be able to cite them. Provenance is
+    preserved: the proposing actor names the origin KB and each proposed claim
+    carries an ``origin:<kb>`` tag that survives approval, so a reviewer -- and
+    the approved claim -- can always see which KB vouched for it.
+
+    Pages, entities and relations are reported under ``deferred`` rather than
+    silently dropped: filing them as proposals needs claim/entity ids that are
+    themselves still pending, which is follow-up work -- a silent skip would read
+    as "imported everything".
+    """
+    # Local imports: proposals/storage import from this module's siblings, and a
+    # top-level import here would risk a cycle at package load.
+    from . import proposals as _proposals
+    from .models import Claim, Evidence
+    from .storage import KBStore
+
+    check = import_check(kb_dir, bundle_path)
+    if check.issues:
+        raise RuntimeError(f"refusing to import: {check.issues[0]}")
+
+    origin = origin_kb or _manifest_kb_id(bundle_path) or "unknown"
+    proposing_actor = actor or f"hub:{origin}"
+    store = KBStore(kb_dir.parent)
+
+    proposed: list[str] = []
+    failed: list[dict[str, str]] = []
+    sources_registered = 0
+    evidence_registered = 0
+    deferred = {"pages": 0, "entities": 0, "relations": 0}
+
+    with tarfile.open(bundle_path, "r:gz") as tar:
+        members = [m for m in tar.getmembers() if m.isfile() and m.name != MANIFEST_NAME]
+
+        # Pass 1: register substrate so claim proposals can cite it.
+        contents: dict[str, bytes] = {}
+        for m in members:
+            if m.name.startswith("sources/") and m.name.endswith("/content"):
+                sha = m.name.split("/")[1]
+                contents[sha] = tar.extractfile(m).read()  # type: ignore[union-attr]
+        for _sha, body in sorted(contents.items()):
+            store.put_source(body)
+            sources_registered += 1
+        for m in members:
+            if m.name.startswith("evidence/") and m.name.endswith(".yaml"):
+                ev = Evidence.model_validate(
+                    yaml.safe_load(tar.extractfile(m).read())  # type: ignore[union-attr]
+                )
+                store.put_evidence(ev)
+                evidence_registered += 1
+
+        # Pass 2: file each inbound claim as a PENDING proposal.
+        origin_tag = f"origin:{origin}"
+        for m in members:
+            if m.name.startswith("claims/") and m.name.endswith(".yaml"):
+                claim = Claim.model_validate(
+                    yaml.safe_load(tar.extractfile(m).read())  # type: ignore[union-attr]
+                )
+                tags = list(claim.tags)
+                if origin_tag not in tags:
+                    tags.append(origin_tag)
+                try:
+                    res = _proposals.propose_claim(
+                        store,
+                        text=claim.text,
+                        evidence=list(claim.evidence),
+                        proposed_by=proposing_actor,
+                        claim_type=claim.type.value,
+                        confidence=claim.confidence,
+                        entities=list(claim.entities),
+                        tags=tags,
+                        slug_hint=claim.id,
+                        rationale=(
+                            f"imported from KB '{origin}' via gated hub import; "
+                            "review before it becomes durable knowledge here"
+                        ),
+                    )
+                    proposed.append(res.proposal.id)
+                except _proposals.ProposalError as e:
+                    # One un-citable claim must not sink the whole import; record
+                    # it rather than abort (and never silently drop it).
+                    failed.append({"claim": claim.id, "error": str(e)})
+            elif m.name.startswith("pages/"):
+                deferred["pages"] += 1
+            elif m.name.startswith("entities/"):
+                deferred["entities"] += 1
+            elif m.name.startswith("relations/"):
+                deferred["relations"] += 1
+
+    audit.log_event(
+        kb_dir,
+        event="bundle.import_proposals",
+        actor=proposing_actor,
+        object_ids=[check.bundle_id],
+        data={
+            "origin_kb": origin,
+            "proposed": len(proposed),
+            "failed": len(failed),
+            "sources": sources_registered,
+            "evidence": evidence_registered,
+            "deferred": deferred,
+        },
+    )
+    return {
+        "bundle_id": check.bundle_id,
+        "origin_kb": origin,
+        "proposed": proposed,
+        "failed": failed,
+        "sources_registered": sources_registered,
+        "evidence_registered": evidence_registered,
+        "deferred": deferred,
+    }
 
 
 def _yaml_dump(obj: Any) -> str:  # pragma: no cover — kept for symmetry

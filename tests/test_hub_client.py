@@ -201,48 +201,70 @@ def test_push_bad_token_raises_HubError(store: KBStore, fake_hub: str, home: Pat
 # --- pull ---------------------------------------------------------------------
 
 
-def _remote_claim() -> dict[str, bytes]:
-    return {"claims/r1.yaml": b"id: r1\ntext: from the hub\n"}
+def _remote_knowledge(tmp_path: Path) -> dict[str, bytes]:
+    """A real knowledge bundle (a cited claim + its source) as {path: bytes}.
+
+    Unlike a bare `claims/r1.yaml` with no evidence, this is what a genuine hub
+    push ships -- and the gated pull enforces vouch's citation rule, so the
+    claim must carry a source it can quote.
+    """
+    src = KBStore.init(tmp_path / "remote-kb")
+    source = src.put_source(b"advisory locks are session scoped", title="doc")
+    src.put_claim(Claim(id="r1", text="advisory locks are session scoped", evidence=[source.id]))
+    return exported_files(src.kb_dir, tmp_path / "remote-exp")
 
 
-def test_pull_applies_clean_bundle(store: KBStore, fake_hub: str, home: Path) -> None:
-    FakeHub.files = _remote_claim()
+def test_pull_files_proposals_not_committed_writes(
+    store: KBStore, fake_hub: str, home: Path, tmp_path: Path
+) -> None:
+    from vouch.models import ProposalKind, ProposalStatus
+    from vouch.storage import ArtifactNotFoundError
+
+    FakeHub.files = _remote_knowledge(tmp_path)
     link = _link(store, fake_hub)
-    r = hub_client.pull(store, link, "vhp_test", on_conflict=None)
-    assert r["status"] == "applied"
-    assert store.get_claim("r1").text == "from the hub"
+    r = hub_client.pull(store, link, "vhp_test")
+
+    # The gate held: inbound knowledge is a pending PROPOSAL, not a committed claim.
+    assert r["status"] == "proposed"
+    assert r["proposed"] == 1
+    assert r["origin_kb"] == "alice/proj"  # provenance = the linked KB
+    with pytest.raises(ArtifactNotFoundError):
+        store.get_claim("r1")
+    pending = [
+        p for p in store.list_proposals(ProposalStatus.PENDING) if p.kind == ProposalKind.CLAIM
+    ]
+    assert len(pending) == 1
+    assert "alice/proj" in pending[0].proposed_by
+
     reloaded = hub_client.load_link(store.kb_dir)
     assert reloaded is not None
-    r2 = hub_client.pull(store, reloaded, "vhp_test", on_conflict=None)
+    r2 = hub_client.pull(store, reloaded, "vhp_test")
     assert r2["status"] == "up_to_date"
 
 
-def test_pull_refuses_conflicts_without_flag(store: KBStore, fake_hub: str, home: Path) -> None:
-    FakeHub.files = _remote_claim()
+def test_pull_files_a_proposal_even_when_a_local_claim_exists(
+    store: KBStore, fake_hub: str, home: Path, tmp_path: Path
+) -> None:
+    from vouch.models import ProposalStatus
+
+    FakeHub.files = _remote_knowledge(tmp_path)
     src = store.put_source(b"local evidence")
     store.put_claim(Claim(id="r1", text="local version", evidence=[src.id]))
     link = _link(store, fake_hub)
-    r = hub_client.pull(store, link, "vhp_test", on_conflict=None)
-    assert r["status"] == "conflicts"
-    assert r["conflicts"] == ["claims/r1.yaml"]
-    assert store.get_claim("r1").text == "local version"  # untouched
 
-
-def test_pull_overwrite_applies_conflicts(store: KBStore, fake_hub: str, home: Path) -> None:
-    FakeHub.files = _remote_claim()
-    src = store.put_source(b"local evidence")
-    store.put_claim(Claim(id="r1", text="local version", evidence=[src.id]))
-    link = _link(store, fake_hub)
-    r = hub_client.pull(store, link, "vhp_test", on_conflict="overwrite")
-    assert r["status"] == "applied"
-    assert store.get_claim("r1").text == "from the hub"
+    r = hub_client.pull(store, link, "vhp_test")
+    # No destructive overwrite: the local claim is untouched, the inbound one is
+    # just another proposal the reviewer will weigh.
+    assert r["status"] == "proposed"
+    assert store.get_claim("r1").text == "local version"
+    assert store.list_proposals(ProposalStatus.PENDING)
 
 
 # --- cli ------------------------------------------------------------------------
 
 
 def test_cli_link_push_status_pull(
-    store: KBStore, fake_hub: str, home: Path, monkeypatch: pytest.MonkeyPatch
+    store: KBStore, fake_hub: str, home: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     from click.testing import CliRunner
 
@@ -263,10 +285,10 @@ def test_cli_link_push_status_pull(
     assert r.exit_code == 0, r.output
     assert json.loads(r.output)["linked"] is True
 
-    FakeHub.files = _remote_claim()
+    FakeHub.files = _remote_knowledge(tmp_path)
     r = runner.invoke(cli, ["hub", "pull"])
     assert r.exit_code == 0, r.output
-    assert json.loads(r.output)["status"] == "applied"
+    assert json.loads(r.output)["status"] == "proposed"
 
 
 def test_cli_unlinked_errors_clearly(
@@ -280,24 +302,6 @@ def test_cli_unlinked_errors_clearly(
     r = CliRunner().invoke(cli, ["hub", "push"])
     assert r.exit_code != 0
     assert "vouch hub link" in r.output
-
-
-def test_cli_pull_conflict_exits_nonzero(
-    store: KBStore, fake_hub: str, home: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from click.testing import CliRunner
-
-    from vouch.cli import cli
-
-    FakeHub.files = _remote_claim()
-    src = store.put_source(b"local evidence")
-    store.put_claim(Claim(id="r1", text="local version", evidence=[src.id]))
-    monkeypatch.chdir(store.kb_dir.parent)
-    runner = CliRunner()
-    runner.invoke(cli, ["hub", "link", "alice/proj", "--url", fake_hub, "--token", "vhp_test"])
-    r = runner.invoke(cli, ["hub", "pull"])
-    assert r.exit_code == 1
-    assert "conflicts" in r.output
 
 
 # --- status ---------------------------------------------------------------------

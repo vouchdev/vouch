@@ -194,9 +194,18 @@ def pull(
     store: KBStore,
     link: HubLink,
     token: str,
-    *,
-    on_conflict: str | None = None,
 ) -> dict[str, Any]:
+    """Pull the linked KB's knowledge and file it as PENDING PROPOSALS.
+
+    Inbound knowledge is never applied to this KB's committed store: it lands as
+    claim proposals through ``bundle.import_as_proposals``, so nothing becomes
+    durable without passing this KB's own ``proposals.approve()``. That is the
+    receiving-side gate the federation invariant requires -- a receiving KB
+    accepts inbound knowledge as proposals, and the review gate is never
+    bypassed (ROADMAP.md step 10). There is therefore no ``on_conflict``: a
+    claim that collides with a local one is simply another proposal for the
+    reviewer to weigh, not a destructive overwrite.
+    """
     headers: dict[str, str] = {}
     if link.last_bundle_id:
         headers["If-None-Match"] = f'"{link.last_bundle_id}"'
@@ -210,24 +219,25 @@ def pull(
     with tempfile.TemporaryDirectory(prefix="vouch-hub-") as tmp:
         bundle_path = Path(tmp) / "pulled.tar.gz"
         bundle_path.write_bytes(payload)
-        check = bundle.import_check(store.kb_dir, bundle_path)
-        if check.issues:
-            raise HubError(f"pulled bundle failed validation: {check.issues[0]}")
-        if check.conflicts and on_conflict is None:
-            return {"status": "conflicts", "conflicts": check.conflicts}
-        result = bundle.import_apply(
-            store.kb_dir,
-            bundle_path,
-            on_conflict=on_conflict or "fail",
-            actor="hub-pull",
-        )
+        try:
+            # actor defaults to f"hub:{origin}", so the proposing actor recorded
+            # in the audit log and on the proposal names the KB that vouched.
+            result = bundle.import_as_proposals(
+                store.kb_dir,
+                bundle_path,
+                origin_kb=link.kb,
+            )
+        except RuntimeError as e:  # import_check rejected the bundle
+            raise HubError(f"pulled bundle failed validation: {e}") from e
     link.last_bundle_id = remote_id
     save_link(store.kb_dir, link)
     return {
-        "status": "applied",
+        "status": "proposed",
         "bundle_id": remote_id,
-        "written": len(result.get("written", [])),
-        "skipped_conflicts": result.get("skipped_conflicts", []),
+        "origin_kb": result["origin_kb"],
+        "proposed": len(result["proposed"]),
+        "failed": len(result.get("failed", [])),
+        "deferred": result["deferred"],
     }
 
 
