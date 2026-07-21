@@ -14,6 +14,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from . import audit
+from .context import _RETRACTED_CLAIM_STATUSES
 from .models import Claim, ClaimStatus, Evidence, Relation, RelationType
 from .storage import ArtifactNotFoundError, KBStore
 
@@ -34,6 +35,19 @@ def supersede(
         raise LifecycleError("a claim cannot supersede itself")
     old = store.get_claim(old_claim_id)
     new = store.get_claim(new_claim_id)
+    # `new` must be live knowledge. Without this guard, superseding with an
+    # already-retired claim (superseded/archived/redacted) either revives it
+    # as a "current" successor with stale retired status, or — when `new`
+    # was itself the `old` side of a prior supersede() call — closes a
+    # 2-cycle: A superseded_by B and B superseded_by A. context._RETRACTED_
+    # CLAIM_STATUSES then excludes *both* ends from retrieval, and neither
+    # is ever the live head, silently vanishing knowledge no one asked to
+    # delete.
+    if new.status in _RETRACTED_CLAIM_STATUSES:
+        raise LifecycleError(
+            f"cannot supersede with {new.id}: it is already "
+            f"{new.status.value}, not live knowledge"
+        )
     rel = Relation(
         id=f"{new.id}--supersedes--{old.id}",
         source=new.id,
@@ -80,6 +94,19 @@ def contradict(
         raise LifecycleError("a claim cannot contradict itself")
     a = store.get_claim(claim_a)
     b = store.get_claim(claim_b)
+    # Neither side may already be retired (superseded/archived/redacted).
+    # CONTESTED is not in _RETRACTED_CLAIM_STATUSES (still part of the
+    # conversation, just disputed — see context.py), so setting status to
+    # CONTESTED unconditionally would silently un-retire a claim straight
+    # back into every retrieval surface, making the supersede/archive/
+    # redact controls decorative for anyone who later contradicts a retired
+    # claim against something live.
+    for claim in (a, b):
+        if claim.status in _RETRACTED_CLAIM_STATUSES:
+            raise LifecycleError(
+                f"cannot contradict {claim.id}: it is already "
+                f"{claim.status.value}, not live knowledge"
+            )
     a.contradicts = sorted({*a.contradicts, b.id})
     b.contradicts = sorted({*b.contradicts, a.id})
     a.status = ClaimStatus.CONTESTED

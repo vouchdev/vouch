@@ -860,6 +860,58 @@ def test_supersede_idempotent(store: KBStore) -> None:
     assert store.get_claim("new").supersedes == ["old"]
 
 
+def test_supersede_rejects_retired_new_claim(store: KBStore) -> None:
+    # Guards against a 2-cycle: A superseded_by B, then B "superseded_by" A.
+    # Before the fix this silently corrupted both claims to
+    # status=superseded, pointing at each other — retrieval excludes
+    # SUPERSEDED, so both claims vanished from every retrieval surface with
+    # no live successor.
+    src = store.put_source(b"e")
+    store.put_claim(Claim(id="a", text="a", evidence=[src.id]))
+    store.put_claim(Claim(id="b", text="b", evidence=[src.id]))
+    lifecycle.supersede(store, old_claim_id="a", new_claim_id="b", actor="u")
+    with pytest.raises(lifecycle.LifecycleError, match="already superseded"):
+        lifecycle.supersede(store, old_claim_id="b", new_claim_id="a", actor="u")
+    # Neither claim's state was touched by the rejected call.
+    a = store.get_claim("a")
+    b = store.get_claim("b")
+    assert a.status == ClaimStatus.SUPERSEDED
+    assert a.superseded_by == "b"
+    assert a.supersedes == []
+    assert b.status != ClaimStatus.SUPERSEDED
+    assert b.superseded_by is None
+
+
+def test_supersede_rejects_archived_new_claim(store: KBStore) -> None:
+    src = store.put_source(b"e")
+    store.put_claim(Claim(id="old", text="old", evidence=[src.id]))
+    store.put_claim(Claim(id="new", text="new", evidence=[src.id]))
+    lifecycle.archive(store, claim_id="new", actor="u")
+    with pytest.raises(lifecycle.LifecycleError, match="already archived"):
+        lifecycle.supersede(store, old_claim_id="old", new_claim_id="new", actor="u")
+    assert store.get_claim("old").status != ClaimStatus.SUPERSEDED
+
+
+def test_contradict_rejects_retired_claim(store: KBStore) -> None:
+    # A retired (superseded/archived/redacted) claim must not be revivable
+    # into CONTESTED — CONTESTED is not in the retracted-status set, so
+    # before the fix this silently un-retired the claim back into every
+    # retrieval surface (context.py's _RETRACTED_CLAIM_STATUSES exclusion).
+    src = store.put_source(b"e")
+    store.put_claim(Claim(id="old", text="old", evidence=[src.id]))
+    store.put_claim(Claim(id="new", text="new", evidence=[src.id]))
+    store.put_claim(Claim(id="c", text="c", evidence=[src.id]))
+    lifecycle.supersede(store, old_claim_id="old", new_claim_id="new", actor="u")
+    with pytest.raises(lifecycle.LifecycleError, match="already superseded"):
+        lifecycle.contradict(store, claim_a="old", claim_b="c", actor="u")
+    old = store.get_claim("old")
+    c = store.get_claim("c")
+    assert old.status == ClaimStatus.SUPERSEDED
+    assert old.contradicts == []
+    assert c.status != ClaimStatus.CONTESTED
+    assert c.contradicts == []
+
+
 def test_contradict_marks_both_contested(store: KBStore) -> None:
     src = store.put_source(b"e")
     store.put_claim(Claim(id="a", text="x", evidence=[src.id]))

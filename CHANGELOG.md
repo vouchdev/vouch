@@ -64,6 +64,20 @@ All notable changes to vouch are documented here. Format follows
   per-prompt block, the session banner, `vouch status` and the opt-in
   question all say so rather than calling it "this repo's" knowledge.
 
+### Fixed
+- `lifecycle.supersede()` and `lifecycle.contradict()` no longer accept an
+  already-retired claim (superseded/archived/redacted) as a live
+  participant. previously, `supersede(old, new)` never checked `new`'s
+  status, so `supersede(a, b)` followed by `supersede(b, a)` silently
+  closed a 2-cycle — both claims ended up `status: superseded`, each
+  pointing at the other, and `context._RETRACTED_CLAIM_STATUSES` then
+  excluded *both* from every retrieval surface with no live successor.
+  separately, `contradict(a, b)` unconditionally set both sides to
+  `CONTESTED` — which is not in the retracted-status set — so
+  contradicting an already-superseded/archived/redacted claim silently
+  un-retired it back into live retrieval. both now raise
+  `LifecycleError` instead of writing the inconsistent state.
+
 ## [1.5.0] — 2026-07-20
 
 ### Added
