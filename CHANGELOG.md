@@ -64,6 +64,20 @@ All notable changes to vouch are documented here. Format follows
   per-prompt block, the session banner, `vouch status` and the opt-in
   question all say so rather than calling it "this repo's" knowledge.
 
+### Added
+- **ingest selection knob (`vouch ingest --max-claims / --budget-chars`).**
+  capture used to file every substantive sentence of a source — complete,
+  but a restatement of the whole document rather than the facts worth a
+  claim. `extract.select_spans` ranks candidate spans by information density
+  (sum over distinct content words of `1 / document-frequency`, so rare
+  specific terms outweigh stopword-heavy filler) and keeps the best under a
+  claim-count or character budget. it is deterministic and llm-free — and it
+  only ever returns a *subset* of the verbatim spans, never a paraphrase, so
+  every kept claim's receipt still verifies by construction. unset, ingest
+  keeps every span exactly as before (the unbudgeted baseline is unchanged).
+  this is the selection step the compiler thesis needs: fewer, denser claims
+  are what move accuracy-per-token against the grep baseline.
+
 ## [1.5.0] — 2026-07-20
 
 ### Added

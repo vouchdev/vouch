@@ -44,6 +44,79 @@ def _is_noise(segment: str) -> bool:
     return letters < len(segment) * _MIN_LETTER_RATIO
 
 
+# Words that carry no fact: a span made mostly of them is filler, not
+# knowledge. Kept local (not imported from synthesize) so the ingest hot path
+# stays clear of the synthesis/LLM import chain.
+_STOPWORDS = frozenset(
+    {
+        "a", "an", "and", "are", "as", "at", "be", "by", "do", "does", "for",
+        "from", "how", "in", "into", "is", "it", "its", "of", "on", "or",
+        "that", "the", "their", "them", "then", "there", "these", "this", "to",
+        "was", "were", "what", "when", "where", "which", "who", "why", "will",
+        "with", "you", "your",
+    }
+)
+
+
+def _content_words(span: str) -> list[str]:
+    """Lowercased alphanumeric tokens of ``span`` minus short words/stopwords."""
+    words: list[str] = []
+    for raw in span.split():
+        token = "".join(ch for ch in raw.lower() if ch.isalnum())
+        if len(token) < 3 or token in _STOPWORDS:
+            continue
+        words.append(token)
+    return words
+
+
+def _span_score(span: str, doc_freq: dict[str, int]) -> float:
+    """Information density of ``span``: sum over its distinct content words of
+    ``1 / document-frequency``. A word repeated across many spans is less
+    discriminating, so it counts for less; a rare, specific term counts for
+    more. Stopword-heavy filler scores near zero.
+    """
+    return sum(1.0 / doc_freq.get(word, 1) for word in set(_content_words(span)))
+
+
+def select_spans(
+    segments: list[str],
+    *,
+    max_claims: int | None = None,
+    budget_chars: int | None = None,
+) -> list[str]:
+    """Keep the most information-dense spans under a budget, in source order.
+
+    Ranking is deterministic and llm-free (see ``_span_score``): fact-dense
+    sentences outrank stopword-heavy filler. With no budget the input is
+    returned unchanged — the unbudgeted baseline that captures every span.
+    Selection only ever returns a *subset* of ``segments``, never a rewrite, so
+    every kept span is still a verbatim substring of the source and its receipt
+    still verifies by construction.
+    """
+    if max_claims is None and budget_chars is None:
+        return segments
+    doc_freq: dict[str, int] = {}
+    for seg in segments:
+        for word in set(_content_words(seg)):
+            doc_freq[word] = doc_freq.get(word, 0) + 1
+    # Rank by score (desc), ties broken by original position for determinism.
+    ranked = sorted(
+        range(len(segments)),
+        key=lambda i: (-_span_score(segments[i], doc_freq), i),
+    )
+    kept: list[int] = []
+    used = 0
+    for i in ranked:
+        if max_claims is not None and len(kept) >= max_claims:
+            break
+        length = len(segments[i])
+        if budget_chars is not None and used + length > budget_chars:
+            continue
+        kept.append(i)
+        used += length
+    return [segments[i] for i in sorted(kept)]
+
+
 def segment_source(
     text: str,
     *,
@@ -75,6 +148,8 @@ def extract_receipt_claims(
     *,
     proposed_by: str,
     limit: int | None = None,
+    max_claims: int | None = None,
+    budget_chars: int | None = None,
 ) -> list[ProposeClaimResult]:
     """File a receipt-backed claim for each quotable span in ``source_id``.
 
@@ -82,10 +157,19 @@ def extract_receipt_claims(
     verifies by construction. A segment that (defensively) fails the verbatim
     check — e.g. non-UTF-8 bytes mangled on decode — is dropped by
     ``propose_quoted_claim``. Returns the proposals actually filed.
+
+    ``max_claims``/``budget_chars`` turn on density selection (``select_spans``):
+    only the most informative spans are filed, so ingest keeps the facts worth a
+    claim and drops filler instead of restating the whole document. ``limit`` is
+    the older positional cap (first-N in document order, used by session-answer
+    capture) and still applies after selection.
     """
     text = store.read_source_content(source_id).decode("utf-8", errors="replace")
+    spans = segment_source(text)
+    if max_claims is not None or budget_chars is not None:
+        spans = select_spans(spans, max_claims=max_claims, budget_chars=budget_chars)
     filed: list[ProposeClaimResult] = []
-    for segment in segment_source(text):
+    for segment in spans:
         if limit is not None and len(filed) >= limit:
             break
         result = propose_quoted_claim(
@@ -104,6 +188,8 @@ def ingest_source(
     proposed_by: str,
     title: str | None = None,
     auto_approve: bool = True,
+    max_claims: int | None = None,
+    budget_chars: int | None = None,
 ) -> tuple[Source, list[Claim]]:
     """Run the whole capture loop on a document, no human in the loop.
 
@@ -112,8 +198,14 @@ def ingest_source(
     approve every one whose receipt verifies. Returns the source and the claims
     that became durable. With the gate off the claims are filed but left pending
     for a human — the review gate is never silently bypassed.
+
+    ``max_claims``/``budget_chars`` bound the capture to the most informative
+    spans (see ``extract_receipt_claims``); unset, every quotable span is kept.
     """
     source = store.put_source(content, title=title, scope=default_scope(store))
-    extract_receipt_claims(store, source.id, proposed_by=proposed_by)
+    extract_receipt_claims(
+        store, source.id, proposed_by=proposed_by,
+        max_claims=max_claims, budget_chars=budget_chars,
+    )
     approved = auto_approve_receipts(store) if auto_approve else []
     return source, approved
