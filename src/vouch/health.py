@@ -436,8 +436,10 @@ def _check_decided_proposals(
     A crash between `put_<kind>()` and `move_proposal_to_decided()` would
     leave a `decided/` entry without a matching artifact (or vice versa);
     surface the artifact-missing case so an operator can investigate.
-    Approved delete proposals promise the inverse — the target artifact is
-    gone — so for those the still-present case is surfaced instead.
+    approved delete proposals promise the inverse — the target artifact is
+    gone — so for those the still-present case is surfaced instead, and an
+    artifact a later approved delete removed is not missing: the delete
+    explains its absence.
     """
     relations = {r.id for r in store.list_relations()}
     presence: dict[ProposalKind, set[str]] = {
@@ -447,7 +449,13 @@ def _check_decided_proposals(
         ProposalKind.RELATION: relations,
     }
     presence_by_target_kind = {kind.value: ids for kind, ids in presence.items()}
-    for pr in store.list_proposals(ProposalStatus.APPROVED):
+    approved = store.list_proposals(ProposalStatus.APPROVED)
+    deleted_by_gate = {
+        (pr.payload.get("target_kind"), pr.payload.get("id"))
+        for pr in approved
+        if pr.kind is ProposalKind.DELETE and isinstance(pr.payload, dict)
+    }
+    for pr in approved:
         artifact_id = pr.payload.get("id") if isinstance(pr.payload, dict) else None
         if not artifact_id:
             findings.append(
@@ -461,7 +469,18 @@ def _check_decided_proposals(
             continue
         if pr.kind is ProposalKind.DELETE:
             target_kind = pr.payload.get("target_kind", "")
-            if artifact_id in presence_by_target_kind.get(target_kind, set()):
+            target_ids = presence_by_target_kind.get(target_kind)
+            if target_ids is None:
+                findings.append(
+                    Finding(
+                        "error",
+                        "decided_delete_invalid_target_kind",
+                        f"approved delete proposal {pr.id} has a missing or "
+                        f"unknown target_kind {target_kind!r}",
+                        [pr.id, artifact_id],
+                    )
+                )
+            elif artifact_id in target_ids:
                 findings.append(
                     Finding(
                         "error",
@@ -473,7 +492,10 @@ def _check_decided_proposals(
                     )
                 )
             continue
-        if artifact_id not in presence[pr.kind]:
+        if (
+            artifact_id not in presence[pr.kind]
+            and (pr.kind.value, artifact_id) not in deleted_by_gate
+        ):
             findings.append(
                 Finding(
                     "error",

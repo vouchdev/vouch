@@ -69,7 +69,10 @@ All notable changes to vouch are documented here. Format follows
   approved delete proposal. the decided-proposals check only knew the
   create kinds, so the first approved delete broke fsck permanently.
   approved deletes are now checked for the inverse drift — a target
-  artifact still on disk is reported as `decided_delete_artifact_present`.
+  artifact still on disk is reported as `decided_delete_artifact_present`,
+  a missing or unknown target kind as `decided_delete_invalid_target_kind`
+  — and an artifact removed by an approved delete no longer misreports
+  its create proposal as `decided_missing_artifact`.
 
 ## [1.5.0] — 2026-07-20
 
