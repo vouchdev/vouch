@@ -51,6 +51,7 @@ from . import synthesize as synth
 from . import trust as trust_mod
 from . import vault_sync as vault_sync_mod
 from . import verify as verify_mod
+from . import wiki_render as wiki_render_mod
 from .capabilities import capabilities as build_caps
 from .context import build_context_pack
 from .lifecycle import LifecycleError
@@ -3092,6 +3093,30 @@ def compile_cmd(dry_run: bool, max_pages: int | None,
             _echo(f"  • {row['title']} — {row['reason']}")
     if report.proposed and not dry_run:
         _echo("run `vouch review` to decide.")
+
+
+@cli.command(name="render-wiki")
+@click.option("--out", "out_dir", type=click.Path(file_okay=False), default=None,
+              help="Write index.md + MOC.md here (default: print the index).")
+def render_wiki_cmd(out_dir: str | None) -> None:
+    """Render a derived index + map-of-content over approved pages.
+
+    A regenerable view of the wiki front door — never a proposal, never gated.
+    With --out, writes index.md and MOC.md there; otherwise prints the index.
+    """
+    store = _load_store()
+    pages = store.list_pages()
+    index = wiki_render_mod.render_index(pages)
+    if out_dir is None:
+        _echo(index)
+        return
+    target = Path(out_dir)
+    target.mkdir(parents=True, exist_ok=True)
+    (target / "index.md").write_text(index, encoding="utf-8")
+    (target / "MOC.md").write_text(
+        wiki_render_mod.render_moc(pages), encoding="utf-8",
+    )
+    _echo(f"rendered {len(pages)} page(s) → {target}/index.md + MOC.md")
 
 
 @cli.command()
