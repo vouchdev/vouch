@@ -84,3 +84,23 @@ def test_render_moc_ranks_by_inbound_links() -> None:
     # Gamma has 2 inbound links; it must rank above the 0-inbound pages.
     assert out.index("Gamma") < out.index("Alpha")
     assert out.index("Gamma") < out.index("Beta")
+
+
+def test_title_beats_an_earlier_pages_alias_regardless_of_order() -> None:
+    # A real page is TITLED "Retry Policy"; an unrelated page carries the same
+    # string only as an alias and sorts earlier in the list. Resolution must
+    # follow the title, not the list order — the module docstring promises an
+    # alias never shadows an existing page's title.
+    aliaser = _page("Backoff Notes", aliases=["Retry Policy"], pid="backoff-notes")
+    titled = _page("Retry Policy", pid="retry-policy")
+    pages = [aliaser, titled]
+
+    resolved = wiki_render.resolve_link("Retry Policy", pages)
+    assert resolved is titled
+
+    # …and the backlink for a [[Retry Policy]] reference lands on the titled
+    # page, not the alias holder.
+    caller = _page("Caller", body="we follow [[Retry Policy]] here", pid="caller")
+    bl = wiki_render.backlinks([aliaser, titled, caller])
+    assert bl.get("retry-policy") == ["Caller"]
+    assert "backoff-notes" not in bl
