@@ -459,6 +459,37 @@ def test_vault_to_kb_second_different_edit_files_new_proposal(
     assert len(proposals) == 2
 
 
+def test_vault_to_kb_frontmatter_only_edit_files_new_proposal(
+    store: KBStore, vault: Path,
+) -> None:
+    """A second edit that changes only frontmatter (body untouched) is
+    still a different edit and must file its own proposal — the dedup
+    fingerprint covers the whole file, not just the body."""
+    kb_to_vault(store, vault)
+    mirror = vault / VAULT_DIR / "pages" / "alpha-page.md"
+    base = mirror.read_text(encoding="utf-8")
+    assert "title: Alpha page" in base
+
+    mirror.write_text(
+        base.replace("title: Alpha page", "title: Alpha page (draft)"),
+        encoding="utf-8",
+    )
+    r1 = vault_to_kb(store, vault, actor="vault-sync")
+    assert "alpha-page" in r1.pages_proposed
+
+    mirror.write_text(
+        base.replace("title: Alpha page", "title: Alpha page (final)"),
+        encoding="utf-8",
+    )
+    r2 = vault_to_kb(store, vault, actor="vault-sync")
+    assert "alpha-page" in r2.pages_proposed, (
+        "frontmatter-only edit was misclassified as unchanged: "
+        f"{r2.pages_skipped_unchanged}"
+    )
+    proposals = list((store.kb_dir / "proposed").glob("*.yaml"))
+    assert len(proposals) == 2
+
+
 def test_sync_vault_preserves_second_edit_while_first_pending(
     store: KBStore, vault: Path,
 ) -> None:

@@ -270,15 +270,18 @@ def kb_to_vault(store: KBStore, vault_dir: Path) -> VaultSyncResult:
 
 
 def _has_pending_page_proposal(
-    store: KBStore, page_id: str, *, body: str | None = None
+    store: KBStore, page_id: str, *, edit_source_id: str | None = None
 ) -> bool:
-    """Return True if a pending proposal already targets ``page_id``.
+    """return True if a pending proposal already targets ``page_id``.
 
-    When ``body`` is supplied, only returns True if the pending proposal
-    also carries the same body — allowing a second different vault edit
-    to file a new proposal even while the first is still pending.
-    Prevents duplicate proposals when vault_to_kb runs multiple times
-    before the reviewer approves the first proposal for a given page edit.
+    when ``edit_source_id`` is supplied, only returns True if the pending
+    proposal also cites that vault-edit source. the source id is the
+    sha256 of the whole mirror file (put_source is content-addressed and
+    vault_to_kb records it in the proposal's sources), so it fingerprints
+    the complete edit — body and frontmatter alike. re-running sync on
+    the same edit coalesces on the pending proposal; any different edit,
+    including a frontmatter-only one, files its own proposal even while
+    the first is still pending.
     """
     from .models import ProposalKind, ProposalStatus
     for proposal in store.list_proposals(ProposalStatus.PENDING):
@@ -287,7 +290,9 @@ def _has_pending_page_proposal(
         payload = proposal.payload
         if not isinstance(payload, dict) or payload.get("id") != page_id:
             continue
-        if body is None or payload.get("body") == body:
+        if edit_source_id is None or edit_source_id in (
+            payload.get("sources") or []
+        ):
             return True
     return False
 
@@ -354,15 +359,16 @@ def vault_to_kb(
             result.pages_skipped_unknown_id.append(rel)
             continue
 
-        # Fix 2 (#219): skip if a pending proposal already carries this same
-        # edit. Without this guard, running vault_to_kb twice before the first
+        # fix 2 (#219): skip if a pending proposal already carries this same
+        # edit. without this guard, running vault_to_kb twice before the first
         # proposal is approved files duplicate proposals for the same edit,
         # cluttering the review queue and causing the second approve to fail
-        # with "page already exists". Matching on body keeps the guard scoped
-        # to duplicate runs: a second, different edit to the same page still
-        # files its own proposal instead of being skipped and then destroyed
-        # by the backward mirror pass.
-        if _has_pending_page_proposal(store, page_id, body=edited.body):
+        # with "page already exists". the guard matches on the vault-edit
+        # source id — current_hash is the same sha256 of the whole file that
+        # put_source assigns below — so it stays scoped to duplicate runs: a
+        # different edit, body or frontmatter, still files its own proposal
+        # instead of being skipped and then destroyed by the backward pass.
+        if _has_pending_page_proposal(store, page_id, edit_source_id=current_hash):
             log.debug(
                 "vault sync: pending proposal already carries this edit for "
                 "page %r; skipping to avoid duplicate",
