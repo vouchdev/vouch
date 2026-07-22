@@ -354,15 +354,18 @@ def vault_to_kb(
             result.pages_skipped_unknown_id.append(rel)
             continue
 
-        # Fix 2 (#219): skip if a pending proposal already targets this page
-        # id. Without this guard, running vault_to_kb twice before the first
+        # Fix 2 (#219): skip if a pending proposal already carries this same
+        # edit. Without this guard, running vault_to_kb twice before the first
         # proposal is approved files duplicate proposals for the same edit,
         # cluttering the review queue and causing the second approve to fail
-        # with "page already exists".
-        if _has_pending_page_proposal(store, page_id):
+        # with "page already exists". Matching on body keeps the guard scoped
+        # to duplicate runs: a second, different edit to the same page still
+        # files its own proposal instead of being skipped and then destroyed
+        # by the backward mirror pass.
+        if _has_pending_page_proposal(store, page_id, body=edited.body):
             log.debug(
-                "vault sync: pending proposal already exists for page %r; "
-                "skipping to avoid duplicate",
+                "vault sync: pending proposal already carries this edit for "
+                "page %r; skipping to avoid duplicate",
                 page_id,
             )
             result.pages_skipped_unchanged.append(rel)
