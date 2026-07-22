@@ -763,3 +763,35 @@ def test_session_summarize_missing_session_degrades_to_json(store: KBStore) -> N
     assert result.exit_code == 0, result.output
     assert "Traceback" not in result.output, result.output
     assert isinstance(json.loads(result.output), dict)
+
+
+def test_render_wiki_writes_index_and_moc(
+    store: KBStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`vouch render-wiki --out DIR` renders a derived index + MOC over the
+    approved pages — a view, not a gated write."""
+    from vouch.proposals import approve, propose_page
+
+    src = store.put_source(b"a durable fact about retries for grounding here")
+    cpr = propose_claim(
+        store, text="the retry limit is three", evidence=[src.id],
+        proposed_by="agent-A",
+    )
+    claim = approve(store, cpr.id, approved_by="human-B")
+    ppr = propose_page(
+        store,
+        title="Retry Policy",
+        body=f"Retries cap at three attempts before failing hard [claim: {claim.id}].",
+        page_type="concept",
+        claim_ids=[claim.id],
+        proposed_by="agent-A",
+        metadata={"summary": "retries cap at three"},
+    )
+    approve(store, ppr.id, approved_by="human-B")
+
+    out = tmp_path / "wikiout"
+    result = CliRunner().invoke(cli, ["render-wiki", "--out", str(out)])
+    assert result.exit_code == 0, result.output
+    index = (out / "index.md").read_text(encoding="utf-8")
+    assert "[[Retry Policy]] — retries cap at three" in index
+    assert (out / "MOC.md").exists()
