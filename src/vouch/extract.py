@@ -28,8 +28,11 @@ from .storage import KBStore
 
 # Split on newlines and sentence-ending punctuation. Each match is kept as an
 # exact substring of the source so its receipt verifies; only surrounding
-# whitespace is stripped (the inner run stays contiguous in the source).
-_SEGMENT_RE = re.compile(r"[^\n.!?]+[.!?]?")
+# whitespace is stripped (the inner run stays contiguous in the source). A `.`
+# flanked by digits is a decimal/version dot ("6.8.3", "3.14"), never a
+# sentence boundary — keep it inside the span so the number-valued fact isn't
+# fractured out of every claim.
+_SEGMENT_RE = re.compile(r"(?:[^\n.!?]|(?<=\d)\.(?=\d))+[.!?]?")
 
 DEFAULT_MIN_CHARS = 16
 DEFAULT_MAX_CHARS = 320

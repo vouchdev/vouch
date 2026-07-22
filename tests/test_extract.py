@@ -40,6 +40,18 @@ def test_segment_source_splits_into_verbatim_spans() -> None:
         assert s in text
 
 
+def test_segment_source_keeps_dotted_numbers_intact() -> None:
+    # a period between two digits is a decimal/version dot, never a sentence
+    # end — splitting on it fractures the answer atom out of every span.
+    text = (
+        "The deployed build of Harbor Digest is version 6.8.3 today. "
+        "The measured value of pi is about 3.14 in this document."
+    )
+    segs = extract.segment_source(text)
+    assert any("version 6.8.3 today" in s for s in segs)
+    assert any("3.14" in s for s in segs)
+
+
 def test_segment_source_drops_short_noise_and_dupes() -> None:
     text = (
         "ok. The very same sentence appears here twice in a row now. "

@@ -78,6 +78,15 @@ All notable changes to vouch are documented here. Format follows
   this is the selection step the compiler thesis needs: fewer, denser claims
   are what move accuracy-per-token against the grep baseline.
 
+### Fixed
+- **extraction no longer fractures dotted numbers.** `segment_source` split
+  on every `.`, so a version or decimal (`6.8.3`, `3.14`) was broken across
+  segment boundaries and its answer atom fell out of every span — measured at
+  ~11% of the ground-truth facts lost on a synthetic lookup corpus *before any
+  budget was applied*. a `.` flanked by digits is now kept inside the span
+  (sentence-ending periods are unaffected), lifting the recall ceiling of the
+  whole ingest pipeline from 89% to 100% of facts on that corpus.
+
 ## [1.5.0] — 2026-07-20
 
 ### Added
