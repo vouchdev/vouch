@@ -64,6 +64,14 @@ All notable changes to vouch are documented here. Format follows
   per-prompt block, the session banner, `vouch status` and the opt-in
   question all say so rather than calling it "this repo's" knowledge.
 
+### Fixed
+- `vouch index` and artifact deletion now clear the legacy `embeddings`
+  vector table. `index_db.reset()` promised to drop every derived table
+  but skipped it, and `deindex()` only cleared `embedding_index` — so a
+  deleted artifact's vector kept returning as a semantic-search hit, and
+  fsck's `orphan_embedding` warning was permanent: the natural remedy
+  (reindexing) could never clear it.
+
 ## [1.5.0] — 2026-07-20
 
 ### Added
