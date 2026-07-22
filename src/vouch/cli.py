@@ -25,7 +25,7 @@ from typing import Any, Literal
 import click
 import yaml
 
-from . import __version__, bundle, health, volunteer_context
+from . import __version__, bundle, health, hub_client, volunteer_context
 from . import adopt as adopt_mod
 from . import audit as audit_mod
 from . import capture as capture_mod
@@ -52,6 +52,7 @@ from . import synthesize as synth
 from . import trust as trust_mod
 from . import vault_sync as vault_sync_mod
 from . import verify as verify_mod
+from . import wiki_render as wiki_render_mod
 from .capabilities import capabilities as build_caps
 from .context import build_context_pack
 from .lifecycle import LifecycleError
@@ -311,11 +312,12 @@ def discover(path: str | None) -> None:
 
 @cli.group()
 def hub() -> None:
-    """Machine-level registry of KBs (the substrate for global vouch).
+    """Machine registry of KBs and sync with a VouchHub.
 
     The registry at ~/.config/vouch/registry.yaml is advisory routing
     state — authority stays in each KB's own .vouch/. It is machine-local
-    and never committed.
+    and never committed. The link/push/pull/status subcommands sync this
+    KB's approved knowledge with a remote VouchHub, gated by review on pull.
     """
 
 
@@ -3094,6 +3096,30 @@ def compile_cmd(dry_run: bool, max_pages: int | None,
         _echo("run `vouch review` to decide.")
 
 
+@cli.command(name="render-wiki")
+@click.option("--out", "out_dir", type=click.Path(file_okay=False), default=None,
+              help="Write index.md + MOC.md here (default: print the index).")
+def render_wiki_cmd(out_dir: str | None) -> None:
+    """Render a derived index + map-of-content over approved pages.
+
+    A regenerable view of the wiki front door — never a proposal, never gated.
+    With --out, writes index.md and MOC.md there; otherwise prints the index.
+    """
+    store = _load_store()
+    pages = store.list_pages()
+    index = wiki_render_mod.render_index(pages)
+    if out_dir is None:
+        _echo(index)
+        return
+    target = Path(out_dir)
+    target.mkdir(parents=True, exist_ok=True)
+    (target / "index.md").write_text(index, encoding="utf-8")
+    (target / "MOC.md").write_text(
+        wiki_render_mod.render_moc(pages), encoding="utf-8",
+    )
+    _echo(f"rendered {len(pages)} page(s) → {target}/index.md + MOC.md")
+
+
 @cli.command()
 @click.argument("session_id")
 @click.option("--no-page", is_flag=True, help="Skip the session-summary page.")
@@ -3768,20 +3794,114 @@ def detect_themes_cmd(
         )
 
 
+# --- hub sync (link/push/pull with a VouchHub) ------------------------------
+# These subcommands attach to the `hub` group defined above (the machine
+# registry); together they form the full `vouch hub …` surface.
+
+
+def _hub_link_or_die(store) -> hub_client.HubLink:
+    link = hub_client.load_link(store.kb_dir)
+    if link is None:
+        raise click.ClickException(
+            "this KB is not linked — run: vouch hub link <user>/<kb> --url https://hub…"
+        )
+    return link
+
+
+def _hub_token_or_die(url: str) -> str:
+    token = hub_client.resolve_token(url)
+    if not token:
+        raise click.ClickException(
+            f"no token for {url} — run `vouch hub link` again with --token, "
+            "or set VOUCH_HUB_TOKEN"
+        )
+    return token
+
+
+@hub.command("link")
+@click.argument("kb")  # user/slug on the hub
+@click.option("--url", required=True, help="Hub base url, e.g. https://hub.example.com")
+@click.option("--token", "token_opt", default=None, help="Sync token (vhp_…); prompted if absent.")
+def hub_link(kb: str, url: str, token_opt: str | None) -> None:
+    """Link this KB to USER/KB on a VouchHub and store the sync token."""
+    if kb.count("/") != 1:
+        raise click.ClickException("KB must be user/slug, e.g. alice/myproj")
+    store = _load_store()
+    token = token_opt or os.environ.get("VOUCH_HUB_TOKEN") or click.prompt(
+        "sync token (vhp_…)", hide_input=True
+    )
+    hub_client.save_token(url, token)
+    link = hub_client.HubLink(url=url, kb=kb)
+    hub_client.save_link(store.kb_dir, link)
+    _emit_json({"linked": True, "url": link.url, "kb": link.kb})
+
+
+@hub.command("push")
+def hub_push() -> None:
+    """Export approved knowledge (no sessions/config) and push it to the hub."""
+    store = _load_store()
+    link = _hub_link_or_die(store)
+    token = _hub_token_or_die(link.url)
+    try:
+        _emit_json(hub_client.push(store, link, token))
+    except hub_client.HubConflict as e:
+        _emit_json({"status": "conflicts", "conflicts": e.conflicts, "error": str(e)})
+        sys.exit(1)
+    except hub_client.HubError as e:
+        raise click.ClickException(str(e)) from e
+
+
+@hub.command("pull")
+def hub_pull() -> None:
+    """Pull the hub copy and file it as pending proposals for this KB's review.
+
+    Nothing lands durably here on pull: inbound knowledge becomes claim
+    proposals that must pass this KB's own review gate (`vouch review`).
+    """
+    store = _load_store()
+    link = _hub_link_or_die(store)
+    token = _hub_token_or_die(link.url)
+    try:
+        result = hub_client.pull(store, link, token)
+    except hub_client.HubError as e:
+        raise click.ClickException(str(e)) from e
+    _emit_json(result)
+
+
+@hub.command("status")
+def hub_status() -> None:
+    """Show the hub link and whether local knowledge matches the hub copy."""
+    store = _load_store()
+    link = hub_client.load_link(store.kb_dir)
+    if link is None:
+        _emit_json({"linked": False})
+        return
+    token = hub_client.resolve_token(link.url)
+    try:
+        _emit_json(hub_client.status(store, link, token))
+    except hub_client.HubError as e:
+        raise click.ClickException(str(e)) from e
+
+
 # --- export / import ------------------------------------------------------
 
 
 @cli.command()
 @click.option("--out", "out_path", required=True, type=click.Path(dir_okay=False))
-def export(out_path: str) -> None:
+@click.option("--exclude", "exclude_csv", default="",
+              help="Comma-separated artifact dirs to omit (e.g. sessions,decided).")
+def export(out_path: str, exclude_csv: str) -> None:
     """Bundle the durable KB into a portable .tar.gz."""
     store = _load_store()
-    manifest = bundle.export(store.kb_dir, dest=Path(out_path), actor=_whoami())
+    exclude = tuple(e.strip() for e in exclude_csv.split(",") if e.strip())
+    manifest = bundle.export(store.kb_dir, dest=Path(out_path), actor=_whoami(),
+                             exclude=exclude)
     _emit_json(
         {
             "bundle_id": manifest["bundle_id"],
             "files": len(manifest["files"]),
             "out": out_path,
+            "excluded": manifest["excluded"],
         }
     )
 
@@ -3842,6 +3962,30 @@ def import_apply_cmd(bundle_path: str, on_conflict: str) -> None:
         raise click.ClickException(str(e)) from e
     # Rebuild the index after a bulk import so search picks up new claims.
     health.rebuild_index(store)
+    _emit_json(r)
+
+
+@cli.command("import-proposals")
+@click.argument("bundle_path", type=click.Path(exists=True, dir_okay=False))
+@click.option(
+    "--origin-kb",
+    default=None,
+    help="Label for the source KB; defaults to the bundle's own instance id.",
+)
+def import_proposals_cmd(bundle_path: str, origin_kb: str | None) -> None:
+    """Import a bundle's knowledge as PENDING PROPOSALS for review.
+
+    The gated counterpart to import-apply: inbound claims are filed as proposals
+    that must pass this KB's own review gate, never written straight to the
+    durable store. This is the receiving-side gate federation requires -- nothing
+    lands without `vouch review`, so unlike import-apply it is safe to accept
+    knowledge from another KB with it.
+    """
+    store = _load_store()
+    try:
+        r = bundle.import_as_proposals(store.kb_dir, Path(bundle_path), origin_kb=origin_kb)
+    except RuntimeError as e:
+        raise click.ClickException(str(e)) from e
     _emit_json(r)
 
 
@@ -4069,8 +4213,26 @@ def sync_check_cmd(source_path: str) -> None:
     show_default=True,
     type=click.Choice(["fail", "skip", "propose"]),
 )
-def sync_apply_cmd(source_path: str, on_conflict: str) -> None:
-    """Apply non-conflicting files from another .vouch directory or bundle."""
+@click.option(
+    "--as-proposals",
+    is_flag=True,
+    default=False,
+    help="Federation-safe: new inbound claims become pending proposals for review "
+    "instead of direct writes. Nothing lands without `vouch review`.",
+)
+@click.option(
+    "--origin-kb",
+    default=None,
+    help="Provenance label for the source KB (defaults to its instance id).",
+)
+def sync_apply_cmd(
+    source_path: str, on_conflict: str, as_proposals: bool, origin_kb: str | None
+) -> None:
+    """Apply files from another .vouch directory or bundle.
+
+    Default is a direct reconcile of your own KBs. Use --as-proposals to accept
+    another KB's knowledge through this KB's review gate (the federation path).
+    """
     store = _load_store()
     try:
         r = sync_mod.sync_apply(
@@ -4078,6 +4240,8 @@ def sync_apply_cmd(source_path: str, on_conflict: str) -> None:
             Path(source_path),
             on_conflict=on_conflict,
             actor=_whoami(),
+            as_proposals=as_proposals,
+            origin_kb=origin_kb,
         )
     except (RuntimeError, ValueError) as e:
         raise click.ClickException(str(e)) from e

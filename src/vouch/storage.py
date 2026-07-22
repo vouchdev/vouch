@@ -121,6 +121,15 @@ def _starter_config() -> dict[str, Any]:
                 "enabled": True,
                 "half_life_days": 90,
             },
+            # decide per prompt how much of the turn vouch is entitled to.
+            # chatter with no informative tokens gets nothing; a "do work"
+            # imperative gets a small background pack and no reply contract
+            # (silent when there is no match); questions keep full visible
+            # recall. new KBs get it on; existing KBs behave exactly as
+            # before until they add this key.
+            "prompt_gate": {
+                "enabled": True,
+            },
         },
         "agents": {
             "recommended_loop": [
@@ -260,6 +269,36 @@ def _yaml_dump(obj: Any) -> str:
 
 def _yaml_load(text: str) -> Any:
     return yaml.safe_load(text)
+
+
+INSTANCE_ID_FILENAME = "instance_id"
+
+
+def read_or_create_instance_id(kb_dir: Path) -> str:
+    """The KB's stable instance id, created on first request.
+
+    A per-KB identity (uuid4 hex) so federation can record WHICH KB vouched for
+    a piece of inbound knowledge. Distinct from a bundle_id (a content hash of
+    the artifacts): two KBs holding identical artifacts still have different
+    instance ids.
+
+    Stored in a sidecar file at the KB root (``.vouch/instance_id``), like the
+    schema-version marker init already writes -- deliberately NOT in config.yaml
+    or any exported subdir, so a KB's identity never travels inside a bundle or
+    collides with a receiver's config on import. Generated lazily, so existing
+    KBs adopt one with no migration. The manifest's ``kb_id`` field is the
+    channel that actually carries provenance to a receiver.
+    """
+    path = kb_dir / INSTANCE_ID_FILENAME
+    try:
+        existing = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        existing = ""
+    if existing:
+        return existing
+    new_id = uuid.uuid4().hex
+    path.write_text(new_id + "\n", encoding="utf-8")
+    return new_id
 
 
 _log = logging.getLogger("vouch.storage")
