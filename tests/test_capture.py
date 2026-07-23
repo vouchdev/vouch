@@ -300,21 +300,28 @@ def _seed(store: KBStore, sid: str, n: int) -> None:
         cap.observe(store, sid, tool="Edit", summary=f"Edited f{i}.py", now=float(i))
 
 
-def test_finalize_files_one_pending_page(store: KBStore, tmp_path: Path) -> None:
+def test_finalize_files_one_auto_rejected_page(store: KBStore, tmp_path: Path) -> None:
     from vouch.models import ProposalKind, ProposalStatus
 
     _seed(store, "s1", 3)
     result = cap.finalize(store, "s1", cwd=tmp_path)
     pid = result["summary_proposal_id"]
     assert pid is not None
-    pend = store.list_proposals(ProposalStatus.PENDING)
-    match = [p for p in pend if p.id == pid]
+    # an uncited session page from an auto-capture actor is filed then
+    # immediately auto-rejected by admission: it never lands in the pending
+    # queue, but the same mechanical page is what finalize returns.
+    assert store.list_proposals(ProposalStatus.PENDING) == []
+    rej = store.list_proposals(ProposalStatus.REJECTED)
+    match = [p for p in rej if p.id == pid]
     assert len(match) == 1
     pr = match[0]
     assert pr.kind == ProposalKind.PAGE
     assert pr.proposed_by == cap.CAPTURE_ACTOR
     assert pr.payload["type"] == cap.CAPTURE_PAGE_TYPE
-    assert pr.status == ProposalStatus.PENDING
+    assert pr.status == ProposalStatus.REJECTED
+    assert pr.decided_by == "vouch-admission"
+    assert pr.decision_reason.startswith("admission:")
+    assert store.get_proposal(pid).status == ProposalStatus.REJECTED
 
 
 def test_finalize_below_min_files_nothing(store: KBStore, tmp_path: Path) -> None:
@@ -421,15 +428,28 @@ def test_finalize_reads_transcript_for_title(store: KBStore, tmp_path: Path) -> 
         encoding="utf-8",
     )
     cap.finalize(store, "s1", cwd=tmp_path, transcript_path=transcript)
-    pend = store.list_proposals(ProposalStatus.PENDING)
-    assert len(pend) == 1
-    assert pend[0].payload["title"] == "session: ship the digest"
+    # the uncited session page is auto-rejected by admission, but the title is
+    # still built from the transcript's first prompt before it is filed.
+    rej = store.list_proposals(ProposalStatus.REJECTED)
+    assert len(rej) == 1
+    assert rej[0].payload["title"] == "session: ship the digest"
 
 
-def test_pending_count_counts_capture_actor(store: KBStore, tmp_path: Path) -> None:
+def test_capture_page_auto_rejected_not_counted_pending(
+    store: KBStore, tmp_path: Path
+) -> None:
+    from vouch.models import ProposalStatus
+
     _seed(store, "s1", 3)
     cap.finalize(store, "s1", cwd=tmp_path)
-    assert cap.pending_count(store) == 1
+    # the auto-captured session page is auto-rejected by admission, so it never
+    # counts toward the pending-review banner.
+    assert cap.pending_count(store) == 0
+    rej = store.list_proposals(ProposalStatus.REJECTED)
+    assert len(rej) == 1
+    assert rej[0].proposed_by == cap.CAPTURE_ACTOR
+    assert rej[0].status == ProposalStatus.REJECTED
+    assert rej[0].decided_by == "vouch-admission"
 
 
 import json as _json  # noqa: E402
@@ -471,17 +491,26 @@ def test_cli_finalize_files_proposal(store: KBStore) -> None:
     payload = _json.dumps({"session_id": "cc-2", "cwd": str(store.kb_dir.parent)})
     res = _run(store, ["capture", "finalize"], stdin=payload)
     assert res.exit_code == 0
-    pend = store.list_proposals(ProposalStatus.PENDING)
-    assert any(p.proposed_by == cap.CAPTURE_ACTOR for p in pend)
+    # the CLI files the session page through the same admission gate: an
+    # uncited capture-actor page is auto-rejected, not left pending.
+    assert not any(
+        p.proposed_by == cap.CAPTURE_ACTOR
+        for p in store.list_proposals(ProposalStatus.PENDING)
+    )
+    rej = store.list_proposals(ProposalStatus.REJECTED)
+    assert any(p.proposed_by == cap.CAPTURE_ACTOR for p in rej)
 
 
-def test_cli_banner_emits_when_pending(store: KBStore) -> None:
+def test_cli_banner_silent_after_capture_auto_rejected(store: KBStore) -> None:
     for i in range(3):
         cap.observe(store, "cc-3", tool="Edit", summary=f"Edited f{i}.py", now=float(i))
     cap.finalize(store, "cc-3", cwd=store.kb_dir.parent)
+    # the session page was auto-rejected by admission, so nothing awaits review:
+    # the SessionStart banner stays silent rather than announcing a pending page.
+    assert store.list_proposals(ProposalStatus.REJECTED)
     res = _run(store, ["capture", "banner"])
     assert res.exit_code == 0
-    assert "awaiting review" in res.output
+    assert "awaiting review" not in res.output
 
 
 def test_cli_banner_silent_when_none(store: KBStore) -> None:
@@ -777,10 +806,12 @@ def test_finalize_all_except_returns_proposal_ids(tmp_path):
     )
 
     assert old_sess in result["finalized"]
-    # Verify a proposal was created
+    # Verify a proposal was created — the uncited session page is filed then
+    # auto-rejected by admission, landing in the rejected queue, not pending.
     from vouch.models import ProposalStatus
-    pending = store.list_proposals(ProposalStatus.PENDING)
-    assert len(pending) > 0
+    assert store.list_proposals(ProposalStatus.PENDING) == []
+    rejected = store.list_proposals(ProposalStatus.REJECTED)
+    assert len(rejected) > 0
 
 
 def test_capture_e2e_sessionstart_cleanup_then_finalize(tmp_path):
@@ -813,9 +844,10 @@ def test_capture_e2e_sessionstart_cleanup_then_finalize(tmp_path):
     assert old_sess in cleanup_result["finalized"]
     assert not old_path.exists()
 
-    # Verify old session was proposed
-    pending_before = store.list_proposals(ProposalStatus.PENDING)
-    old_proposals = [p for p in pending_before if p.session_id == old_sess]
+    # Verify old session was filed and auto-rejected by admission (uncited
+    # session page from an auto-capture actor never becomes pending)
+    rejected_before = store.list_proposals(ProposalStatus.REJECTED)
+    old_proposals = [p for p in rejected_before if p.session_id == old_sess]
     assert len(old_proposals) == 1
 
     # 2. SessionEnd finalize (current session)
@@ -826,13 +858,13 @@ def test_capture_e2e_sessionstart_cleanup_then_finalize(tmp_path):
     assert finalize_result["summary_proposal_id"] is not None
     assert not new_path.exists()
 
-    # Verify new session was proposed
-    pending_after = store.list_proposals(ProposalStatus.PENDING)
-    new_proposals = [p for p in pending_after if p.session_id == new_sess]
+    # Verify new session was filed and auto-rejected too
+    rejected_after = store.list_proposals(ProposalStatus.REJECTED)
+    new_proposals = [p for p in rejected_after if p.session_id == new_sess]
     assert len(new_proposals) == 1
 
-    # Total proposals: old + new
-    assert len(pending_after) >= 2
+    # Total proposals: old + new, both auto-rejected
+    assert len(rejected_after) >= 2
 
 
 # --- personal-KB fallback capture through the hook CLI (phase 3) -----------
