@@ -248,6 +248,27 @@ def test_sync_vault_rejects_missing_vault(store: KBStore, tmp_path: Path) -> Non
         sync_vault(store, tmp_path / "does-not-exist")
 
 
+def test_sync_vault_surfaces_deleted_citation_as_vault_sync_error(
+    store: KBStore, vault: Path,
+) -> None:
+    """A vault edit to a page whose cited claim was since deleted must
+    surface as a clean VaultSyncError, not the raw ProposalError that
+    propose_page raises for an unknown id — otherwise it escapes the dead
+    `except ArtifactNotFoundError` handler as an uncaught traceback,
+    bypassing the CLI's VaultSyncError renderer. Fixture cites `alpha-claim`."""
+    kb_to_vault(store, vault)
+    mirror = vault / VAULT_DIR / "pages" / "alpha-page.md"
+    mirror.write_text(
+        mirror.read_text(encoding="utf-8").replace("Original body.", "Edited."),
+        encoding="utf-8",
+    )
+    # Delete the cited claim so propose_page's id validation fails.
+    (store.kb_dir / "claims" / "alpha-claim.yaml").unlink()
+
+    with pytest.raises(VaultSyncError, match="unknown artifact"):
+        sync_vault(store, vault, direction="forward")
+
+
 # --- CLI surface ----------------------------------------------------------
 
 
