@@ -36,10 +36,15 @@ _SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
 _BEARER = re.compile(r"(?i)\b(Bearer)\s+[A-Za-z0-9._~+/=-]{10,}")
 
 # key=value / key: value for sensitive-looking names — mask the value, keep the
-# name so the redaction is legible.
+# name so the redaction is legible. The optional quote after the name captures a
+# JSON/quoted-key shape (`"password": "..."`, `'api_key': '...'`) — the single
+# most common structured form a pasted credential takes, and exactly the file
+# family (settings.json, quoted YAML) this codebase writes. Without it the key's
+# closing quote sat between the name and the `:` and broke the match, so those
+# leaked. It is inside the captured separator group so the quote is preserved.
 _ASSIGNMENT = re.compile(
     r"(?i)\b(api[_-]?key|secret|token|password|passwd|pwd|access[_-]?key)\b"
-    r"(\s*[:=]\s*)"
+    r"([\"']?\s*[:=]\s*)"
     r"[\"']?[^\s\"']{6,}[\"']?"
 )
 
