@@ -79,9 +79,12 @@ def test_mechanical_single_page_below_threshold(store: KBStore) -> None:
     assert res["mode"] == "mechanical"
     assert len(res["summary_proposal_ids"]) == 1
     assert res["summary_proposal_id"] == res["summary_proposal_ids"][0]
-    pending = store.list_proposals(ProposalStatus.PENDING)
-    assert len(pending) == 1
-    assert pending[0].payload["type"] == "session"
+    # a bare mechanical session rollup is auto-rejected by the admission gate
+    prop = store.get_proposal(res["summary_proposal_ids"][0])
+    assert prop.status is ProposalStatus.REJECTED
+    assert prop.decided_by == "vouch-admission"
+    assert prop.payload["type"] == "session"
+    assert store.list_proposals(ProposalStatus.PENDING) == []
 
 
 def test_finalize_still_returns_summary_proposal_id(store: KBStore) -> None:
@@ -122,11 +125,14 @@ def test_split_files_multiple_pending_session_pages(store: KBStore, tmp_path: Pa
     res = session_split.summarize(store, "s1", mode="auto")
     assert res["mode"] == "split"
     assert len(res["summary_proposal_ids"]) == 2
-    pending = store.list_proposals(ProposalStatus.PENDING)
-    assert len(pending) == 2
-    assert all(p.payload["type"] == "session" for p in pending)
-    assert all(p.proposed_by == session_split.SPLIT_ACTOR for p in pending)
-    assert store.list_pages() == []  # nothing durable — only proposed
+    # both split pages are uncited type:session from an auto-capture actor, so
+    # the admission gate auto-rejects them — nothing pending, nothing durable.
+    rejected = [store.get_proposal(pid) for pid in res["summary_proposal_ids"]]
+    assert all(p.status is ProposalStatus.REJECTED for p in rejected)
+    assert all(p.payload["type"] == "session" for p in rejected)
+    assert all(p.proposed_by == session_split.SPLIT_ACTOR for p in rejected)
+    assert store.list_proposals(ProposalStatus.PENDING) == []
+    assert store.list_pages() == []  # nothing durable
 
 
 def test_split_forces_session_type_even_if_llm_says_concept(store: KBStore, tmp_path: Path) -> None:
@@ -136,8 +142,12 @@ def test_split_forces_session_type_even_if_llm_says_concept(store: KBStore, tmp_
         {"title": "a topic", "type": "concept", "body": "body " * 20},
     ])
     _config_with_split(store, cmd, threshold=3)
-    session_split.summarize(store, "s1", mode="auto")
-    assert store.list_proposals(ProposalStatus.PENDING)[0].payload["type"] == "session"
+    res = session_split.summarize(store, "s1", mode="auto")
+    # type is forced to session even though the llm said concept — which is why
+    # the admission gate then auto-rejects it as an uncited session page.
+    prop = store.get_proposal(res["summary_proposal_ids"][0])
+    assert prop.payload["type"] == "session"
+    assert prop.status is ProposalStatus.REJECTED
 
 
 def test_no_llm_cmd_falls_back_to_mechanical(store: KBStore) -> None:
@@ -244,18 +254,16 @@ def test_build_session_rows_lists_open_buffer(store: KBStore) -> None:
     assert row["last_activity"] is not None
 
 
-def test_build_session_rows_mechanical_pending_needs_narration(store: KBStore) -> None:
+def test_build_session_rows_omits_auto_rejected_mechanical_summary(store: KBStore) -> None:
     from vouch import capture
     _observe(store, "sess-filed", 5)
     capture.finalize(store, "sess-filed", cwd=None, generated_at="2026-07-09T00:00:00Z")
+    # the mechanical rollup is auto-rejected (uncited session page), so the
+    # session no longer surfaces as a pending row awaiting narration.
     rows = session_split.build_session_rows(store)
-    row = next(r for r in rows if r["session_id"] == "sess-filed")
-    assert row["stage"] == "pending"
-    # a mechanical rollup has not been LLM-narrated → still needs a summary
-    assert row["summarized"] is False
-    assert row["proposal_id"] is not None
-    assert row["kind"] == "page"
-    assert row["title"]
+    assert not any(
+        r["session_id"] == "sess-filed" and r["stage"] == "pending" for r in rows
+    )
 
 
 def test_build_session_rows_split_proposal_is_summarized(store: KBStore, tmp_path: Path) -> None:
@@ -267,13 +275,14 @@ def test_build_session_rows_split_proposal_is_summarized(store: KBStore, tmp_pat
     assert all(r["summarized"] for r in rows if r["session_id"] == "sess-split")
 
 
-def test_finalized_session_not_double_listed_as_buffer(store: KBStore) -> None:
+def test_finalized_session_not_listed_after_auto_reject(store: KBStore) -> None:
     from vouch import capture
     _observe(store, "sess-x", 5)
     capture.finalize(store, "sess-x", cwd=None, generated_at="2026-07-09T00:00:00Z")
+    # buffer consumed by finalize + mechanical summary auto-rejected → the
+    # session is neither a live buffer nor a pending proposal.
     rows = [r for r in session_split.build_session_rows(store) if r["session_id"] == "sess-x"]
-    assert len(rows) == 1
-    assert rows[0]["stage"] == "pending"
+    assert rows == []
 
 
 def test_summarize_returns_webapp_keys_on_split(store: KBStore, tmp_path: Path) -> None:
@@ -303,14 +312,16 @@ def test_summarize_fallback_flags_llm_failed(store: KBStore) -> None:
     assert res["skipped"] == "llm-failed"
 
 
-def test_renarrate_filed_mechanical_summary(store: KBStore, tmp_path: Path) -> None:
+def test_renarrate_is_noop_when_mechanical_summary_auto_rejected(
+    store: KBStore, tmp_path: Path
+) -> None:
     from vouch import capture
     from vouch.models import ProposalStatus
     _observe(store, "sess-m", 5)
-    capture.finalize(store, "sess-m", cwd=None, generated_at="2026-07-09T00:00:00Z")
-    mech = store.list_proposals(ProposalStatus.PENDING)
-    assert len(mech) == 1
-    mech_id = mech[0].id
+    res0 = capture.finalize(store, "sess-m", cwd=None, generated_at="2026-07-09T00:00:00Z")
+    mech_id = res0["summary_proposal_id"]
+    # the mechanical rollup is auto-rejected at filing (uncited session page)
+    assert store.get_proposal(mech_id).status is ProposalStatus.REJECTED
     assert not capture.buffer_path(store, "sess-m").exists()  # buffer gone
 
     cmd = _stub_llm(tmp_path, [
@@ -319,26 +330,23 @@ def test_renarrate_filed_mechanical_summary(store: KBStore, tmp_path: Path) -> N
     _config_with_split(store, cmd, threshold=3)
     res = session_split.summarize(store, "sess-m", mode="auto")
 
-    assert res["mode"] == "renarrated"
-    assert res["summarized"] is True
-    assert res["superseded"] == mech_id
-    # the mechanical proposal is superseded (rejected); the narrated page is pending
-    assert store.get_proposal(mech_id).status == ProposalStatus.REJECTED
-    pending = store.list_proposals(ProposalStatus.PENDING)
-    assert [p.id for p in pending] == res["summary_proposal_ids"]
-    assert all(p.proposed_by == session_split.SPLIT_ACTOR for p in pending)
+    # no pending mechanical summary survives, so renarrate has nothing to act on
+    assert res["summarized"] is False
+    assert res["skipped"] == "no-pending-summary-for-session"
+    assert store.list_proposals(ProposalStatus.PENDING) == []
 
 
-def test_renarrate_without_llm_leaves_mechanical_intact(store: KBStore) -> None:
+def test_renarrate_without_llm_after_auto_reject(store: KBStore) -> None:
     from vouch import capture
     from vouch.models import ProposalStatus
     _observe(store, "sess-m", 5)
-    capture.finalize(store, "sess-m", cwd=None, generated_at="2026-07-09T00:00:00Z")
-    mech_id = store.list_proposals(ProposalStatus.PENDING)[0].id
+    res0 = capture.finalize(store, "sess-m", cwd=None, generated_at="2026-07-09T00:00:00Z")
+    mech_id = res0["summary_proposal_id"]
+    assert store.get_proposal(mech_id).status is ProposalStatus.REJECTED
     res = session_split.summarize(store, "sess-m", mode="auto")  # no llm_cmd
     assert res["summarized"] is False
-    assert res["skipped"] == "not-configured"
-    assert store.get_proposal(mech_id).status == ProposalStatus.PENDING  # untouched
+    # the mechanical summary was already auto-rejected; nothing left to narrate
+    assert store.get_proposal(mech_id).status is ProposalStatus.REJECTED
 
 
 def test_summarize_no_buffer_no_proposal_skips(store: KBStore) -> None:

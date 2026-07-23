@@ -68,6 +68,7 @@ from .onboarding import (
 from .page_filters import filter_pages, parse_kv
 from .page_kinds import PageKindError, load_page_kind_registry
 from .proposals import (
+    ADMISSION_ACTOR,
     EXPIRE_ACTOR,
     ProposalError,
     check_approvable,
@@ -1306,6 +1307,43 @@ def pending(as_json: bool) -> None:
         preview = pr.payload.get("text") or pr.payload.get("title") or pr.payload.get("name") or "—"
         click.echo(f"• {pr.id}  [{pr.kind.value}]  by {pr.proposed_by}")
         click.echo(f"    {str(preview).strip()[:120]}")
+
+
+@cli.command()
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON instead of text.")
+@click.option("--limit", type=click.IntRange(min=1), default=None, help="Show at most N.")
+@click.option(
+    "--admission",
+    "admission_only",
+    is_flag=True,
+    help="Only auto-rejections by the admission gate.",
+)
+def rejected(as_json: bool, limit: int | None, admission_only: bool) -> None:
+    """List rejected proposals — including admission-gate auto-rejections.
+
+    A rejected proposal is never deleted; it lives in ``decided/`` with the
+    reason it was refused. Use this to audit what the admission gate dropped and
+    to catch a false positive (re-propose it deliberately if it was good).
+    """
+    store = _load_store()
+    items = store.list_proposals(ProposalStatus.REJECTED)
+    if admission_only:
+        items = [pr for pr in items if pr.decided_by == ADMISSION_ACTOR]
+    items.sort(key=lambda pr: pr.decided_at or pr.proposed_at, reverse=True)
+    if limit is not None:
+        items = items[:limit]
+    if as_json:
+        _emit_json([pr.model_dump(mode="json") for pr in items])
+        return
+    if not items:
+        click.echo("no rejected proposals")
+        return
+    for pr in items:
+        preview = pr.payload.get("text") or pr.payload.get("title") or pr.payload.get("name") or "—"
+        click.echo(f"• {pr.id}  [{pr.kind.value}]  by {pr.proposed_by} → {pr.decided_by}")
+        click.echo(f"    {str(preview).strip()[:100]}")
+        if pr.decision_reason:
+            click.echo(f"    reason: {pr.decision_reason}")
 
 
 def _proposal_preview(pr: Proposal) -> str:

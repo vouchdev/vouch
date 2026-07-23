@@ -408,7 +408,9 @@ def test_fallback_session_summary_records_its_origin(
     personal: KBStore, tmp_path: Path
 ) -> None:
     """A rollup filed into the shared personal KB must say which folder it is
-    about, and `adopt` must report it rather than leave it silently behind."""
+    about. The admission gate now auto-rejects an uncited session page, but the
+    origin/provenance it carries survives on the rejected proposal rather than
+    being left silently behind."""
     from vouch import capture as cap
 
     origin = tmp_path / "projA"
@@ -418,14 +420,26 @@ def test_fallback_session_summary_records_its_origin(
                     now=float(i))
     result = cap.finalize(personal, "sum-1", cwd=origin, project=origin.name,
                           origin=origin)
+    # finalize still returns the id even though the uncited session rollup is
+    # auto-rejected at filing by the admission gate.
     assert result["summary_proposal_id"]
     proposal = personal.get_proposal(str(result["summary_proposal_id"]))
     assert proposal.payload["metadata"]["origin_path"] == str(origin)
     assert "personal-fallback" in proposal.payload["tags"]
+    # the same origin-bearing proposal is the one the admission gate rejected —
+    # explicitly rejected, not silently dropped.
+    assert proposal.status is ProposalStatus.REJECTED
+    assert proposal.decided_by == "vouch-admission"
+    assert proposal.decision_reason.startswith("admission:")
+    pending = {p.id for p in personal.list_proposals(ProposalStatus.PENDING)}
+    rejected = {p.id for p in personal.list_proposals(ProposalStatus.REJECTED)}
+    assert proposal.id not in pending
+    assert proposal.id in rejected
 
+    # a rejected page is not adoptable — adopt must not surface it as pending.
     project = KBStore.init(origin)
     report = adopt_mod.adopt(project, personal, match_root=origin)
-    assert proposal.id in report.pages_pending_in_personal
+    assert proposal.id not in report.pages_pending_in_personal
 
 
 def test_personal_entry_prefers_a_live_row_over_a_stale_one(

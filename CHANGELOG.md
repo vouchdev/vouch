@@ -6,6 +6,31 @@ All notable changes to vouch are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+- **an admission gate that filters knowledge-shaped garbage before it is
+  filed** (`admission:` config). every ingestion path funnels through
+  `proposals._file_proposal`, so a single provenance-keyed predicate there
+  raises the floor with no drift across surfaces. it is deterministic and
+  receipt-safe — it rejects verbatim payloads, never rewrites them, so
+  byte-offset receipts stay intact. a claim that is a markdown heading, a
+  colon lead-in, or a truncated code-span/bracket is refused, as is an
+  uncited `type: session`/`log` page (a session diary, not durable
+  knowledge). only the passive auto-capture actors (`vouch-capture`,
+  `session-split`, `codex`) are blocked; a deliberate author's write stays
+  advisory and reaches the review gate untouched. tunable via
+  `admission.{enabled, min_confidence, reject_uncited_session_pages}`.
+- **`vouch rejected`** — list rejected proposals (with `--admission` to show
+  only gate auto-rejections). auto-rejections are recorded
+  (`decided_by: vouch-admission`) and never deleted, so a false positive is
+  always recoverable.
+
+### Deprecated
+- the auto-captured session-page pipeline is now a no-op for auto-capture
+  actors: `capture.finalize`'s session summary, `session_split` renarrate,
+  `codex_rollout` reingest, and the SessionStart review banner all produced
+  uncited `type: session` pages, which the admission gate now auto-rejects.
+  removal of the dead machinery is a follow-up.
+
 ### Changed
 - **the per-prompt hook now lets the model decide how much of a turn
   vouch takes** (`retrieval.prompt_gate`). recall used to inject an

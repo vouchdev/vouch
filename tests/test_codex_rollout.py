@@ -109,9 +109,16 @@ def test_ingest_files_one_pending_page(store: KBStore) -> None:
     pid = result["summary_proposal_id"]
     assert pid is not None
     assert result["captured"] == 4
-    pend = store.list_proposals(ProposalStatus.PENDING)
-    assert [p.id for p in pend] == [pid]
-    pr = pend[0]
+    # An uncited `session` page filed by the `codex` auto-capture actor is
+    # auto-rejected at admission: it never lands in PENDING, it lands decided.
+    assert store.list_proposals(ProposalStatus.PENDING) == []
+    rej = store.list_proposals(ProposalStatus.REJECTED)
+    assert [p.id for p in rej] == [pid]
+    pr = rej[0]
+    assert pr.status == ProposalStatus.REJECTED
+    assert pr.decided_by == "vouch-admission"
+    assert pr.decision_reason is not None
+    assert pr.decision_reason.startswith("admission:")
     assert pr.kind == ProposalKind.PAGE
     assert pr.proposed_by == cr.CODEX_ACTOR
     assert pr.session_id == BASIC_SESSION
@@ -188,29 +195,37 @@ def _grown_copy(tmp_path: Path) -> Path:
 def test_reingest_grown_session_updates_pending_in_place(
     store: KBStore, tmp_path: Path
 ) -> None:
+    # The first ingest's session page is auto-rejected at admission (an uncited
+    # session diary), so it never stays PENDING. A later, grown turn can no
+    # longer refresh it in place — the now-decided proposal blocks re-ingest,
+    # so the same id comes back as an `already-ingested` no-op and the body is
+    # never refreshed with the grown turn's `ruff check src`.
     first = cr.ingest_rollout(store, BASIC)
     pid = first["summary_proposal_id"]
     second = cr.ingest_rollout(store, _grown_copy(tmp_path))
-    assert second["updated"] is True
+    assert second["skipped"] == "already-ingested"
     assert second["summary_proposal_id"] == pid
     proposals = store.list_proposals(None)
-    assert len(proposals) == 1  # refreshed, not duplicated
-    assert "ruff check src" in proposals[0].payload["body"]
-    assert proposals[0].status == ProposalStatus.PENDING
+    assert len(proposals) == 1  # still one, not duplicated
+    assert proposals[0].status == ProposalStatus.REJECTED
+    assert "ruff check src" not in proposals[0].payload["body"]
 
 
 def test_reingest_decided_session_stays_decided(
     store: KBStore, tmp_path: Path
 ) -> None:
-    """A proposal the human already reviewed is history — a later turn must
-    not resurrect or mutate it."""
-    from vouch.proposals import approve
-
+    """A proposal that's already decided is history — a later turn must not
+    resurrect or mutate it. The session page is auto-rejected at admission, so
+    it's decided from the very first ingest, no human review step needed."""
     first = cr.ingest_rollout(store, BASIC)
-    approve(store, first["summary_proposal_id"], approved_by="alice-example")
+    pid = first["summary_proposal_id"]
+    assert store.get_proposal(pid).status == ProposalStatus.REJECTED
     result = cr.ingest_rollout(store, _grown_copy(tmp_path))
     assert result["skipped"] == "already-ingested"
+    assert result["summary_proposal_id"] == pid
     assert len(store.list_proposals(ProposalStatus.PENDING)) == 0
+    # the decided proposal is untouched by the later turn
+    assert store.get_proposal(pid).status == ProposalStatus.REJECTED
 
 
 def test_reingest_update_lands_in_audit_log(store: KBStore, tmp_path: Path) -> None:
@@ -219,7 +234,12 @@ def test_reingest_update_lands_in_audit_log(store: KBStore, tmp_path: Path) -> N
     cr.ingest_rollout(store, BASIC)
     cr.ingest_rollout(store, _grown_copy(tmp_path))
     events = [e.event for e in audit.read_events(store.kb_dir)]
-    assert "proposal.page.update" in events
+    # The session page is auto-rejected at admission, so the ingest's decision
+    # lands in the audit log as create + reject. The grown re-ingest is a no-op
+    # (already-ingested), so the update-in-place path never fires.
+    assert "proposal.page.create" in events
+    assert "proposal.page.reject" in events
+    assert "proposal.page.update" not in events
 
 
 # --- hook wire (--hook): codex Stop event ------------------------------------
@@ -273,7 +293,10 @@ def test_cli_hook_mode_files_proposal(store: KBStore, monkeypatch) -> None:
         cli, ["capture", "ingest-codex", "--hook"], input=payload
     )
     assert res.exit_code == 0, res.output
-    assert len(store.list_proposals(ProposalStatus.PENDING)) == 1
+    # The hook files a proposal, but an uncited `session` page from the `codex`
+    # auto-capture actor is auto-rejected at admission — decided, not pending.
+    assert len(store.list_proposals(ProposalStatus.PENDING)) == 0
+    assert len(store.list_proposals(ProposalStatus.REJECTED)) == 1
 
 
 def test_cli_hook_mode_exits_zero_on_garbage(store: KBStore, monkeypatch) -> None:

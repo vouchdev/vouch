@@ -16,7 +16,7 @@ from typing import Any
 import yaml
 from pydantic import ValidationError
 
-from . import audit, index_db
+from . import admission, audit, index_db
 from .models import (
     ArtifactScope,
     Claim,
@@ -39,6 +39,7 @@ class ProposalError(RuntimeError):
 
 EXPIRE_REASON = "expired"
 EXPIRE_ACTOR = "vouch-expire"
+ADMISSION_ACTOR = "vouch-admission"
 _DEFAULT_EXPIRE_PENDING_DAYS = 90
 
 
@@ -144,6 +145,19 @@ def _file_proposal(
         store.kb_dir, event=f"proposal.{kind.value}.create", actor=proposed_by,
         object_ids=[proposal.id], data={"slug_hint": payload.get("id")},
     )
+    # Admission gate: deterministic, receipt-safe floor on knowledge-shaped
+    # garbage. It only *blocks* the passive auto-capture firehoses; a deliberate
+    # author's write is advisory-only and passes straight through to the review
+    # gate. Filing-then-rejecting (rather than dropping) keeps the audit log as
+    # the authoritative record of what was refused and why.
+    if proposed_by in admission.AUTO_CAPTURE_ACTORS:
+        verdict = admission.assess(kind.value, payload, admission.load_config(store))
+        if not verdict.admit:
+            return reject(
+                store, proposal.id,
+                rejected_by=ADMISSION_ACTOR,
+                reason=f"admission: {verdict.reason}",
+            )
     return proposal
 
 
@@ -543,6 +557,12 @@ def resolve_pending_receipt_claim(
     with a duplicate reason instead of piling up in the review queue.
     """
     if proposal.kind != ProposalKind.CLAIM:
+        return None
+    if proposal.status is not ProposalStatus.PENDING:
+        # The admission gate may have auto-rejected this proposal at filing time
+        # (file-then-reject in _file_proposal). A decided proposal has nothing to
+        # resolve — approving it would raise. Skip so the capture loop survives a
+        # rejected fragment and still approves the good claims beside it.
         return None
     review_cfg = _review_config(store)
     trusted = review_cfg.get("approver_role") == "trusted-agent"
