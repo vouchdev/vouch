@@ -98,6 +98,47 @@ def test_cli_trust_exit_codes():
     assert ok.returncode == 0 and bad.returncode == 1
 
 
+def test_extract_changed_paths_plain_file():
+    files_json = '[{"filename": "src/vouch/context.py"}]'
+    assert pr_bot.extract_changed_paths(files_json) == ["src/vouch/context.py"]
+
+
+def test_extract_changed_paths_includes_previous_filename_on_rename():
+    files_json = (
+        '[{"filename": "src/vouch/web_server.py", "status": "renamed", '
+        '"previous_filename": "src/vouch/http_server.py"}]'
+    )
+    assert pr_bot.extract_changed_paths(files_json) == [
+        "src/vouch/web_server.py", "src/vouch/http_server.py",
+    ]
+
+
+def test_rename_of_core_path_still_classifies_core():
+    # a rename that lands a core path under a new name must not slip past
+    # trust-gate — the pre-rename path has to stay in the classified list.
+    files_json = (
+        '[{"filename": "src/vouch/web_server.py", "status": "renamed", '
+        '"previous_filename": "src/vouch/http_server.py"}]'
+    )
+    changed = pr_bot.extract_changed_paths(files_json)
+    assert pr_bot.classify(changed)["is_core"] is True
+
+
+def test_cli_changed_files_emits_previous_filename(tmp_path):
+    f = tmp_path / "files.json"
+    f.write_text(
+        '[{"filename": "src/vouch/web_server.py", "status": "renamed", '
+        '"previous_filename": "src/vouch/http_server.py"}]',
+        encoding="utf-8",
+    )
+    out = subprocess.run(
+        [sys.executable, "-m", "vouch.pr_bot", "changed-files", "--json-file", str(f)],
+        capture_output=True, text=True, check=True)
+    assert out.stdout.splitlines() == [
+        "src/vouch/web_server.py", "src/vouch/http_server.py",
+    ]
+
+
 def test_codeowners_covers_every_core_glob():
     text = Path(".github/CODEOWNERS").read_text(encoding="utf-8")
     for glob in pr_bot.CORE_GLOBS:

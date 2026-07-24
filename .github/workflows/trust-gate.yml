@@ -20,10 +20,14 @@ jobs:
       - name: list changed files
         env:
           GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
         run: |
-          gh pr view "${{ github.event.pull_request.number }}" \
-            --repo "${{ github.repository }}" \
-            --json files --jq '.files[].path' > changed.txt
+          # the REST files endpoint (unlike `gh pr view --json files`) carries
+          # previous_filename on renames — required so a rename that lands a
+          # core path under a new name still classifies as core.
+          gh api "repos/$REPO/pulls/$PR/files" --paginate > files.json
+          PYTHONPATH=src python -m vouch.pr_bot changed-files --json-file files.json > changed.txt
       - name: fail if an untrusted author touched core
         env:
           ASSOC: ${{ github.event.pull_request.author_association }}

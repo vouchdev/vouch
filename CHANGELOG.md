@@ -273,6 +273,13 @@ All notable changes to vouch are documented here. Format follows
   in config.yaml (#476).
 
 ### Fixed
+- `pr_bot` core-path classification: `trust-gate.yml`, `auto-merge.yml`,
+  and `comment-command.yml` now source the changed-file list from the REST
+  `pulls/{n}/files` endpoint instead of `gh pr view --json files`, and feed
+  both the new and previous filename into classification. the GraphQL-backed
+  shortcut carries no rename metadata, so a `git mv` of a `CORE_GLOBS` path
+  (e.g. `http_server.py`) made the file invisible to the trust gate and
+  auto-merge arm check. (#505)
 - approve/reject/expire record the audit event *before* moving the
   proposal to decided/. a crash between the two used to leave a durable
   decision with no authoritative history; it now leaves a pending

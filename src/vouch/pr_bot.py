@@ -205,6 +205,26 @@ def _read_lines(path: str) -> list[str]:
         return [ln.strip() for ln in fh if ln.strip()]
 
 
+def extract_changed_paths(files_json: str) -> list[str]:
+    """flatten a REST ``/pulls/{n}/files`` payload into a path list.
+
+    emits both ``filename`` and, for a renamed entry, ``previous_filename`` —
+    a rename that lands a core path under a new name must still classify as
+    core. ``gh pr view --json files`` (the GraphQL-backed shortcut) carries no
+    previous-filename field and silently drops this; callers must use the
+    REST files endpoint (``gh api repos/{o}/{r}/pulls/{n}/files``) instead.
+    """
+    paths: list[str] = []
+    for entry in json.loads(files_json):
+        filename = entry.get("filename")
+        if filename:
+            paths.append(filename)
+        previous = entry.get("previous_filename")
+        if previous:
+            paths.append(previous)
+    return paths
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="vouch.pr_bot")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -212,6 +232,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     c = sub.add_parser("classify")
     c.add_argument("--files-file", required=True)
     c.add_argument("--print-klass", action="store_true")
+
+    cf = sub.add_parser("changed-files")
+    cf.add_argument("--json-file", required=True)
 
     for name in ("core-touched", "ui-touched"):
         sp = sub.add_parser(name)
@@ -246,6 +269,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     if ns.cmd == "classify":
         changed = _read_lines(ns.files_file)
         sys.stdout.write(klass(changed) if ns.print_klass else json.dumps(classify(changed)))
+        return 0
+    if ns.cmd == "changed-files":
+        with open(ns.json_file, encoding="utf-8") as fh:
+            paths = extract_changed_paths(fh.read())
+        sys.stdout.write("\n".join(paths))
         return 0
     if ns.cmd == "core-touched":
         return 0 if classify(_read_lines(ns.files_file))["is_core"] else 1

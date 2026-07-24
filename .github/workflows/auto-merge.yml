@@ -68,7 +68,10 @@ jobs:
           REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
         run: |
-          gh pr view "$PR" --repo "$REPO" --json files --jq '.files[].path' > changed.txt
+          # REST files endpoint carries previous_filename on renames; the
+          # GraphQL-backed `gh pr view --json files` shortcut does not.
+          gh api "repos/$REPO/pulls/$PR/files" --paginate > files.json
+          PYTHONPATH=src python -m vouch.pr_bot changed-files --json-file files.json > changed.txt
           klass=$(PYTHONPATH=src python -m vouch.pr_bot classify --files-file changed.txt --print-klass)
           echo "klass=$klass" >> "$GITHUB_OUTPUT"
 
