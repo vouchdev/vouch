@@ -58,6 +58,60 @@ def test_sync_excludes_config_yaml(tmp_path: Path) -> None:
     assert dest.config_path.read_text() == "version: 1\nsync: local\n"
 
 
+def test_sync_apply_as_proposals_files_pending_not_committed(tmp_path: Path) -> None:
+    from vouch.models import ProposalKind, ProposalStatus
+    from vouch.storage import ArtifactNotFoundError
+
+    incoming = _store(tmp_path / "incoming")
+    _claim(incoming, "c1", "alpha from the other kb")
+    dest = _store(tmp_path / "dest")
+
+    result = sync.sync_apply(dest.kb_dir, incoming.root, as_proposals=True, origin_kb="kb-remote")
+
+    assert result["mode"] == "as_proposals"
+    assert result["proposed"]
+    assert result["origin"] == "kb-remote"
+    # The gate held: the inbound claim is a pending proposal, not a committed write.
+    assert "written" not in result
+    with pytest.raises(ArtifactNotFoundError):
+        dest.get_claim("c1")
+    assert not (dest.kb_dir / "claims" / "c1.yaml").exists()
+    pending = [
+        p for p in dest.list_proposals(ProposalStatus.PENDING) if p.kind == ProposalKind.CLAIM
+    ]
+    assert len(pending) == 1
+
+
+def test_sync_apply_as_proposals_approves_into_a_claim_with_origin(tmp_path: Path) -> None:
+    from vouch import proposals
+
+    incoming = _store(tmp_path / "incoming")
+    _claim(incoming, "c1", "alpha from the other kb")
+    dest = _store(tmp_path / "dest")
+
+    result = sync.sync_apply(dest.kb_dir, incoming.root, as_proposals=True, origin_kb="kb-remote")
+    approved = proposals.approve(dest, result["proposed"][0], approved_by="human")
+    # Only this KB's approve makes it durable, and it carries the origin provenance.
+    assert dest.get_claim(approved.id).text == "alpha from the other kb"
+    assert "origin:kb-remote" in dest.get_claim(approved.id).tags
+
+
+def test_cli_sync_apply_as_proposals(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    incoming = _store(tmp_path / "incoming")
+    _claim(incoming, "c1", "alpha from the other kb")
+    dest = _store(tmp_path / "dest")
+    monkeypatch.chdir(dest.kb_dir.parent)
+
+    r = CliRunner().invoke(
+        cli, ["sync-apply", str(incoming.root), "--as-proposals", "--origin-kb", "kb-remote"]
+    )
+    assert r.exit_code == 0, r.output
+    out = json.loads(r.output)
+    assert out["mode"] == "as_proposals"
+    assert out["proposed"]
+    assert not (dest.kb_dir / "claims" / "c1.yaml").exists()
+
+
 def test_sync_check_classifies_claim_conflicts(tmp_path: Path) -> None:
     incoming = _store(tmp_path / "incoming")
     _claim(incoming, "c1", "incoming text")

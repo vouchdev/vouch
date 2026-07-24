@@ -23,6 +23,7 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
+import vouch.install_adapter as ia
 from vouch.cli import cli
 from vouch.install_adapter import (
     ADAPTERS_DIR,
@@ -203,22 +204,24 @@ def test_settings_json_written_fresh_when_absent(tmp_path: Path) -> None:
     assert ".claude/settings.json" not in result.merged
 
 
-def test_settings_json_malformed_existing_is_skipped(tmp_path: Path) -> None:
+def test_settings_json_malformed_existing_is_failed(tmp_path: Path) -> None:
     (tmp_path / ".claude").mkdir()
     (tmp_path / ".claude" / "settings.json").write_text("{ not valid json ")
     before = (tmp_path / ".claude" / "settings.json").read_text()
     result = install("claude-code", target=tmp_path, tier="T4")
-    # unreadable user file is left untouched, not clobbered
+    # unreadable user file is left untouched, not clobbered — but vouch is
+    # NOT wired, so it must read as failed, never "already present".
     assert (tmp_path / ".claude" / "settings.json").read_text() == before
-    assert ".claude/settings.json" in result.skipped
+    assert ".claude/settings.json" in result.failed
+    assert ".claude/settings.json" not in result.skipped
     assert ".claude/settings.json" not in result.merged
 
 
-def test_settings_json_non_object_existing_is_skipped(tmp_path: Path) -> None:
+def test_settings_json_non_object_existing_is_failed(tmp_path: Path) -> None:
     (tmp_path / ".claude").mkdir()
     (tmp_path / ".claude" / "settings.json").write_text("[1, 2, 3]")
     result = install("claude-code", target=tmp_path, tier="T4")
-    assert ".claude/settings.json" in result.skipped
+    assert ".claude/settings.json" in result.failed
 
 
 def test_merge_settings_coerces_non_dict_fields() -> None:
@@ -1327,3 +1330,267 @@ def test_user_mcp_manifest_rejects_traversal_config(tmp_path: Path, monkeypatch)
     target.mkdir()
     with pytest.raises(AdapterError, match=r"bare filename"):
         install("evilmcp", target=target, tier="T1", home=tmp_path / "home")
+
+
+# --- global (machine-wide) install ----------------------------------------
+
+
+def test_install_global_writes_user_level_wiring(tmp_path: Path) -> None:
+    """--global lands hooks/commands/CLAUDE.md under ~/.claude and registers
+    a USER-scope MCP server (top-level mcpServers, not projects[...])."""
+    home = tmp_path / "home"
+    result, target = ia.install_global("claude-code", home=home)
+    assert target == (home / ".claude").resolve()
+    assert (target / "settings.json").is_file()
+    assert (target / "commands" / "vouch-recall.md").is_file()
+    assert (target / "CLAUDE.md").is_file()
+    assert "settings.json" in result.written
+    assert result.registered == [".claude.json:vouch (mcp)"]
+    cfg = json.loads((home / ".claude.json").read_text(encoding="utf-8"))
+    assert cfg["mcpServers"]["vouch"]["command"] == "vouch"
+    assert "projects" not in cfg  # user scope, never a per-project entry
+
+
+def test_install_global_is_idempotent(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    ia.install_global("claude-code", home=home)
+    again, _target = ia.install_global("claude-code", home=home)
+    assert again.written == []
+    assert again.appended == []
+    assert again.registered == []  # server already present — not re-added
+    assert again.failed == []
+
+
+def test_install_global_no_approve_skips_registration(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    result, _target = ia.install_global("claude-code", approve=False, home=home)
+    assert result.registered == []
+    assert not (home / ".claude.json").exists()
+
+
+def test_install_global_refuses_host_without_global_block(tmp_path: Path) -> None:
+    # cursor has no global: block (yet) — must be a clean error, not a crash
+    with pytest.raises(AdapterError, match=r"no `global:` wiring"):
+        ia.install_global("cursor", home=tmp_path / "home")
+
+
+def test_global_settings_template_is_the_project_one() -> None:
+    """Frozen-hook-strings contract: the global T4 settings entry must use
+    the SAME src file as the project T4 entry. Byte-identical hook command
+    strings are what lets Claude Code collapse user-level and project-level
+    hooks into one execution instead of double-firing — a drifted copy
+    would silently double-capture every tool call."""
+    manifest = ia._load_manifest("claude-code")
+    assert manifest.global_spec is not None
+    project_srcs = {
+        e.src for e in manifest.tiers.get("T4", []) if e.src.endswith("settings.json")
+    }
+    global_srcs = {
+        e.src
+        for e in manifest.global_spec.tiers.get("T4", [])
+        if e.src.endswith("settings.json")
+    }
+    assert project_srcs == global_srcs != set()
+    # and the global command catalogue mirrors the project one
+    project_cmds = {Path(e.src).name for e in manifest.tiers.get("T3", [])}
+    global_cmds = {Path(e.src).name for e in manifest.global_spec.tiers.get("T3", [])}
+    assert project_cmds == global_cmds
+
+
+def test_install_global_cli_never_bootstraps_a_kb(
+    tmp_path: Path, monkeypatch, _sandbox_home: Path
+) -> None:
+    """`vouch install-mcp claude-code --global` end to end: writes user
+    wiring, registers user scope, and creates NO KB anywhere — there is no
+    project in a machine-wide install."""
+    workdir = tmp_path / "somewhere"
+    workdir.mkdir()
+    monkeypatch.chdir(workdir)
+    result = CliRunner().invoke(cli, ["install-mcp", "claude-code", "--global"])
+    assert result.exit_code == 0, result.output
+    assert "user scope" in result.output
+    assert (_sandbox_home / ".claude" / "settings.json").is_file()
+    cfg = json.loads((_sandbox_home / ".claude.json").read_text(encoding="utf-8"))
+    assert "vouch" in cfg["mcpServers"]
+    assert not (workdir / ".vouch").exists()
+    assert not (_sandbox_home / ".vouch").exists()
+    # project-scoped flags are meaningless here and must be rejected loudly
+    bad = CliRunner().invoke(
+        cli, ["install-mcp", "claude-code", "--global", "--path", str(workdir)]
+    )
+    assert bad.exit_code != 0
+    assert "machine-wide" in bad.output
+
+
+def test_install_global_writes_through_symlinked_claude_md(tmp_path: Path) -> None:
+    """Dotfiles users symlink ~/.claude/CLAUDE.md elsewhere: the install
+    must write THROUGH the symlink, not abort claiming the manifest
+    escapes the target tree (lexical, not resolved, containment)."""
+    home = tmp_path / "home"
+    dotfiles = tmp_path / "dotfiles"
+    (home / ".claude").mkdir(parents=True)
+    dotfiles.mkdir()
+    real_md = dotfiles / "CLAUDE.md"
+    real_md.write_text("# my global rules\n", encoding="utf-8")
+    (home / ".claude" / "CLAUDE.md").symlink_to(real_md)
+    result, _target = ia.install_global("claude-code", home=home)
+    assert result.failed == []
+    assert "vouch" in real_md.read_text(encoding="utf-8")  # written through
+
+
+def test_install_global_follows_symlinked_claude_dir(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    real_dir = tmp_path / "dotfiles-claude"
+    real_dir.mkdir()
+    (home / ".claude").symlink_to(real_dir)
+    result, _target = ia.install_global("claude-code", home=home)
+    assert result.failed == []
+    assert (real_dir / "settings.json").is_file()
+
+
+def test_install_global_refuses_file_at_target(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".claude").write_text("not a dir", encoding="utf-8")
+    with pytest.raises(AdapterError, match="not a directory"):
+        ia.install_global("claude-code", home=home)
+
+
+def test_parse_global_rejects_home_itself(tmp_path: Path, monkeypatch) -> None:
+    adapters = tmp_path / "adapters"
+    (adapters / "dotty").mkdir(parents=True)
+    (adapters / "dotty" / "f.txt").write_text("x", encoding="utf-8")
+    (adapters / "dotty" / "install.yaml").write_text(
+        "host: dotty\npretty: Dotty\n"
+        "tiers:\n  T1:\n    - { src: f.txt, dst: f.txt }\n"
+        "global:\n  target: .\n  tiers:\n    T1:\n      - { src: f.txt, dst: f.txt }\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(ia, "ADAPTERS_DIR", adapters)
+    with pytest.raises(AdapterError, match="subdirectory"):
+        ia.install_global("dotty", home=tmp_path / "home")
+
+
+def test_serve_stdio_starts_without_a_kb(tmp_path: Path, monkeypatch) -> None:
+    """The user-scope MCP server launches from every folder on the machine;
+    a KB-less cwd must serve (per-call errors), never exit 2."""
+    kbless = tmp_path / "empty"
+    kbless.mkdir()
+    env = dict(os.environ)
+    env["HOME"] = str(tmp_path / "home")
+    env.pop("VOUCH_KB_PATH", None)
+    env.pop("VOUCH_PROJECT_DIR", None)
+    proc = subprocess.Popen(
+        [sys.executable, "-c",
+         "import sys; sys.argv=['vouch','serve']; from vouch.cli import cli; cli()"],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        cwd=kbless, env=env,
+    )
+    try:
+        _out, err = proc.communicate(input=b"", timeout=20)
+        # clean EOF shutdown is fine; fail-fast exit 2 is the bug
+        assert proc.returncode != 2, err.decode(errors="replace")
+        assert b"serving anyway" in err
+    except subprocess.TimeoutExpired:
+        proc.kill()  # still serving after EOF-less start — also a pass
+
+
+def test_install_global_coexists_with_project_install(tmp_path: Path) -> None:
+    """A machine that already has a per-project install can go global: the
+    project registration stays, the user-scope one is added next to it."""
+    home = tmp_path / "home"
+    project = tmp_path / "project"
+    project.mkdir()
+    install("claude-code", target=project, home=home)
+    result, _target = ia.install_global("claude-code", home=home)
+    assert result.registered == [".claude.json:vouch (mcp)"]
+    cfg = json.loads((home / ".claude.json").read_text(encoding="utf-8"))
+    assert cfg["mcpServers"]["vouch"]["command"] == "vouch"
+    assert str(project.resolve()) in cfg["projects"]  # untouched
+
+
+# --- --global + the personal-fallback opt-in (phase 3) ---------------------
+
+
+@pytest.fixture()
+def _personal_env(_sandbox_home: Path, monkeypatch):
+    """Pin the registry + personal paths inside the sandbox home."""
+    from vouch import hub
+
+    monkeypatch.setenv(hub.REGISTRY_ENV, str(_sandbox_home / "registry.yaml"))
+    monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+    monkeypatch.delenv(hub.PERSONAL_KB_ENV, raising=False)
+    return _sandbox_home
+
+
+def test_install_global_personal_fallback_flag(
+    tmp_path: Path, monkeypatch, _personal_env: Path
+) -> None:
+    """--personal-fallback sets up the opted-in personal KB in one command."""
+    from vouch import hub
+
+    workdir = tmp_path / "w"
+    workdir.mkdir()
+    monkeypatch.chdir(workdir)
+    result = CliRunner().invoke(
+        cli, ["install-mcp", "claude-code", "--global", "--personal-fallback"]
+    )
+    assert result.exit_code == 0, result.output
+    root = hub.personal_kb_root()
+    assert root is not None and (root / ".vouch").is_dir()
+    assert hub.personal_fallback_enabled(root) is True
+    entry = hub.personal_entry()
+    assert entry is not None and entry.role == "personal"
+    # re-running reports the existing KB instead of re-asking
+    again = CliRunner().invoke(
+        cli, ["install-mcp", "claude-code", "--global"]
+    )
+    assert again.exit_code == 0, again.output
+    assert "Personal KB:" in again.output
+    assert "fallback capture on" in again.output
+
+
+def test_install_global_no_personal_fallback_stays_off(
+    tmp_path: Path, monkeypatch, _personal_env: Path
+) -> None:
+    from vouch import hub
+
+    workdir = tmp_path / "w"
+    workdir.mkdir()
+    monkeypatch.chdir(workdir)
+    result = CliRunner().invoke(
+        cli, ["install-mcp", "claude-code", "--global", "--no-personal-fallback"]
+    )
+    assert result.exit_code == 0, result.output
+    root = hub.personal_kb_root()
+    assert root is not None and not (root / ".vouch").exists()
+    assert hub.personal_entry() is None
+
+
+def test_install_global_non_tty_defaults_to_hint(
+    tmp_path: Path, monkeypatch, _personal_env: Path
+) -> None:
+    """No flag + no terminal: nothing is created, the hint names the command."""
+    from vouch import hub
+
+    workdir = tmp_path / "w"
+    workdir.mkdir()
+    monkeypatch.chdir(workdir)
+    result = CliRunner().invoke(cli, ["install-mcp", "claude-code", "--global"])
+    assert result.exit_code == 0, result.output
+    assert "hub init-personal --fallback" in result.output
+    root = hub.personal_kb_root()
+    assert root is not None and not (root / ".vouch").exists()
+    assert hub.personal_entry() is None
+
+
+def test_personal_fallback_flag_requires_global(tmp_path: Path, monkeypatch) -> None:
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    monkeypatch.chdir(proj)
+    result = CliRunner().invoke(
+        cli, ["install-mcp", "claude-code", "--personal-fallback"]
+    )
+    assert result.exit_code != 0
+    assert "--global" in result.output

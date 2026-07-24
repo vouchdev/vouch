@@ -7,6 +7,7 @@ proposal lifecycle, and writes audit events for every mutation.
 from __future__ import annotations
 
 import contextlib
+import re
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -16,7 +17,7 @@ from typing import Any
 import yaml
 from pydantic import ValidationError
 
-from . import audit, index_db
+from . import admission, audit, index_db
 from .models import (
     ArtifactScope,
     Claim,
@@ -37,8 +38,45 @@ class ProposalError(RuntimeError):
     pass
 
 
+class DeadClaimRefsError(ProposalError):
+    """Approval blocked: the page payload cites claim ids that no longer exist.
+
+    Raised instead of a bare ProposalError so interactive surfaces (CLI
+    prompt, console dialog) can detect the case, show the missing ids, and
+    retry the approve with drop_missing_claims=True. Claims can disappear
+    between propose and approve — archived, redacted, or removed in a bulk
+    clear — so this is a normal reviewer decision, not a corrupt proposal.
+    """
+
+    def __init__(self, proposal_id: str, missing: list[str]) -> None:
+        self.proposal_id = proposal_id
+        self.missing = list(missing)
+        super().__init__(
+            f"page proposal {proposal_id} references missing claim(s): "
+            + ", ".join(self.missing)
+            + " — approve with drop_missing_claims to strip the dead "
+            "references, or reject the proposal"
+        )
+
+
+def strip_claim_markers(body: str, ids: list[str]) -> str:
+    """Remove inline `[claim: <id>]` markers for `ids` from a page body."""
+    for cid in ids:
+        body = re.sub(rf"\s*\[claim:\s*{re.escape(cid)}\]", "", body)
+    return body
+
+
+def missing_claim_refs(store: KBStore, proposal: Proposal) -> list[str]:
+    """Claim ids a PAGE proposal cites that don't resolve to a claim file."""
+    if proposal.kind != ProposalKind.PAGE:
+        return []
+    refs = proposal.payload.get("claims") or []
+    return [cid for cid in refs if not store._claim_path(cid).exists()]
+
+
 EXPIRE_REASON = "expired"
 EXPIRE_ACTOR = "vouch-expire"
+ADMISSION_ACTOR = "vouch-admission"
 _DEFAULT_EXPIRE_PENDING_DAYS = 90
 
 
@@ -144,6 +182,19 @@ def _file_proposal(
         store.kb_dir, event=f"proposal.{kind.value}.create", actor=proposed_by,
         object_ids=[proposal.id], data={"slug_hint": payload.get("id")},
     )
+    # Admission gate: deterministic, receipt-safe floor on knowledge-shaped
+    # garbage. It only *blocks* the passive auto-capture firehoses; a deliberate
+    # author's write is advisory-only and passes straight through to the review
+    # gate. Filing-then-rejecting (rather than dropping) keeps the audit log as
+    # the authoritative record of what was refused and why.
+    if proposed_by in admission.AUTO_CAPTURE_ACTORS:
+        verdict = admission.assess(kind.value, payload, admission.load_config(store))
+        if not verdict.admit:
+            return reject(
+                store, proposal.id,
+                rejected_by=ADMISSION_ACTOR,
+                reason=f"admission: {verdict.reason}",
+            )
     return proposal
 
 
@@ -544,6 +595,12 @@ def resolve_pending_receipt_claim(
     """
     if proposal.kind != ProposalKind.CLAIM:
         return None
+    if proposal.status is not ProposalStatus.PENDING:
+        # The admission gate may have auto-rejected this proposal at filing time
+        # (file-then-reject in _file_proposal). A decided proposal has nothing to
+        # resolve — approving it would raise. Skip so the capture loop survives a
+        # rejected fragment and still approves the good claims beside it.
+        return None
     review_cfg = _review_config(store)
     trusted = review_cfg.get("approver_role") == "trusted-agent"
     receipted = bool(
@@ -694,17 +751,25 @@ def approve(
     *,
     approved_by: str,
     reason: str | None = None,
+    drop_missing_claims: bool = False,
 ) -> Claim | Page | Entity | Relation:
     """Approve a pending proposal and write it as a durable artifact.
 
     Raises ProposalError if the proposal is not pending or if
     approved_by matches proposed_by (forbidden_self_approval).
+
+    A PAGE proposal citing claim ids that no longer exist raises
+    DeadClaimRefsError so the reviewer can decide: retry with
+    drop_missing_claims=True to strip the dead references (frontmatter list
+    and inline `[claim: …]` markers) and approve what remains — the dropped
+    ids are recorded in the audit event.
     """
     proposal = store.get_proposal(proposal_id)
     block = _approval_block_reason(store, proposal, approved_by)
     if block:
         raise ProposalError(block)
     payload = dict(proposal.payload)
+    dropped_claims: list[str] = []
     # Refuse to overwrite an existing artifact. Without this guard a retry
     # after a crash between put_<kind>() and move_proposal_to_decided() would
     # silently rewrite the artifact with new approved_by / created_at metadata.
@@ -730,6 +795,16 @@ def approve(
             )
         result = claim
     elif proposal.kind == ProposalKind.PAGE:
+        missing = missing_claim_refs(store, proposal)
+        if missing:
+            if not drop_missing_claims:
+                raise DeadClaimRefsError(proposal.id, missing)
+            payload["claims"] = [
+                c for c in (payload.get("claims") or []) if c not in missing
+            ]
+            if isinstance(payload.get("body"), str):
+                payload["body"] = strip_claim_markers(payload["body"], missing)
+            dropped_claims = missing
         page = Page(**payload)
         # Re-validate the kind at the gate: config may have tightened (or a
         # kind been removed) between propose and approve. Built-in kinds pass
@@ -788,10 +863,13 @@ def approve(
     # a crash between the two must leave a pending proposal WITH its decision
     # event (recoverable; retry is blocked by _ensure_no_existing_artifact),
     # never a decided proposal without one.
+    decision_data: dict[str, Any] = {"reason": reason}
+    if dropped_claims:
+        decision_data["dropped_claims"] = dropped_claims
     audit.log_event(
         store.kb_dir, event=f"proposal.{proposal.kind.value}.approve",
         actor=approved_by, object_ids=[proposal.id, result.id],
-        data={"reason": reason},
+        data=decision_data,
     )
     store.move_proposal_to_decided(proposal)
     return result

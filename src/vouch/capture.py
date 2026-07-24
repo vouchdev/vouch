@@ -110,6 +110,7 @@ def observe(
     cmd: str | None = None,
     now: float | None = None,
     config: CaptureConfig | None = None,
+    tool_use_id: str | None = None,
 ) -> bool:
     """Append one observation to the session buffer. Returns True if written."""
     cfg = config or load_config(store)
@@ -123,13 +124,25 @@ def observe(
         cmd = mask_secrets(cmd)
     ts = time.time() if now is None else now
     path = buffer_path(store, session_id)
+    observations = _read_observations(path)
+    # Event-identity dedup: exact and window-free. With user-level AND
+    # legacy project-level hooks both wired (global install coexisting
+    # with a per-project one), the same PostToolUse event can reach us
+    # twice; the (session, tool_use_id) pair identifies it regardless of
+    # which wiring delivered it or how the command strings drifted.
+    if tool_use_id and any(
+        obs.get("tool_use_id") == tool_use_id for obs in observations
+    ):
+        return False
     key = _dedup_key(tool, summary)
-    for obs in reversed(_read_observations(path)):
+    for obs in reversed(observations):
         if ts - float(obs.get("ts", 0.0)) > cfg.dedup_window_seconds:
             break
         if _dedup_key(str(obs.get("tool", "")), str(obs.get("summary", ""))) == key:
             return False
     record: dict[str, Any] = {"ts": ts, "tool": tool, "summary": summary}
+    if tool_use_id:
+        record["tool_use_id"] = tool_use_id
     if files:
         record["files"] = files
     if cmd:
@@ -433,6 +446,7 @@ def finalize(
     transcript_path: Path | None = None,
     mode: str = "auto",
     config: CaptureConfig | None = None,
+    origin: Path | None = None,
 ) -> dict[str, Any]:
     """Roll a session buffer into PENDING summary proposal(s). No approve().
 
@@ -442,6 +456,10 @@ def finalize(
     If cwd is None (e.g., finalizing orphaned buffers of unknown origin), git
     changes are not included; transcript_path (from the SessionEnd hook payload)
     supplies the human's first prompt for the summary title when present.
+
+    ``origin`` marks a personal-KB fallback rollup (see ``capture_answer``):
+    the filed summary records the folder the session ran in, so a shared
+    personal KB's review queue says which folder each summary is about.
     """
     from . import session_split  # deferred: breaks the capture<->session_split cycle
     intent = (
@@ -449,7 +467,7 @@ def finalize(
     )
     return session_split.summarize(
         store, session_id, intent=intent, cwd=cwd, project=project,
-        generated_at=generated_at, mode=mode, config=config,
+        generated_at=generated_at, mode=mode, config=config, origin=origin,
     )
 
 
@@ -473,6 +491,7 @@ def capture_answer(
     min_answer_chars: int = DEFAULT_MIN_ANSWER_CHARS,
     max_claims: int = DEFAULT_MAX_ANSWER_CLAIMS,
     config: CaptureConfig | None = None,
+    origin: Path | None = None,
 ) -> dict[str, Any]:
     """Turn a session's latest Q&A into durable, recallable knowledge.
 
@@ -489,6 +508,12 @@ def capture_answer(
     skipped, and answers shorter than ``min_answer_chars`` (acknowledgements)
     are ignored, so a Stop hook firing every turn does not fill the KB with
     noise or duplicates.
+
+    ``origin`` marks a personal-KB *fallback* capture: the session ran in a
+    folder with no project KB and ``store`` is the machine's personal
+    catch-all. The folder is recorded on the source
+    (``metadata.origin_path``, tag ``personal-fallback``) so `vouch adopt`
+    can later drain this knowledge into that folder's own KB.
     """
     import os
 
@@ -519,12 +544,17 @@ def capture_answer(
     except ArtifactNotFoundError:
         pass
 
+    tags = ["session-answer"]
+    metadata: dict[str, Any] = {"session_id": session_id, "question": question}
+    if origin is not None:
+        tags.append("personal-fallback")
+        metadata["origin_path"] = str(origin)
     source = store.put_source(
         content,
         title=question or f"session {session_id} answer",
         source_type="message",
-        tags=["session-answer"],
-        metadata={"session_id": session_id, "question": question},
+        tags=tags,
+        metadata=metadata,
         # same stamp the extracted claims get at the propose gate: captured
         # knowledge records its project at write time (unretrofittable later)
         scope=proposals_mod.default_scope(store),

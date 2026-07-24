@@ -1,5 +1,14 @@
 import { afterEach, expect, test, vi } from 'vitest'
-import { fetchCapabilities, fetchHealth, rpc, VouchHttpError, VouchRpcError } from './rpc'
+import {
+  DEFAULT_REVIEWER,
+  fetchCapabilities,
+  fetchHealth,
+  REVIEWER_KEY,
+  rpc,
+  setReviewerId,
+  VouchHttpError,
+  VouchRpcError,
+} from './rpc'
 import type { VouchConnectionInfo } from './types'
 
 const conn: VouchConnectionInfo = { endpoint: 'http://127.0.0.1:8731', token: 'tok' }
@@ -27,6 +36,45 @@ test('rpc posts the envelope to /proxy/rpc with target + bearer headers and unwr
   expect(sent.method).toBe('kb.status')
   expect(sent.params).toEqual({})
   expect(sent.id).toMatch(/^ui-\d+$/)
+})
+
+test('rpc sends x-vouch-agent defaulting to the console reviewer', async () => {
+  localStorage.removeItem(REVIEWER_KEY)
+  const fn = mockFetch(200, { id: 'x', ok: true, result: {} })
+  await rpc(conn, 'kb.status')
+  expect(fn.mock.calls[0][1].headers['x-vouch-agent']).toBe(DEFAULT_REVIEWER)
+})
+
+test('setReviewerId is trimmed and sent as x-vouch-agent on later calls', async () => {
+  setReviewerId('  alice  ')
+  const fn = mockFetch(200, { id: 'x', ok: true, result: {} })
+  await rpc(conn, 'kb.approve', { proposal_id: 'p1' })
+  expect(fn.mock.calls[0][1].headers['x-vouch-agent']).toBe('alice')
+  localStorage.removeItem(REVIEWER_KEY)
+})
+
+test('rpc unwraps the {items} envelope for kb.list_* results', async () => {
+  mockFetch(200, { id: 'x', ok: true, result: { items: [{ id: 'a' }, { id: 'b' }], _meta: { deprecation: {} } } })
+  const out = await rpc<{ id: string }[]>(conn, 'kb.list_pending')
+  expect(out).toEqual([{ id: 'a' }, { id: 'b' }])
+})
+
+test('rpc passes a bare-array kb.list_* result through unchanged (old server)', async () => {
+  mockFetch(200, { id: 'x', ok: true, result: [{ id: 'a' }] })
+  const out = await rpc<{ id: string }[]>(conn, 'kb.list_claims')
+  expect(out).toEqual([{ id: 'a' }])
+})
+
+test('rpc leaves kb.list_sessions {sessions} envelope untouched', async () => {
+  mockFetch(200, { id: 'x', ok: true, result: { sessions: [{ session_id: 's1' }] } })
+  const out = await rpc<{ sessions: { session_id: string }[] }>(conn, 'kb.list_sessions')
+  expect(out).toEqual({ sessions: [{ session_id: 's1' }] })
+})
+
+test('rpc does not unwrap items for non-list methods', async () => {
+  mockFetch(200, { id: 'x', ok: true, result: { items: [1, 2, 3] } })
+  const out = await rpc<{ items: number[] }>(conn, 'kb.synthesize')
+  expect(out).toEqual({ items: [1, 2, 3] })
 })
 
 test('rpc omits authorization header when no token', async () => {

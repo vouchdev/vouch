@@ -21,6 +21,32 @@ on its own; `--no-init` skips it), **and registers vouch in
 approval it never prompts for** (see step 2). The rest of this file is
 the manual equivalent.
 
+The machine-wide path — `vouch install-mcp claude-code --global` — wires
+vouch **once for every project**: hooks + `/vouch-*` commands under
+`~/.claude/`, plus a *user-scope* MCP server (top-level `mcpServers` in
+`~/.claude.json`; `vouch serve` starts even where no KB exists, so the
+server never shows as failed in non-vouch folders). Each session still
+uses the nearest project `.vouch/`, so knowledge stays per project; run
+`vouch init` once in any project you want vouch in. By default a folder
+with no KB never captures anywhere — its session-start banner says "run
+`vouch init` to enable durable memory here". This coexists safely with
+per-project installs: the settings template is byte-identical (Claude
+Code collapses duplicate hook commands) and capture additionally dedups
+on the event's `tool_use_id`.
+
+Optionally, the global install offers a **personal catch-all KB** (one
+question at install time, or `--personal-fallback`, or later
+`vouch hub init-personal --fallback`): with it enabled, KB-less folders
+capture into `~/.local/share/vouch/personal` instead of nowhere — the
+banner announces the routing every session and each captured source
+records the folder it came from. It is one store shared by all KB-less
+folders: recall in any of them reads the whole personal KB (the injected
+block says so), so use a project KB — `vouch init` — wherever knowledge
+should stay put. When a folder later becomes a real project, `vouch init` +
+`vouch adopt` drains its captures into the project KB through that KB's
+own review gate (receipts re-verify; the project's review config
+decides). `vouch hub fallback on|off|status` flips it any time.
+
 ## 2. Drop the MCP server into your project
 
 Add `.mcp.json` at the root of your project (the same directory that

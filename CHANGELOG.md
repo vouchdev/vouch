@@ -7,6 +7,115 @@ All notable changes to vouch are documented here. Format follows
 ## [Unreleased]
 
 ### Added
+- **an admission gate that filters knowledge-shaped garbage before it is
+  filed** (`admission:` config). every ingestion path funnels through
+  `proposals._file_proposal`, so a single provenance-keyed predicate there
+  raises the floor with no drift across surfaces. it is deterministic and
+  receipt-safe — it rejects verbatim payloads, never rewrites them, so
+  byte-offset receipts stay intact. a claim that is a markdown heading, a
+  colon lead-in, or a truncated code-span/bracket is refused, as is an
+  uncited `type: session`/`log` page (a session diary, not durable
+  knowledge). only the passive auto-capture actors (`vouch-capture`,
+  `session-split`, `codex`) are blocked; a deliberate author's write stays
+  advisory and reaches the review gate untouched. tunable via
+  `admission.{enabled, min_confidence, reject_uncited_session_pages}`.
+- **`vouch rejected`** — list rejected proposals (with `--admission` to show
+  only gate auto-rejections). auto-rejections are recorded
+  (`decided_by: vouch-admission`) and never deleted, so a false positive is
+  always recoverable.
+
+### Deprecated
+- the auto-captured session-page pipeline is now a no-op for auto-capture
+  actors: `capture.finalize`'s session summary, `session_split` renarrate,
+  `codex_rollout` reingest, and the SessionStart review banner all produced
+  uncited `type: session` pages, which the admission gate now auto-rejects.
+  removal of the dead machinery is a follow-up.
+
+### Changed
+- **the per-prompt hook now lets the model decide how much of a turn
+  vouch takes** (`retrieval.prompt_gate`). recall used to inject an
+  unconditional "open with From vouch memory:" block on *every* prompt,
+  so "fix the failing test" spent its reply opener announcing a memory
+  search nobody asked for. rather than have the hook guess the prompt's
+  intent with a verb list (which never covers the next phrasing), it now
+  hands the host model ONE conditional instruction and lets the model —
+  which already reads the prompt — choose per turn: a *question* the
+  items answer opens with "From vouch memory:" and quotes them; a *task*
+  (fix / build / change / run anything, known verb or not) uses them
+  silently as background, citing an id inline only where relied on, with
+  no banner; *irrelevant* items are ignored. on a miss the same judgment
+  applies — "Nothing in vouch on this." for a question, silence for a
+  task. chatter with no informative tokens ("ok thanks", "which one is
+  better?") injects nothing at all (retrieval ORs every query token, so
+  those matched noise on `one`). no per-turn model call and no latency —
+  the decision rides in the instruction text the model already
+  processes; it generalizes to any phrasing or language because it no
+  longer depends on recognizing the verb. compliance measured on real
+  `claude -p` across haiku / sonnet / opus (KB-backed block): coding
+  tasks are never wrongly announced. new KBs get it on; existing KBs
+  keep the unconditional block until they add the key.
+- **personal catch-all KB + `vouch adopt`** (global vouch, phase 3):
+  `vouch hub init-personal` creates and registers a personal KB at
+  `~/.local/share/vouch/personal` (`XDG_DATA_HOME` honoured;
+  `VOUCH_PERSONAL_KB` overrides). with its opt-in flag on
+  (`personal.fallback_capture` in the KB's own config — one question at
+  `install-mcp --global`, or `--personal-fallback`, or `vouch hub
+  fallback on`), sessions in folders WITHOUT a project KB capture into
+  it instead of nowhere: every captured source records the folder it
+  came from (`metadata.origin_path`), the session-start banner announces
+  the routing, and per-prompt recall in those folders reads the same KB
+  back. strictly double-opt-in (registry role `personal` + the KB's own
+  config flag) and fail-closed: no personal KB, no flag, a corrupt
+  registry, or a guard refusal (discovery landing on a personal KB from
+  below — the hijack shape) all mean capture stays off exactly as
+  before. `vouch adopt`, run inside a project that now has its own KB,
+  drains those captures home THROUGH the project's review gate: sources
+  copy byte-identically (content-addressed ids are stable across KBs),
+  each live personal claim is re-proposed against the copied source, its
+  byte-offset receipt re-verifies mechanically, and the project's own
+  review config decides durability — auto-approve on receipt where
+  enabled, pending for a human otherwise; adoption never bypasses
+  review. idempotent in both directions (a claim already durable *or*
+  already queued in the project is skipped, so re-running never doubles
+  the review queue); `--dry-run` previews against the project's real
+  gate; `--from-path` adopts a moved project's captures; `--retire`
+  archives only the personal copies that actually landed durable —
+  retiring a merely-pending one would strand it if the proposal is
+  later rejected or expires; session rollups are reported, not moved
+  (an unreviewed summary is not knowledge yet, so it stays where it was
+  filed); both KBs log a `kb.adopt` audit event carrying the other
+  side's id. the personal KB is ONE store shared by every KB-less
+  folder — recall there reads all of it, and the digest header, the
+  per-prompt block, the session banner, `vouch status` and the opt-in
+  question all say so rather than calling it "this repo's" knowledge.
+
+## [1.5.0] — 2026-07-20
+
+### Added
+- **`vouch install-mcp claude-code --global`** — install once for the
+  whole machine. writes user-level hooks, `/vouch-*` commands, and a
+  fenced CLAUDE.md snippet under `~/.claude/`, and registers vouch as a
+  *user-scope* MCP server (top-level `mcpServers` in `~/.claude.json`),
+  so every claude session in every folder gets capture + per-prompt
+  recall into that folder's **own** project `.vouch/` — the data stays
+  per project; run `vouch init` once per project. a folder without a KB
+  never captures anywhere: its session opens with a one-line "run
+  `vouch init`" note (the session-start banner), and `vouch serve` now
+  starts without a KB for the stdio transport (per-tool-call errors
+  instead of a machine-wide failed server in every non-vouch folder).
+  declared by a manifest `global:` block, so other hosts opt in as pure
+  manifest work; the user-level CLAUDE.md snippet is machine-wide-worded.
+  safe next to existing per-project installs, guarded three ways: the
+  global settings template is byte-for-byte the project one (claude code
+  collapses duplicate hook commands; a sync test freezes them), capture
+  dedups on the event's `tool_use_id` (exact, window-free — catches
+  drifted wiring too), and the hook commands (capture
+  observe/answer/finalize/finalize-all/banner, context-hook, recall,
+  ingest-codex) resolve the KB from the hook payload's `cwd` — with
+  `VOUCH_PROJECT_DIR` keeping precedence, and a payload naming a
+  nonexistent cwd refusing capture rather than falling back to the
+  process cwd. a malformed existing settings.json now reports as
+  *failed* (vouch is not wired) instead of "already present".
 - **KB instance identity**: `vouch init` mints a durable id (uuid, stored
   in `config.yaml` under `kb:` next to a display name) and stamps it onto
   every new audit event and bundle manifest, so history and exported

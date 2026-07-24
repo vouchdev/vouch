@@ -502,6 +502,15 @@ def _dedupe_near_duplicates(items: list[ContextItem]) -> list[ContextItem]:
     return [it for i, it in enumerate(items) if i not in dropped]
 
 
+def _origin_from_tags(tags: list[str]) -> str | None:
+    """The origin-KB label a gated import stamped on a claim (`origin:<kb>`), so a
+    federated result can name which KB vouched for it. None for local claims."""
+    for tag in tags:
+        if tag.startswith("origin:"):
+            return tag[len("origin:") :]
+    return None
+
+
 def build_context_pack(
     store: KBStore,
     *,
@@ -529,6 +538,7 @@ def build_context_pack(
     items: list[ContextItem] = []
     for kind, hid, summary, score, backend in hits:
         cites: list[str] = []
+        origin: str | None = None
         if kind == "claim":
             # Exclude retracted claims even if the underlying index still
             # matches them (the FTS5 row's status column can lag — see #78
@@ -542,12 +552,13 @@ def build_context_pack(
             if claim.status in _RETRACTED_CLAIM_STATUSES:
                 continue
             cites = list(claim.evidence)
+            origin = _origin_from_tags(claim.tags)
         summary = _enrich_summary(store, kind, hid, summary)
         items.append(
             ContextItem(
                 id=hid, type=cast(ContextItemKind, kind), summary=summary, score=score,
                 backend=backend, citations=cites,
-                freshness="unknown",
+                freshness="unknown", origin=origin,
             )
         )
 
@@ -623,6 +634,11 @@ def build_context_pack(
     }
     # Determine the backend used (all hits share the same backend in _retrieve).
     result["backend"] = hits[0][4] if hits else "none"
+    # Federated provenance: name every KB that vouched for a returned item, so a
+    # reader can see which knowledge came from elsewhere (roadmap step 10).
+    origins = sorted({it.origin for it in items if it.origin})
+    if origins:
+        result["origins"] = origins
     # Honesty block: say when a semantic-capable backend actually served
     # lexical-only results (embeddings extra absent / no embedder registered)
     # instead of letting "hybrid" imply semantic coverage that never happened.

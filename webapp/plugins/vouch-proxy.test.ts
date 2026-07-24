@@ -21,6 +21,7 @@ beforeAll(async () => {
           method: req.method,
           path: req.url,
           auth: req.headers.authorization ?? null,
+          agent: req.headers['x-vouch-agent'] ?? null,
           body,
         }),
       )
@@ -61,6 +62,21 @@ test('forwards POST body and Authorization to the target, rewriting /proxy prefi
   expect(echoed.path).toBe('/rpc')
   expect(echoed.auth).toBe('Bearer sekrit')
   expect(JSON.parse(echoed.body).method).toBe('kb.status')
+})
+
+test('forwards the X-Vouch-Agent reviewer identity to the target', async () => {
+  const res = await fetch(`${proxyUrl}/proxy/rpc`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-vouch-target': upstreamUrl,
+      'x-vouch-agent': 'alice',
+    },
+    body: JSON.stringify({ id: '1', method: 'kb.approve', params: {} }),
+  })
+  expect(res.status).toBe(200)
+  const echoed = await res.json()
+  expect(echoed.agent).toBe('alice')
 })
 
 test('forwards GET /proxy/health to target /health', async () => {

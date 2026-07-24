@@ -26,6 +26,8 @@ def _isolated_machine(tmp_path_factory, monkeypatch):
     monkeypatch.setenv(hub.REGISTRY_ENV, str(fake_home / "registry.yaml"))
     monkeypatch.delenv("VOUCH_KB_PATH", raising=False)
     monkeypatch.delenv("VOUCH_PROJECT_DIR", raising=False)
+    monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+    monkeypatch.delenv(hub.PERSONAL_KB_ENV, raising=False)
     return fake_home
 
 
@@ -43,6 +45,37 @@ def test_init_mints_identity(tmp_path: Path) -> None:
     assert cfg["kb"]["id"] == kb_id
     # the starter config must still be intact next to the identity
     assert cfg["review"]["auto_approve_on_receipt"] is True
+
+
+def test_concurrent_identity_minting_yields_one_id(tmp_path: Path) -> None:
+    """Two processes racing ensure_identity on a legacy KB must converge on
+    ONE id (flock-serialized read-mint-write) — a split mint would strand
+    every artifact stamped with the losing id."""
+    import concurrent.futures
+    import subprocess
+    import sys
+
+    store = KBStore.init(tmp_path)
+    cfg = yaml.safe_load(store.config_path.read_text(encoding="utf-8"))
+    del cfg["kb"]
+    store.config_path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+
+    code = (
+        "from pathlib import Path; from vouch.storage import KBStore; "
+        f"print(KBStore(Path({str(tmp_path)!r})).ensure_identity()[0])"
+    )
+
+    def _mint() -> str:
+        out = subprocess.run(
+            [sys.executable, "-c", code], capture_output=True, text=True, check=True
+        )
+        return out.stdout.strip()
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
+        ids = list(pool.map(lambda _i: _mint(), range(6)))
+    assert len(set(ids)) == 1, ids
+    assert store.identity() is not None
+    assert store.identity()[0] == ids[0]  # type: ignore[index]
 
 
 def test_ensure_identity_is_idempotent(tmp_path: Path) -> None:
@@ -552,3 +585,185 @@ def test_cli_capture_store_respects_guard(
     _parent, child = _personal_ancestor_setup(tmp_path)
     monkeypatch.chdir(child)
     assert _capture_store() is None
+
+
+# --- the personal catch-all KB + fallback capture (phase 3) ----------------
+
+
+def _personal_fallback_setup(fake_home: Path, *, enabled: bool = True) -> KBStore:
+    """A registered personal KB at the default XDG path, opted in (or not)."""
+    root = hub.personal_kb_root()
+    assert root is not None
+    store = KBStore.init(root)
+    hub.register_kb(root, role="personal", actor="t")
+    hub.set_personal_fallback(root, enabled)
+    return store
+
+
+def test_personal_kb_root_resolution(monkeypatch, _isolated_machine) -> None:
+    fake_home = _isolated_machine
+    assert hub.personal_kb_root() == (
+        fake_home / ".local" / "share" / "vouch" / "personal"
+    )
+    monkeypatch.setenv("XDG_DATA_HOME", str(fake_home / "xdg"))
+    assert hub.personal_kb_root() == fake_home / "xdg" / "vouch" / "personal"
+    monkeypatch.setenv(hub.PERSONAL_KB_ENV, str(fake_home / "elsewhere"))
+    assert hub.personal_kb_root() == fake_home / "elsewhere"
+
+
+def test_personal_fallback_flag_roundtrip(_isolated_machine) -> None:
+    store = _personal_fallback_setup(_isolated_machine, enabled=False)
+    root = store.root
+    assert hub.personal_fallback_enabled(root) is False
+    hub.set_personal_fallback(root, True)
+    assert hub.personal_fallback_enabled(root) is True
+    hub.set_personal_fallback(root, False)
+    assert hub.personal_fallback_enabled(root) is False
+    # the rest of the starter config survives the textual edits
+    cfg = yaml.safe_load(store.config_path.read_text(encoding="utf-8"))
+    assert cfg["review"]["auto_approve_on_receipt"] is True
+    assert cfg["kb"]["id"]
+
+
+def test_set_personal_fallback_preserves_comments(tmp_path: Path) -> None:
+    store = KBStore.init(tmp_path / "p")
+    marker = "# hand-written comment that must survive\n"
+    store.config_path.write_text(
+        marker + store.config_path.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    hub.set_personal_fallback(store.root, True)
+    text = store.config_path.read_text(encoding="utf-8")
+    assert marker in text
+    assert hub.personal_fallback_enabled(store.root) is True
+    # toggling an existing flag also preserves the comment
+    hub.set_personal_fallback(store.root, False)
+    assert marker in store.config_path.read_text(encoding="utf-8")
+    assert hub.personal_fallback_enabled(store.root) is False
+
+
+def test_set_personal_fallback_refuses_corrupt_config(tmp_path: Path) -> None:
+    store = KBStore.init(tmp_path / "p")
+    store.config_path.write_text("just a string\n", encoding="utf-8")
+    with pytest.raises(ValueError):
+        hub.set_personal_fallback(store.root, True)
+    assert store.config_path.read_text(encoding="utf-8") == "just a string\n"
+
+
+def test_personal_fallback_store_needs_both_belts(_isolated_machine) -> None:
+    # no personal KB registered at all
+    assert hub.personal_fallback_store() is None
+    store = _personal_fallback_setup(_isolated_machine, enabled=False)
+    # registered but not opted in
+    assert hub.personal_fallback_store() is None
+    hub.set_personal_fallback(store.root, True)
+    fb = hub.personal_fallback_store()
+    assert fb is not None and fb.root == store.root
+
+
+def test_capture_target_prefers_project_kb(tmp_path: Path, _isolated_machine) -> None:
+    _personal_fallback_setup(_isolated_machine)
+    proj = tmp_path / "proj"
+    KBStore.init(proj)
+    target = hub.capture_target(proj)
+    assert target.store is not None and target.store.root == proj
+    assert target.fallback is False and target.origin is None
+
+
+def test_capture_target_falls_back_when_opted_in(
+    tmp_path: Path, _isolated_machine
+) -> None:
+    personal = _personal_fallback_setup(_isolated_machine)
+    nowhere = tmp_path / "no-kb-here"
+    nowhere.mkdir()
+    target = hub.capture_target(nowhere)
+    assert target.store is not None and target.store.root == personal.root
+    assert target.fallback is True
+    assert target.origin == nowhere.resolve()
+    assert target.note is not None and "personal" in target.note
+
+
+def test_capture_target_stays_off_without_opt_in(
+    tmp_path: Path, _isolated_machine
+) -> None:
+    _personal_fallback_setup(_isolated_machine, enabled=False)
+    nowhere = tmp_path / "no-kb-here"
+    nowhere.mkdir()
+    target = hub.capture_target(nowhere)
+    assert target.store is None and target.fallback is False
+
+
+def test_capture_target_guard_never_falls_through_to_fallback(
+    tmp_path: Path, _isolated_machine
+) -> None:
+    """Discovery landing on a personal KB from below is the hijack shape —
+    it must stay a refusal even when that same KB has fallback enabled."""
+    parent, child = _personal_ancestor_setup(tmp_path)
+    hub.set_personal_fallback(parent, True)
+    target = hub.capture_target(child)
+    assert target.store is None
+    assert target.fallback is False
+    assert target.note is not None and "refusing ambient capture" in target.note
+
+
+def test_read_target_follows_capture_into_fallback(
+    tmp_path: Path, _isolated_machine
+) -> None:
+    personal = _personal_fallback_setup(_isolated_machine)
+    nowhere = tmp_path / "no-kb-here"
+    nowhere.mkdir()
+    store, warning, fallback = hub.read_target(nowhere)
+    assert store is not None and store.root == personal.root
+    assert fallback is True
+    assert warning is not None and "personal" in warning
+    # a project KB wins, with no warning
+    proj = tmp_path / "proj"
+    KBStore.init(proj)
+    store, warning, fallback = hub.read_target(proj)
+    assert store is not None and store.root == proj
+    assert warning is None and fallback is False
+    # no personal opt-in -> reads stay dark like today
+    hub.set_personal_fallback(personal.root, False)
+    store, warning, fallback = hub.read_target(nowhere)
+    assert store is None and fallback is False
+
+
+def test_cli_hub_init_personal_and_fallback_cmds(_isolated_machine) -> None:
+    from click.testing import CliRunner
+
+    from vouch.cli import cli
+
+    runner = CliRunner()
+    r = runner.invoke(cli, ["hub", "init-personal"])
+    assert r.exit_code == 0, r.output
+    root = hub.personal_kb_root()
+    assert root is not None and (root / ".vouch").is_dir()
+    # non-interactive default: opt-in stays OFF
+    assert hub.personal_fallback_enabled(root) is False
+    entry = hub.personal_entry()
+    assert entry is not None and entry.role == "personal"
+
+    r = runner.invoke(cli, ["hub", "fallback", "on"])
+    assert r.exit_code == 0, r.output
+    assert hub.personal_fallback_enabled(root) is True
+    r = runner.invoke(cli, ["hub", "fallback"])
+    assert r.exit_code == 0 and "on" in r.output
+
+    # idempotent re-init leaves the flag alone
+    r = runner.invoke(cli, ["hub", "init-personal"])
+    assert r.exit_code == 0, r.output
+    assert hub.personal_fallback_enabled(root) is True
+
+    # an explicit flag wins
+    r = runner.invoke(cli, ["hub", "init-personal", "--no-fallback"])
+    assert r.exit_code == 0, r.output
+    assert hub.personal_fallback_enabled(root) is False
+
+
+def test_cli_hub_fallback_without_personal_kb(_isolated_machine) -> None:
+    from click.testing import CliRunner
+
+    from vouch.cli import cli
+
+    r = CliRunner().invoke(cli, ["hub", "fallback", "on"])
+    assert r.exit_code != 0
+    assert "init-personal" in r.output

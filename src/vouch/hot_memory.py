@@ -164,6 +164,7 @@ HOT_MEMORY_EXCLUDED: dict[str, str] = {
     "kb.compile": "write path — review gate (files page proposals via wiki-compiler)",
     "kb.summarize_session": "write path — review gate (files session-summary page proposals)",
     "kb.clear_claims": "lifecycle — mutates durable state",
+    "kb.wipe_dead_refs": "lifecycle — mutates durable state",
     "kb.approve": "lifecycle — mutates durable state",
     "kb.reject": "lifecycle — mutates durable state",
     "kb.reject_extracted": "lifecycle — mutates durable state",

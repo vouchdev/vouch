@@ -110,6 +110,22 @@ class _FileEntry:
 
 
 @dataclass(frozen=True)
+class _GlobalSpec:
+    """A host's user-level (install-once) wiring, declared under ``global:``.
+
+    ``target`` is the host's user config directory relative to the user's
+    home (e.g. ``.claude``); ``tiers`` mirror the project tiers but with
+    dsts relative to that directory. The settings template MUST be the same
+    ``src`` file the project tier uses — byte-identical hook command strings
+    are what lets the host collapse user-level and legacy project-level
+    hooks into one execution instead of double-firing (enforced by
+    ``tests/test_install_adapter.py``).
+    """
+    target: str
+    tiers: dict[str, list[_FileEntry]]
+
+
+@dataclass(frozen=True)
 class _Manifest:
     host: str
     pretty: str
@@ -121,6 +137,7 @@ class _Manifest:
     # config (claude-desktop) rather than project wiring — a KB bootstrapped
     # at the target would land wherever the user happened to be standing.
     kb_bootstrap: bool = True
+    global_spec: _GlobalSpec | None = None
 
 
 def _load_manifest(host: str) -> _Manifest:
@@ -141,67 +158,7 @@ def _load_manifest(host: str) -> _Manifest:
             f"expected {host!r} (must match directory name)"
         )
     raw_tiers = data.get("tiers") or {}
-    if not isinstance(raw_tiers, dict):
-        raise AdapterError(f"{host}: install.yaml `tiers:` must be a mapping")
-
-    parsed: dict[str, list[_FileEntry]] = {}
-    for tier_name, entries in raw_tiers.items():
-        if tier_name not in _TIER_ORDER:
-            raise AdapterError(
-                f"{host}: install.yaml declares unknown tier {tier_name!r} "
-                f"(valid: {', '.join(_TIER_ORDER)})"
-            )
-        if not isinstance(entries, list):
-            raise AdapterError(
-                f"{host}: install.yaml tier {tier_name} must be a list of file entries"
-            )
-        parsed_entries: list[_FileEntry] = []
-        for raw in entries:
-            if not isinstance(raw, dict):
-                raise AdapterError(
-                    f"{host}: install.yaml tier {tier_name} entry must be a mapping, "
-                    f"got {type(raw).__name__}"
-                )
-            src = raw.get("src")
-            dst = raw.get("dst")
-            if not isinstance(src, str) or not src.strip():
-                raise AdapterError(
-                    f"{host}: install.yaml tier {tier_name}: every entry needs a non-empty `src`"
-                )
-            if not isinstance(dst, str) or not dst.strip():
-                raise AdapterError(
-                    f"{host}: install.yaml tier {tier_name}: every entry needs a non-empty `dst`"
-                )
-            def _flag(name: str, raw: Any = raw, tier_name: str = tier_name) -> bool:
-                # Require an actual YAML boolean. `bool(raw.get(...))` would
-                # coerce a mistakenly-quoted `toml_merge: "false"` (a
-                # non-empty string) to True and silently enable a merge
-                # strategy, so reject anything that isn't a real bool.
-                val = raw.get(name, False)
-                if not isinstance(val, bool):
-                    raise AdapterError(
-                        f"{host}: install.yaml tier {tier_name}: `{name}` must be "
-                        f"a boolean, got {type(val).__name__} ({val!r})"
-                    )
-                return val
-
-            fenced = _flag("fenced_append")
-            json_merge = _flag("json_merge")
-            toml_merge = _flag("toml_merge")
-            if fenced + json_merge + toml_merge > 1:
-                raise AdapterError(
-                    f"{host}: install.yaml tier {tier_name}: entry sets more than "
-                    f"one of fenced_append/json_merge/toml_merge; pick one strategy"
-                )
-            parsed_entries.append(
-                _FileEntry(
-                    src=src, dst=dst, fenced_append=fenced,
-                    json_merge=json_merge, toml_merge=toml_merge,
-                )
-            )
-        if parsed_entries:
-            parsed[tier_name] = parsed_entries
-
+    parsed = _parse_tiers(host, raw_tiers, label="tiers")
     if not parsed:
         raise AdapterError(f"{host}: install.yaml declares zero usable tiers")
 
@@ -228,7 +185,106 @@ def _load_manifest(host: str) -> _Manifest:
         fence_end=fence_end,
         user_mcp=_parse_user_mcp(host, data.get("user_mcp")),
         kb_bootstrap=kb_bootstrap,
+        global_spec=_parse_global(host, data.get("global")),
     )
+
+
+def _parse_tiers(
+    host: str, raw_tiers: Any, *, label: str, ctx: str = ""
+) -> dict[str, list[_FileEntry]]:
+    """Parse a ``tiers:``-shaped mapping (shared by project and global specs).
+
+    ``ctx`` prefixes per-tier error messages ("" for the project tiers so
+    long-standing error strings stay byte-identical; "global." for the
+    global spec).
+    """
+    if not isinstance(raw_tiers, dict):
+        raise AdapterError(f"{host}: install.yaml `{label}:` must be a mapping")
+    parsed: dict[str, list[_FileEntry]] = {}
+    for tier_name, entries in raw_tiers.items():
+        if tier_name not in _TIER_ORDER:
+            raise AdapterError(
+                f"{host}: install.yaml {ctx}declares unknown tier {tier_name!r} "
+                f"(valid: {', '.join(_TIER_ORDER)})"
+            )
+        if not isinstance(entries, list):
+            raise AdapterError(
+                f"{host}: install.yaml {ctx}tier {tier_name} must be a list of file entries"
+            )
+        parsed_entries: list[_FileEntry] = []
+        for raw in entries:
+            if not isinstance(raw, dict):
+                raise AdapterError(
+                    f"{host}: install.yaml {ctx}tier {tier_name} entry must be a mapping, "
+                    f"got {type(raw).__name__}"
+                )
+            src = raw.get("src")
+            dst = raw.get("dst")
+            if not isinstance(src, str) or not src.strip():
+                raise AdapterError(
+                    f"{host}: install.yaml {ctx}tier {tier_name}: "
+                    "every entry needs a non-empty `src`"
+                )
+            if not isinstance(dst, str) or not dst.strip():
+                raise AdapterError(
+                    f"{host}: install.yaml {ctx}tier {tier_name}: "
+                    "every entry needs a non-empty `dst`"
+                )
+
+            def _flag(name: str, raw: Any = raw, tier_name: str = tier_name) -> bool:
+                # Require an actual YAML boolean. `bool(raw.get(...))` would
+                # coerce a mistakenly-quoted `toml_merge: "false"` (a
+                # non-empty string) to True and silently enable a merge
+                # strategy, so reject anything that isn't a real bool.
+                val = raw.get(name, False)
+                if not isinstance(val, bool):
+                    raise AdapterError(
+                        f"{host}: install.yaml {ctx}tier {tier_name}: `{name}` must be "
+                        f"a boolean, got {type(val).__name__} ({val!r})"
+                    )
+                return val
+
+            fenced = _flag("fenced_append")
+            json_merge = _flag("json_merge")
+            toml_merge = _flag("toml_merge")
+            if fenced + json_merge + toml_merge > 1:
+                raise AdapterError(
+                    f"{host}: install.yaml {ctx}tier {tier_name}: entry sets more than "
+                    f"one of fenced_append/json_merge/toml_merge; pick one strategy"
+                )
+            parsed_entries.append(
+                _FileEntry(
+                    src=src, dst=dst, fenced_append=fenced,
+                    json_merge=json_merge, toml_merge=toml_merge,
+                )
+            )
+        if parsed_entries:
+            parsed[tier_name] = parsed_entries
+    return parsed
+
+
+def _parse_global(host: str, raw: Any) -> _GlobalSpec | None:
+    """Parse an optional ``global:`` manifest block, or return None."""
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise AdapterError(f"{host}: install.yaml `global:` must be a mapping")
+    target = raw.get("target")
+    if not isinstance(target, str) or not target.strip():
+        raise AdapterError(f"{host}: install.yaml global needs a non-empty `target`")
+    # `target` is a directory under the user's home; an absolute or
+    # `..`-carrying value would let a manifest write anywhere on disk, and
+    # '.' (empty parts) would spray tier files across $HOME itself.
+    p = Path(target)
+    if p.is_absolute() or ".." in p.parts or not p.parts or p.parts == (".",):
+        raise AdapterError(
+            f"{host}: install.yaml global `target` must be a relative "
+            f"subdirectory of the home directory, got {target!r}"
+        )
+    tiers = _parse_tiers(host, raw.get("tiers") or {}, label="global.tiers", ctx="global.")
+    if not tiers:
+        raise AdapterError(f"{host}: install.yaml global declares zero usable tiers")
+    return _GlobalSpec(target=target, tiers=tiers)
 
 
 def _parse_user_mcp(host: str, raw: Any) -> _UserMcp | None:
@@ -320,23 +376,122 @@ def install(
     target.mkdir(parents=True, exist_ok=True)
 
     result = InstallResult()
-    selected_tiers = _TIER_ORDER[: _TIER_ORDER.index(tier) + 1]
+    _install_tier_files(
+        adapter, manifest, tiers=manifest.tiers, tier=tier,
+        src_root=src_root, target=target, result=result,
+    )
 
+    if approve and manifest.user_mcp is not None:
+        _register_user_mcp(manifest.user_mcp, target=target, home=home, result=result)
+
+    return result
+
+
+def install_global(
+    adapter: str,
+    *,
+    tier: str = "T4",
+    approve: bool = True,
+    home: Path | None = None,
+) -> tuple[InstallResult, Path]:
+    """Install ``adapter``'s user-level (machine-wide) wiring once.
+
+    Writes the manifest's ``global:`` tiers under ``<home>/<target>`` (for
+    claude-code: hooks + commands + a fenced CLAUDE.md snippet into
+    ``~/.claude/``) and registers the MCP server at **user scope** — the
+    top-level ``mcpServers`` in ``~/.claude.json`` — so every project's
+    session gets capture + recall without per-project wiring. Each session
+    still resolves its OWN project KB (nearest ``.vouch``); a folder without
+    one no-ops with a `vouch init` hint. Returns (result, target_dir).
+
+    Idempotent like :func:`install`; safe next to legacy per-project
+    installs — the settings template is byte-identical to the project one
+    (the host collapses duplicate hook commands) and capture dedups on
+    event identity besides.
+    """
+    if tier not in _TIER_ORDER:
+        raise AdapterError(
+            f"unknown tier {tier!r} (valid: {', '.join(_TIER_ORDER)})"
+        )
+    if adapter not in available_adapters():
+        raise AdapterError(
+            f"unknown adapter {adapter!r} "
+            f"(available: {', '.join(available_adapters()) or '(none)'})"
+        )
+    manifest = _load_manifest(adapter)
+    if manifest.global_spec is None:
+        raise AdapterError(
+            f"adapter {adapter!r} has no `global:` wiring — install it "
+            f"per-project instead (vouch install-mcp {adapter})"
+        )
+    src_root = ADAPTERS_DIR / adapter
+    home_dir = (home or Path.home()).resolve()
+    # Containment is guaranteed lexically by _parse_global (relative,
+    # `..`-free, non-empty). Deliberately NOT resolved: a symlinked
+    # ~/.claude (dotfiles managers) must be written *through*, not
+    # rejected for resolving outside home.
+    target = home_dir / manifest.global_spec.target
+    if target.exists() and not target.is_dir():
+        raise AdapterError(
+            f"{target} exists but is not a directory — remove or rename it "
+            "and re-run"
+        )
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+    except (FileExistsError, NotADirectoryError) as e:
+        raise AdapterError(
+            f"cannot create {target}: {e} — a file is in the way"
+        ) from e
+
+    result = InstallResult()
+    _install_tier_files(
+        adapter, manifest, tiers=manifest.global_spec.tiers, tier=tier,
+        src_root=src_root, target=target, result=result,
+    )
+
+    if approve and manifest.user_mcp is not None:
+        # User scope regardless of the manifest's project-install scope: one
+        # top-level entry serves every project (the server re-resolves the KB
+        # per call from its launch cwd).
+        user_scoped = _UserMcp(
+            config=manifest.user_mcp.config, scope="user",
+            name=manifest.user_mcp.name, spec=manifest.user_mcp.spec,
+        )
+        _register_user_mcp(user_scoped, target=target, home=home, result=result)
+
+    return result, target
+
+
+def _install_tier_files(
+    adapter: str,
+    manifest: _Manifest,
+    *,
+    tiers: dict[str, list[_FileEntry]],
+    tier: str,
+    src_root: Path,
+    target: Path,
+    result: InstallResult,
+) -> None:
+    """Write every entry of ``tiers`` up to ``tier`` under ``target``."""
+    selected_tiers = _TIER_ORDER[: _TIER_ORDER.index(tier) + 1]
     for tier_name in selected_tiers:
-        entries = manifest.tiers.get(tier_name, [])
+        entries = tiers.get(tier_name, [])
         for entry in entries:
             src = src_root / entry.src
-            dst = target / entry.dst
             # Defense in depth: `dst` comes from the manifest. Adapters ship
             # with vouch (trusted), but a `..`/absolute `dst` must never let a
-            # manifest write outside the target tree. `target` is already
-            # resolved above; resolve `dst` (normalizes `..`, even when the
-            # file doesn't exist yet) and require containment.
-            if not dst.resolve().is_relative_to(target):
+            # manifest write outside the target tree. The check is LEXICAL
+            # (path shape, no filesystem access): a resolve()-based check
+            # would follow the user's own symlinks — e.g. a dotfiles-managed
+            # ~/.claude/CLAUDE.md pointing outside home — and wrongly abort
+            # an install the user very much intends to write through.
+            rel = Path(entry.dst)
+            if rel.is_absolute() or ".." in rel.parts:
                 raise AdapterError(
                     f"{adapter}: install.yaml dst {entry.dst!r} escapes the "
                     f"target tree ({target})"
                 )
+            dst = target / entry.dst
             if not src.is_file():
                 # Manifest declares a template that doesn't exist in the
                 # adapter directory: a contributor-time bug, but surface it
@@ -366,11 +521,6 @@ def install(
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, dst)
             result.written.append(entry.dst)
-
-    if approve and manifest.user_mcp is not None:
-        _register_user_mcp(manifest.user_mcp, target=target, home=home, result=result)
-
-    return result
 
 
 def _register_user_mcp(
@@ -622,7 +772,10 @@ def _install_json_merge(
     * dst missing                 -> copy fresh (``written``)
     * dst exists, merge adds keys -> merge + rewrite (``merged``)
     * dst exists, nothing to add  -> skip (``skipped``); already installed
-    * dst exists, unparseable     -> skip (``skipped``); never clobber the user
+    * dst exists, unparseable     -> ``failed``; the user's file is left
+                                     untouched, but vouch is NOT wired —
+                                     reporting it as "already present" would
+                                     hide a silently dead install
     """
     if not dst.exists():
         dst.parent.mkdir(parents=True, exist_ok=True)
@@ -635,10 +788,10 @@ def _install_json_merge(
         src_data = json.loads(src.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         # Malformed or unreadable user file — leave it untouched.
-        result.skipped.append(rel_dst)
+        result.failed.append(rel_dst)
         return
     if not isinstance(dst_data, dict) or not isinstance(src_data, dict):
-        result.skipped.append(rel_dst)
+        result.failed.append(rel_dst)
         return
 
     if _merge_settings(src_data, dst_data):

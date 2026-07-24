@@ -489,3 +489,191 @@ def test_same_batch_duplicate_slug_drops_second(
     assert len(report.proposed) == 1
     assert len(report.dropped) == 1
     assert "already exists or is pending review" in report.dropped[0]["reason"]
+
+
+# --- phase 1: structured pages + rich frontmatter + citation-density ----------
+
+
+def test_draft_summary_and_aliases_land_in_page_metadata(
+    store: KBStore, tmp_path: Path,
+) -> None:
+    c1 = _approved_claim(store, "the retry limit is three attempts before failing")
+    cmd = _stub_llm(tmp_path, [
+        {
+            "title": "Billing Retries",
+            "type": "concept",
+            "summary": "retries cap at three before the operation fails",
+            "aliases": ["retry policy", "billing retry cap"],
+            "body": f"The retry limit is three attempts before failing [claim: {c1}].",
+            "claims": [c1],
+        },
+    ])
+    report = compile_kb(store, config=_cfg(cmd))
+    assert len(report.proposed) == 1
+    page = approve(store, report.proposed[0]["proposal_id"], approved_by="human-B")
+    stored = store.get_page(page.id)
+    assert stored.metadata.get("summary") == "retries cap at three before the operation fails"
+    assert stored.metadata.get("aliases") == ["retry policy", "billing retry cap"]
+
+
+def test_draft_tags_merge_into_page_tags(store: KBStore, tmp_path: Path) -> None:
+    c1 = _approved_claim(store, "staging runs postgres sixteen in the primary region")
+    cmd = _stub_llm(tmp_path, [
+        {
+            "title": "Staging Database",
+            "type": "concept",
+            "tags": ["staging", "postgres"],
+            "body": f"Staging runs postgres sixteen in the primary region [claim: {c1}].",
+            "claims": [c1],
+        },
+    ])
+    report = compile_kb(store, config=_cfg(cmd))
+    page = approve(store, report.proposed[0]["proposal_id"], approved_by="human-B")
+    tags = set(store.get_page(page.id).tags)
+    assert {"wiki", "compiled", "staging", "postgres"} <= tags
+
+
+def test_low_citation_coverage_draft_drops(store: KBStore, tmp_path: Path) -> None:
+    """A structured draft whose substantive sentences are mostly uncited is
+    embellishment — drop it rather than ship invented prose behind one cite."""
+    c1 = _approved_claim(store, "the retry limit is three")
+    body = (
+        f"The retry limit is three attempts before the operation fails hard [claim: {c1}].\n"
+        "It also reconfigures the load balancer and drains connections gracefully.\n"
+        "The staging database is migrated to a new major version automatically.\n"
+        "Rollback happens through a separate out of band tooling path entirely."
+    )
+    cmd = _stub_llm(tmp_path, [
+        {"title": "Retry Behaviour", "type": "concept", "body": body, "claims": [c1]},
+    ])
+    report = compile_kb(store, config=_cfg(cmd))
+    assert report.proposed == []
+    assert "citation coverage" in report.dropped[0]["reason"]
+
+
+def test_well_cited_structured_draft_survives(store: KBStore, tmp_path: Path) -> None:
+    c1 = _approved_claim(store, "the retry limit is three")
+    c2 = _approved_claim(store, "capping retries prevents backoff storms")
+    body = (
+        "## What\n"
+        f"The retry limit is three attempts before the operation fails hard [claim: {c1}].\n"
+        "## Why\n"
+        f"Capping retries prevents unbounded backoff storms in staging [claim: {c2}]."
+    )
+    cmd = _stub_llm(tmp_path, [
+        {"title": "Retry Behaviour", "type": "concept", "body": body,
+         "claims": [c1, c2]},
+    ])
+    report = compile_kb(store, config=_cfg(cmd))
+    assert [r["title"] for r in report.proposed] == ["Retry Behaviour"]
+
+
+def test_build_prompt_requests_sections_summary_and_aliases(store: KBStore) -> None:
+    _approved_claim(store, "a fact to compile into a page")
+    prompt = compile_mod.build_prompt(store, max_pages=3)
+    low = prompt.lower()
+    assert "summary" in low
+    assert "aliases" in low
+    assert "section" in low or "##" in prompt
+
+
+def test_wikilink_to_existing_page_alias_resolves(
+    store: KBStore, tmp_path: Path,
+) -> None:
+    """A [[link]] that targets an existing page's alias must resolve, not drop:
+    the resolver knows title, slug, and alias."""
+    c1 = _approved_claim(store, "a durable fact about the anchor topic here")
+    pr = compile_kb(store, config=_cfg(_stub_llm(tmp_path, [
+        {
+            "title": "Anchor Topic",
+            "type": "concept",
+            "aliases": ["the anchor"],
+            "summary": "the anchor topic",
+            "body": f"The anchor topic is durable and well understood here [claim: {c1}].",
+            "claims": [c1],
+        },
+    ])))
+    approve(store, pr.proposed[0]["proposal_id"], approved_by="human-B")
+
+    report = compile_kb(store, config=_cfg(_stub_llm(tmp_path, [
+        {
+            "title": "Follower Topic",
+            "type": "concept",
+            "body": f"This follower builds directly on [[the anchor]] as its base [claim: {c1}].",
+            "claims": [c1],
+        },
+    ])))
+    assert [r["title"] for r in report.proposed] == ["Follower Topic"]
+
+
+# --- phase 3: two-phase concept extraction ------------------------------------
+
+
+def _phased_stub(tmp_path: Path, topics: list, drafts: list) -> str:
+    """A prompt-aware llm_cmd: returns the topic list when the prompt asks for
+    'topic titles', otherwise the page drafts. Lets one stub serve both legs
+    of a two-phase compile."""
+    tj = tmp_path / "topics.json"
+    tj.write_text(json.dumps(topics), encoding="utf-8")
+    dj = tmp_path / "drafts.json"
+    dj.write_text(json.dumps(drafts), encoding="utf-8")
+    script = tmp_path / "phased_stub.py"
+    script.write_text(
+        "import sys, pathlib\n"
+        "p = sys.stdin.read().lower()\n"
+        f"tj = pathlib.Path(r'{tj}'); dj = pathlib.Path(r'{dj}')\n"
+        "sys.stdout.write(tj.read_text() if 'topic titles' in p "
+        "else dj.read_text())\n",
+        encoding="utf-8",
+    )
+    return f"python3 {script}"
+
+
+def test_two_phase_config_flag_parsed(store: KBStore) -> None:
+    store.config_path.write_text(
+        store.config_path.read_text(encoding="utf-8")
+        + "\ncompile:\n  llm_cmd: \"cat /dev/null\"\n  two_phase: true\n",
+        encoding="utf-8",
+    )
+    cfg = compile_mod.load_config(store)
+    assert cfg.two_phase is True
+
+
+def test_parse_topics_reads_strings_and_objects() -> None:
+    assert compile_mod.parse_topics('["Alpha", "Beta"]') == ["Alpha", "Beta"]
+    assert compile_mod.parse_topics('[{"title": "Gamma"}]') == ["Gamma"]
+
+
+def test_build_topic_prompt_asks_for_topic_titles(store: KBStore) -> None:
+    _approved_claim(store, "a fact to group into durable topics")
+    prompt = compile_mod.build_topic_prompt(store, max_pages=5)
+    assert "topic" in prompt.lower()
+    assert "topic titles" in prompt.lower()
+
+
+def test_build_prompt_includes_planned_topics(store: KBStore) -> None:
+    _approved_claim(store, "a fact to compile")
+    prompt = compile_mod.build_prompt(
+        store, max_pages=3, planned_topics=["Retry Policy", "Ship Flow"],
+    )
+    assert "Retry Policy" in prompt
+    assert "Ship Flow" in prompt
+
+
+def test_two_phase_compile_drafts_planned_pages(
+    store: KBStore, tmp_path: Path,
+) -> None:
+    c1 = _approved_claim(store, "the retry limit is three attempts before failing")
+    topics = ["Retry Policy"]
+    drafts = [
+        {
+            "title": "Retry Policy",
+            "type": "concept",
+            "summary": "retries cap at three",
+            "body": f"The retry limit is three attempts before failing hard [claim: {c1}].",
+            "claims": [c1],
+        },
+    ]
+    cmd = _phased_stub(tmp_path, topics, drafts)
+    report = compile_kb(store, config=_cfg(cmd, two_phase=True))
+    assert [r["title"] for r in report.proposed] == ["Retry Policy"]

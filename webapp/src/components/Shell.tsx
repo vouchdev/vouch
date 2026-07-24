@@ -4,6 +4,7 @@ import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { ConnectDialog } from '../connection/ConnectDialog'
 import { ALL_SCOPE, useConnection } from '../connection/ConnectionContext'
 import { useFanout } from '../lib/fanout'
+import { reviewerId, setReviewerId } from '../lib/rpc'
 import type { Proposal, SessionEntry } from '../lib/types'
 
 const THEME_KEY = 'vouch-ui.theme'
@@ -33,6 +34,7 @@ export function Shell() {
   const location = useLocation()
   const [theme, setTheme] = useState(() => localStorage.getItem(THEME_KEY) ?? 'dark')
   const [manageOpen, setManageOpen] = useState(false)
+  const [reviewer, setReviewer] = useState(reviewerId)
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme
@@ -127,6 +129,17 @@ export function Shell() {
                 ))}
               </select>
             )}
+            <input
+              aria-label="reviewer identity"
+              value={reviewer}
+              onChange={(e) => {
+                setReviewer(e.target.value)
+                setReviewerId(e.target.value)
+              }}
+              placeholder="reviewer"
+              title="Approvals and proposals from this console are attributed to this name (empty falls back to 'console')"
+              className="w-28 rounded-lg border border-rule bg-paper-2 px-2 py-1.5 text-xs text-ink-2 outline-none focus:border-accent"
+            />
             <button
               onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
               title="Toggle theme"

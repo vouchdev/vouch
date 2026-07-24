@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import re
 import tempfile
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -36,6 +37,7 @@ from .models import utcnow_iso
 from .storage import KB_DIRNAME, KBNotFoundError, KBStore, discover_root
 
 REGISTRY_ENV = "VOUCH_REGISTRY_PATH"
+PERSONAL_KB_ENV = "VOUCH_PERSONAL_KB"
 REGISTRY_VERSION = 1
 ROLES = ("project", "personal", "team")
 
@@ -313,6 +315,236 @@ def resolve_for_capture(start: Path | None = None) -> KBStore | None:
     if res.root is None or res.guard is not None:
         return None
     return KBStore(res.root)
+
+
+# --- the personal catch-all KB (phase 3) ----------------------------------
+
+
+def personal_kb_root() -> Path | None:
+    """Default home of the personal catch-all KB. Never auto-created.
+
+    ``VOUCH_PERSONAL_KB`` > ``$XDG_DATA_HOME/vouch/personal`` >
+    ``~/.local/share/vouch/personal``. Data path, not config path: the
+    personal KB is content (claims, sources, an audit log), the registry
+    row pointing at it is config. None when no home can be determined
+    (containers) — everything personal degrades to off.
+    """
+    forced = os.environ.get(PERSONAL_KB_ENV)
+    if forced:
+        return Path(forced).expanduser()
+    xdg = os.environ.get("XDG_DATA_HOME")
+    if xdg:
+        return Path(xdg) / "vouch" / "personal"
+    try:
+        home = Path.home()
+    except RuntimeError:
+        return None
+    return home / ".local" / "share" / "vouch" / "personal"
+
+
+def personal_entries(*, path: Path | None = None) -> list[RegistryEntry]:
+    """Every personal-role row, live ones (a real ``.vouch/`` on disk) first.
+
+    More than one row can exist — a personal KB moved, or a second one
+    registered under ``VOUCH_PERSONAL_KB``. Ordering is what makes the
+    ambiguity harmless rather than silent: a stale row left behind by a
+    deleted KB must never shadow the live one and switch fallback off.
+    """
+    rows = [e for e in load_registry(path) if e.role == "personal"]
+    live = [e for e in rows if (Path(e.path).expanduser() / KB_DIRNAME).is_dir()]
+    dead = [e for e in rows if e not in live]
+    # Among live rows the most recently registered wins — "the one I just set
+    # up" is the least surprising answer.
+    live.sort(key=lambda e: e.added_at, reverse=True)
+    return live + dead
+
+
+def personal_entry(*, path: Path | None = None) -> RegistryEntry | None:
+    """The registry's personal-role row, or None. See ``personal_entries``."""
+    rows = personal_entries(path=path)
+    return rows[0] if rows else None
+
+
+def personal_fallback_enabled(root: Path) -> bool:
+    """The personal KB's own opt-in: config ``personal.fallback_capture``.
+
+    Authority lives in the KB's own config, not the registry — the registry
+    only says "a personal KB exists here"; whether KB-less folders may
+    capture into it is that KB's own setting. Defensive read: a missing or
+    corrupt config means off.
+    """
+    cfg = root / KB_DIRNAME / "config.yaml"
+    try:
+        loaded = yaml.safe_load(cfg.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        return False
+    if not isinstance(loaded, dict):
+        return False
+    personal = loaded.get("personal")
+    return isinstance(personal, dict) and personal.get("fallback_capture") is True
+
+
+def set_personal_fallback(root: Path, enabled: bool) -> None:
+    """Flip ``personal.fallback_capture`` in the KB's config.
+
+    Textual edits where possible (mirroring ``KBStore._mint_identity``) so
+    hand-written comments survive; a config that is not a yaml mapping is
+    refused untouched. Serialized on the KB's own cross-process lock — the
+    same one identity minting uses — because this is a read-modify-write of
+    the file that also carries `kb:` and `review:`, and a concurrent minter
+    or flag-flipper would otherwise write back a stale copy of the whole
+    config.
+    """
+    with audit_mod._audit_lock(root / KB_DIRNAME):
+        _set_personal_fallback_locked(root, enabled)
+
+
+def _set_personal_fallback_locked(root: Path, enabled: bool) -> None:
+    cfg_path = root / KB_DIRNAME / "config.yaml"
+    text = cfg_path.read_text(encoding="utf-8")
+    try:
+        loaded = yaml.safe_load(text)
+    except yaml.YAMLError as e:
+        raise ValueError(f"{cfg_path} is not valid yaml — fix it by hand") from e
+    if loaded is None:
+        loaded = {}
+    if not isinstance(loaded, dict):
+        raise ValueError(f"{cfg_path} must be a yaml mapping")
+    value = "true" if enabled else "false"
+    personal = loaded.get("personal")
+    if "personal" not in loaded:
+        # No block yet: append one, preserving the rest of the file
+        # byte-for-byte.
+        block = (
+            "\n# machine-personal catch-all settings (vouch hub init-personal)\n"
+            f"personal:\n  fallback_capture: {value}\n"
+        )
+        cfg_path.write_text(text.rstrip("\n") + "\n" + block, encoding="utf-8")
+        return
+    if isinstance(personal, dict) and "fallback_capture" in personal:
+        new_text, n = re.subn(
+            r"(?m)^(\s*fallback_capture:\s*).*$",
+            rf"\g<1>{value}",
+            text,
+            count=1,
+        )
+        if n == 1:
+            cfg_path.write_text(new_text, encoding="utf-8")
+            return
+    elif isinstance(personal, dict):
+        new_text, n = re.subn(
+            r"(?m)^personal:[ \t]*$",
+            f"personal:\n  fallback_capture: {value}",
+            text,
+            count=1,
+        )
+        if n == 1:
+            cfg_path.write_text(new_text, encoding="utf-8")
+            return
+    # A non-mapping `personal:` stray, or inline/flow style the regexes
+    # can't see — structural rewrite.
+    loaded["personal"] = (
+        {**personal, "fallback_capture": enabled}
+        if isinstance(personal, dict)
+        else {"fallback_capture": enabled}
+    )
+    cfg_path.write_text(
+        yaml.safe_dump(loaded, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+
+
+def personal_fallback_store(*, path: Path | None = None) -> KBStore | None:
+    """The opted-in personal KB, or None.
+
+    Both belts must agree: the registry names a personal-role KB AND that
+    KB's own config carries ``personal.fallback_capture: true``. Anything
+    missing or corrupt along the way degrades to None — fallback capture
+    fails off, never open.
+    """
+    entry = personal_entry(path=path)
+    if entry is None:
+        return None
+    root = Path(entry.path)
+    if not (root / KB_DIRNAME).is_dir():
+        return None
+    if not personal_fallback_enabled(root):
+        return None
+    return KBStore(root)
+
+
+@dataclass(frozen=True)
+class CaptureTarget:
+    """Where a session's capture goes, and why."""
+
+    store: KBStore | None
+    # True => writing to the personal catch-all, not a project KB.
+    fallback: bool = False
+    # The KB-less folder the session ran in — stamped onto fallback captures
+    # so `vouch adopt` can drain them into that folder's KB later.
+    origin: Path | None = None
+    # Guard/refusal or routing text for the caller's stderr.
+    note: str | None = None
+
+
+def _capture_origin(start: Path | None) -> Path:
+    """The folder a fallback capture is *about* (mirrors resolve()'s start)."""
+    origin = start
+    if origin is None and os.environ.get("VOUCH_PROJECT_DIR"):
+        candidate = Path(os.environ["VOUCH_PROJECT_DIR"])
+        if candidate.is_dir():
+            origin = candidate
+    if origin is None:
+        origin = Path.cwd()
+    return origin.resolve()
+
+
+def capture_target(start: Path | None = None) -> CaptureTarget:
+    """Write-plane resolution with the personal-KB fallback.
+
+    Project KB first, exactly as before. When no KB is discoverable AND an
+    opted-in personal KB is registered, capture routes there — deliberately,
+    via the registry plus the KB's own config flag, never via ambient
+    discovery — with the origin folder recorded for `vouch adopt`. A
+    personal-role guard refusal stays a refusal: the guard fires when
+    discovery lands on a personal KB from below (the hijack shape), which is
+    not the fallback shape.
+    """
+    res = resolve(start)
+    if res.root is not None and res.guard is None:
+        return CaptureTarget(store=KBStore(res.root))
+    if res.guard is not None:
+        return CaptureTarget(store=None, note=res.guard)
+    fb = personal_fallback_store()
+    if fb is None:
+        return CaptureTarget(store=None)
+    origin = _capture_origin(start)
+    return CaptureTarget(
+        store=fb,
+        fallback=True,
+        origin=origin,
+        note=(
+            f"no project KB at {origin} — capturing to the personal KB at "
+            f"{fb.root} (adopt later with `vouch init` + `vouch adopt`)"
+        ),
+    )
+
+
+def read_target(start: Path | None = None) -> tuple[KBStore | None, str | None, bool]:
+    """(store, warning, fallback) for read surfaces.
+
+    The read-plane twin of ``capture_target``, so recall follows capture: a
+    session whose knowledge lands in the personal KB must be able to read it
+    back from the same folder. The fallback is reported via the warning
+    channel — reads reroute loudly, never silently.
+    """
+    store, warning = resolve_for_read(start)
+    if store is not None:
+        return store, warning, False
+    fb = personal_fallback_store()
+    if fb is None:
+        return None, warning, False
+    return fb, f"no project KB here — reading the personal KB at {fb.root}", True
 
 
 def resolve_for_read(start: Path | None = None) -> tuple[KBStore | None, str | None]:
