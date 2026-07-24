@@ -56,7 +56,8 @@
         "workflow",
         "observation",
         "question",
-        "warning"
+        "warning",
+        "lesson"
       ],
       "title": "ClaimType",
       "type": "string"

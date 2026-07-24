@@ -119,20 +119,22 @@ LIST_ENVELOPE_DEPRECATION: dict[str, str] = {
 }
 
 # kb.* methods that attach ``_meta.vouch_hot_memory`` on read responses.
-HOT_MEMORY_COVERED: frozenset[str] = frozenset({
-    "kb.search",
-    "kb.context",
-    "kb.read_page",
-    "kb.read_claim",
-    "kb.read_entity",
-    "kb.read_relation",
-    "kb.list_pages",
-    "kb.list_claims",
-    "kb.list_entities",
-    "kb.list_relations",
-    "kb.list_sources",
-    "kb.list_pending",
-})
+HOT_MEMORY_COVERED: frozenset[str] = frozenset(
+    {
+        "kb.search",
+        "kb.context",
+        "kb.read_page",
+        "kb.read_claim",
+        "kb.read_entity",
+        "kb.read_relation",
+        "kb.list_pages",
+        "kb.list_claims",
+        "kb.list_entities",
+        "kb.list_relations",
+        "kb.list_sources",
+        "kb.list_pending",
+    }
+)
 
 # Explicit exclusions for ``test_hot_memory_universal_coverage``.
 HOT_MEMORY_EXCLUDED: dict[str, str] = {
@@ -172,6 +174,10 @@ HOT_MEMORY_EXCLUDED: dict[str, str] = {
     "kb.contradict": "lifecycle — mutates durable state",
     "kb.archive": "lifecycle — mutates durable state",
     "kb.confirm": "lifecycle — mutates durable state",
+    "kb.mark_lesson_followed": (
+        "append-only audit observation — never touches the claim itself, "
+        "no browse payload to decorate"
+    ),
     "kb.cite": "lifecycle — mutates durable state",
     "kb.source_verify": "write path — verification intake",
     "kb.session_start": "session control — not a KB read",
@@ -285,9 +291,7 @@ def _matches_query(query_norm: str, text_lower: str) -> bool:
         return False
     if query_norm in text_lower:
         return True
-    return any(
-        len(token) >= 3 and token in text_lower for token in query_norm.split()
-    )
+    return any(len(token) >= 3 and token in text_lower for token in query_norm.split())
 
 
 def _compute_sidebar(
@@ -323,16 +327,18 @@ def _compute_sidebar(
 
     out: list[dict[str, Any]] = []
     for _score, ts_dt, c, why in candidates[:limit]:
-        out.append({
-            "id": c.id,
-            "text": _preview(c.text),
-            "type": c.type.value,
-            "status": c.status.value,
-            "citations": list(c.evidence),
-            "approved_by": c.approved_by,
-            "approved_at": ts_dt.isoformat(timespec="seconds"),
-            "why_hot": why,
-        })
+        out.append(
+            {
+                "id": c.id,
+                "text": _preview(c.text),
+                "type": c.type.value,
+                "status": c.status.value,
+                "citations": list(c.evidence),
+                "approved_by": c.approved_by,
+                "approved_at": ts_dt.isoformat(timespec="seconds"),
+                "why_hot": why,
+            }
+        )
     return out
 
 
@@ -352,7 +358,10 @@ def attach_hot_memory(
     deprecation note for JSONL clients that expected a flat list.
     """
     sidebar = compute_hot_memory(
-        store, query=query, limit=limit, exclude_ids=exclude_ids,
+        store,
+        query=query,
+        limit=limit,
+        exclude_ids=exclude_ids,
     )
 
     if isinstance(result, list) and list_envelope:

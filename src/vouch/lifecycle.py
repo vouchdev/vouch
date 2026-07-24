@@ -62,7 +62,9 @@ def supersede(
     # Mirror the supersedes link into the graph for graph-traversal queries.
     store.put_relation_idempotent(rel)
     audit.log_event(
-        store.kb_dir, event="claim.supersede", actor=actor,
+        store.kb_dir,
+        event="claim.supersede",
+        actor=actor,
         object_ids=[old.id, new.id, rel.id],
     )
     return old, new
@@ -98,7 +100,9 @@ def contradict(
     )
     store.put_relation_idempotent(rel)
     audit.log_event(
-        store.kb_dir, event="claim.contradict", actor=actor,
+        store.kb_dir,
+        event="claim.contradict",
+        actor=actor,
         object_ids=[a.id, b.id, rel.id],
     )
     return a, b, rel
@@ -110,7 +114,10 @@ def archive(store: KBStore, *, claim_id: str, actor: str) -> Claim:
     claim.updated_at = datetime.now(UTC)
     store.update_claim(claim)
     audit.log_event(
-        store.kb_dir, event="claim.archive", actor=actor, object_ids=[claim.id],
+        store.kb_dir,
+        event="claim.archive",
+        actor=actor,
+        object_ids=[claim.id],
     )
     return claim
 
@@ -147,7 +154,10 @@ def confirm(store: KBStore, *, claim_id: str, actor: str) -> Claim:
         claim.status = ClaimStatus.ACTIONABLE
     store.update_claim(claim)
     audit.log_event(
-        store.kb_dir, event="claim.confirm", actor=actor, object_ids=[claim.id],
+        store.kb_dir,
+        event="claim.confirm",
+        actor=actor,
+        object_ids=[claim.id],
     )
     return claim
 
@@ -219,6 +229,39 @@ def clear_claims(
     return to_clear
 
 
+def mark_lesson_followed(
+    store: KBStore,
+    *,
+    claim_id: str,
+    followed: bool,
+    actor: str,
+    context: str | None = None,
+) -> dict:
+    """Record whether a lesson was followed in a given turn (issue #428).
+
+    Append-only observation: appends a ``lesson.followed`` event to
+    ``audit.log.jsonl`` and returns without touching the claim's text,
+    status, or any other field. This is deliberately not a claim edit --
+    the review gate stays untouched, and a lost or replayed observation
+    can only make future effectiveness scoring noisier, never corrupt the
+    claim itself.
+
+    Not restricted to ``ClaimType.LESSON`` — the issue's own proposed
+    surface treats "lesson" as either a dedicated type or a flag on an
+    existing WORKFLOW/WARNING claim, so any claim id can carry a
+    follow-through observation.
+    """
+    claim = store.get_claim(claim_id)  # raises ArtifactNotFoundError if missing
+    audit.log_event(
+        store.kb_dir,
+        event="lesson.followed",
+        actor=actor,
+        object_ids=[claim.id],
+        data={"followed": followed, "context": context, "claim_type": claim.type},
+    )
+    return {"id": claim.id, "followed": followed}
+
+
 def cite(store: KBStore, claim_id: str) -> list[Evidence | dict]:
     """Return resolved citations for a claim.
 
@@ -236,13 +279,15 @@ def cite(store: KBStore, claim_id: str) -> list[Evidence | dict]:
             pass
         try:
             src = store.get_source(ref)
-            out.append({
-                "kind": "source",
-                "source_id": src.id,
-                "title": src.title,
-                "locator": src.locator,
-                "hash": src.hash,
-            })
+            out.append(
+                {
+                    "kind": "source",
+                    "source_id": src.id,
+                    "title": src.title,
+                    "locator": src.locator,
+                    "hash": src.hash,
+                }
+            )
         except ArtifactNotFoundError:
             out.append({"kind": "missing", "ref": ref})
     return out

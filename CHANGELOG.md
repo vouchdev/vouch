@@ -192,6 +192,17 @@ All notable changes to vouch are documented here. Format follows
   `user_mcp:` block (host-neutral core; only claude-code opts in);
   idempotent and never clobbers a server you added yourself; opt out with
   `--no-approve`.
+- `lesson` claim type (`ClaimType.LESSON`) and `kb.mark_lesson_followed` —
+  an append-only observation of whether a surfaced lesson was actually
+  followed in a given turn. Never edits the claim; appends a
+  `lesson.followed` event to `audit.log.jsonl` with `followed`, optional
+  `context`, and `claim_type`. Registered across CLI (`mark-lesson-followed`),
+  MCP, JSONL, and `capabilities.METHODS`. Lessons resurface through the
+  normal retrieval path with no special-casing, and get the propose-time
+  repeat guard (#147) for free, since `propose_claim` already runs
+  `find_similar_on_propose` for every claim type. Not restricted to
+  `ClaimType.LESSON` — any claim id can carry a follow-through observation.
+  (#428)
 
 ### Changed
 - the starter config now ships `review.auto_approve_on_receipt: true`
@@ -471,6 +482,21 @@ All notable changes to vouch are documented here. Format follows
 - `context` and `lifecycle` catch only the exceptions they can handle
   (sqlite errors on fts5 fallback, missing-artifact on citation lookup)
   instead of blanket `except Exception`.
+
+## [1.2.2] — 2026-07-07
+
+### Packaging
+- published to the mcp registry (`registry.modelcontextprotocol.io`, mirrored
+  at `github.com/mcp/vouchdev/vouch`) as `io.github.vouchdev/vouch`. a
+  `server.json` at the repo root carries the metadata; the pypi `vouch-kb`
+  package is the artifact, run over stdio via `uvx vouch-kb serve`.
+- `vouch-kb` console-script alias (alongside `vouch`) so `uvx vouch-kb serve`
+  resolves — the registry launches a package by its pypi identifier, which
+  otherwise wouldn't match the `vouch` script name.
+- README carries an `<!-- mcp-name: io.github.vouchdev/vouch -->` marker;
+  the registry verifies package ownership by matching it against `server.json`.
+
+### Fixed
 - `vouch install-mcp <host>` (codex `toml_merge`): a `config.toml` the minimal
   serializer couldn't faithfully re-emit (a non-BMP string value, a `nan`/`inf`
   float) was bucketed as `skipped` and printed as `(already present)` with a
@@ -498,19 +524,6 @@ All notable changes to vouch are documented here. Format follows
   the containment check and the read. previously any file the process
   could access was registrable as a "source" and retrievable via
   `kb.cite` / `kb.list_sources` (#421).
-
-## [1.2.2] — 2026-07-07
-
-### Packaging
-- published to the mcp registry (`registry.modelcontextprotocol.io`, mirrored
-  at `github.com/mcp/vouchdev/vouch`) as `io.github.vouchdev/vouch`. a
-  `server.json` at the repo root carries the metadata; the pypi `vouch-kb`
-  package is the artifact, run over stdio via `uvx vouch-kb serve`.
-- `vouch-kb` console-script alias (alongside `vouch`) so `uvx vouch-kb serve`
-  resolves — the registry launches a package by its pypi identifier, which
-  otherwise wouldn't match the `vouch` script name.
-- README carries an `<!-- mcp-name: io.github.vouchdev/vouch -->` marker;
-  the registry verifies package ownership by matching it against `server.json`.
 
 ## [1.2.1] — 2026-07-06
 

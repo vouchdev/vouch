@@ -164,7 +164,11 @@ def kb_activity(
         agent=agent,
     )
     return collect_activity(
-        store, days=days, tz_offset_minutes=tz_offset_minutes, tz=tz, viewer=viewer,
+        store,
+        days=days,
+        tz_offset_minutes=tz_offset_minutes,
+        tz=tz,
+        viewer=viewer,
     )
 
 
@@ -262,7 +266,11 @@ def kb_neighbors(
 
     try:
         return find_neighbors(
-            _store(), node_id, depth=depth, rel_types=rel_types, max_nodes=max_nodes,
+            _store(),
+            node_id,
+            depth=depth,
+            rel_types=rel_types,
+            max_nodes=max_nodes,
         )
     except ArtifactNotFoundError as e:
         raise ValueError(str(e)) from e
@@ -293,10 +301,17 @@ def kb_context(
         _, window, _ = salience_mod.reflex_cfg(cfg)
         salience_mod.record_query(session_id, task, window=window)
     result: dict[str, Any] = build_context_pack(  # type: ignore[assignment]
-        store, query=task, limit=limit, max_chars=max_chars,
-        min_items=min_items, require_citations=require_citations,
-        project=project, agent=agent,
-        expand_graph=expand_graph, graph_depth=graph_depth, graph_limit=graph_limit,
+        store,
+        query=task,
+        limit=limit,
+        max_chars=max_chars,
+        min_items=min_items,
+        require_citations=require_citations,
+        project=project,
+        agent=agent,
+        expand_graph=expand_graph,
+        graph_depth=graph_depth,
+        graph_limit=graph_limit,
     )
     result = salience_mod.attach_salience(result, store, session_id, cfg)
     pack_items = result.get("items") if isinstance(result, dict) else None
@@ -390,6 +405,7 @@ def kb_diff(old_id: str, new_id: str | None = None) -> dict[str, Any]:
     from dataclasses import asdict
 
     from .diff import diff_artifacts
+
     return asdict(diff_artifacts(_store(), old_id, new_id))
 
 
@@ -521,28 +537,30 @@ def kb_register_source(
     evidence is harmless and de-duplicates by content hash)."""
     src = _store().put_source(
         content.encode("utf-8"),
-        title=title, url=url,
+        title=title,
+        url=url,
         locator=url or title or "inline",
         source_type=source_type,
         media_type=media_type,
     )
-    audit.log_event(_store().kb_dir, event="source.add", actor=_agent(),
-                    object_ids=[src.id])
+    audit.log_event(_store().kb_dir, event="source.add", actor=_agent(), object_ids=[src.id])
     return src.model_dump(mode="json")
 
 
 @mcp.tool()
-def kb_register_source_from_path(path: str, title: str | None = None,
-                                 url: str | None = None,
-                                 source_type: str = "file") -> dict[str, Any]:
+def kb_register_source_from_path(
+    path: str, title: str | None = None, url: str | None = None, source_type: str = "file"
+) -> dict[str, Any]:
     s = _store()
     p, body = s.read_under_root(path)
     src = s.put_source(
-        body, title=title or p.name, url=url,
-        locator=str(p), source_type=source_type,
+        body,
+        title=title or p.name,
+        url=url,
+        locator=str(p),
+        source_type=source_type,
     )
-    audit.log_event(s.kb_dir, event="source.add", actor=_agent(),
-                    object_ids=[src.id])
+    audit.log_event(s.kb_dir, event="source.add", actor=_agent(), object_ids=[src.id])
     return src.model_dump(mode="json")
 
 
@@ -562,11 +580,18 @@ def kb_propose_claim(
     """Propose a new claim. Becomes durable only after `kb_approve`."""
     try:
         result = propose_claim(
-            _store(), text=text, evidence=evidence,
-            claim_type=claim_type, confidence=confidence,
-            entities=entities, tags=tags, rationale=rationale,
-            slug_hint=slug_hint, session_id=session_id,
-            dry_run=dry_run, proposed_by=_agent(),
+            _store(),
+            text=text,
+            evidence=evidence,
+            claim_type=claim_type,
+            confidence=confidence,
+            entities=entities,
+            tags=tags,
+            rationale=rationale,
+            slug_hint=slug_hint,
+            session_id=session_id,
+            dry_run=dry_run,
+            proposed_by=_agent(),
         )
     except (ProposalError, ArtifactNotFoundError, ValueError) as e:
         raise ValueError(str(e)) from e
@@ -589,10 +614,19 @@ def kb_propose_page(
 ) -> dict[str, Any]:
     try:
         pr = propose_page(
-            _store(), title=title, body=body, page_type=page_type,
-            claim_ids=claim_ids, entity_ids=entity_ids, source_ids=source_ids,
-            metadata=metadata, rationale=rationale, slug_hint=slug_hint,
-            session_id=session_id, dry_run=dry_run, proposed_by=_agent(),
+            _store(),
+            title=title,
+            body=body,
+            page_type=page_type,
+            claim_ids=claim_ids,
+            entity_ids=entity_ids,
+            source_ids=source_ids,
+            metadata=metadata,
+            rationale=rationale,
+            slug_hint=slug_hint,
+            session_id=session_id,
+            dry_run=dry_run,
+            proposed_by=_agent(),
         )
     except (ProposalError, ArtifactNotFoundError, ValueError) as e:
         raise ValueError(str(e)) from e
@@ -614,8 +648,11 @@ def kb_compile(
     """
     try:
         report = compile_mod.compile_kb(
-            _store(), triggered_by=_agent(),
-            max_pages=max_pages, dry_run=dry_run, session_id=session_id,
+            _store(),
+            triggered_by=_agent(),
+            max_pages=max_pages,
+            dry_run=dry_run,
+            session_id=session_id,
         )
     except compile_mod.CompileError as e:
         raise ValueError(str(e)) from e
@@ -635,6 +672,7 @@ def kb_summarize_session(
     Long-running when it splits (the LLM call is synchronous). Never approves.
     """
     from . import session_split
+
     return session_split.summarize(_store(), session_id, mode=mode)
 
 
@@ -647,6 +685,7 @@ def kb_list_sessions() -> dict[str, Any]:
     kind, title, summarized, observations, last_activity.
     """
     from . import session_split
+
     return {"sessions": session_split.build_session_rows(_store())}
 
 
@@ -660,6 +699,7 @@ def kb_session_transcript(session_id: str, agent: str | None = None) -> dict[str
     Degrades to compact capture observations when the raw file is unavailable.
     """
     from . import transcript
+
     if agent is not None and agent not in ("claude", "codex"):
         raise ValueError(f"unknown agent: {agent!r} (expected 'claude' or 'codex')")
     return transcript.load_transcript(_store(), session_id, agent=agent)
@@ -678,10 +718,15 @@ def kb_propose_entity(
 ) -> dict[str, Any]:
     try:
         pr = propose_entity(
-            _store(), name=name, entity_type=entity_type,
-            aliases=aliases, description=description,
-            rationale=rationale, slug_hint=slug_hint,
-            session_id=session_id, dry_run=dry_run,
+            _store(),
+            name=name,
+            entity_type=entity_type,
+            aliases=aliases,
+            description=description,
+            rationale=rationale,
+            slug_hint=slug_hint,
+            session_id=session_id,
+            dry_run=dry_run,
             proposed_by=_agent(),
         )
     except (ProposalError, ArtifactNotFoundError, ValueError) as e:
@@ -702,10 +747,16 @@ def kb_propose_relation(
 ) -> dict[str, Any]:
     try:
         pr = propose_relation(
-            _store(), src=src, relation=relation, target=target,
-            confidence=confidence, evidence=evidence,
-            rationale=rationale, session_id=session_id,
-            dry_run=dry_run, proposed_by=_agent(),
+            _store(),
+            src=src,
+            relation=relation,
+            target=target,
+            confidence=confidence,
+            evidence=evidence,
+            rationale=rationale,
+            session_id=session_id,
+            dry_run=dry_run,
+            proposed_by=_agent(),
         )
     except (ProposalError, ArtifactNotFoundError, ValueError) as e:
         raise ValueError(str(e)) from e
@@ -714,8 +765,11 @@ def kb_propose_relation(
 
 @mcp.tool()
 def kb_propose_delete(
-    target_kind: str, target_id: str, rationale: str | None = None,
-    session_id: str | None = None, dry_run: bool = False,
+    target_kind: str,
+    target_id: str,
+    rationale: str | None = None,
+    session_id: str | None = None,
+    dry_run: bool = False,
 ) -> dict[str, Any]:
     """Propose hard-deleting a durable artifact (claim/page/entity/relation).
 
@@ -724,9 +778,13 @@ def kb_propose_delete(
     """
     try:
         pr = propose_delete(
-            _store(), target_kind=target_kind, target_id=target_id,
-            proposed_by=_agent(), rationale=rationale,
-            session_id=session_id, dry_run=dry_run,
+            _store(),
+            target_kind=target_kind,
+            target_id=target_id,
+            proposed_by=_agent(),
+            rationale=rationale,
+            session_id=session_id,
+            dry_run=dry_run,
         )
     except (ProposalError, ArtifactNotFoundError, ValueError) as e:
         raise ValueError(str(e)) from e
@@ -742,7 +800,8 @@ def _proposal_response(result, dry_run: bool) -> dict[str, Any]:
         "dry_run": dry_run,
         "note": (
             "dry run — not written"
-            if dry_run else "pending human approval via `vouch approve <id>`"
+            if dry_run
+            else "pending human approval via `vouch approve <id>`"
         ),
     }
     warnings = getattr(result, "warnings", None)
@@ -759,8 +818,7 @@ def _proposal_response(result, dry_run: bool) -> dict[str, Any]:
 def kb_approve(proposal_id: str, reason: str | None = None) -> dict[str, Any]:
     """Approve a proposal → durable artifact. Use carefully."""
     try:
-        artifact = approve(_store(), proposal_id, approved_by=_agent(),
-                           reason=reason)
+        artifact = approve(_store(), proposal_id, approved_by=_agent(), reason=reason)
     except (ArtifactNotFoundError, ValueError, ProposalError) as e:
         raise ValueError(str(e)) from e
     return {"kind": type(artifact).__name__.lower(), "id": artifact.id}
@@ -777,7 +835,8 @@ def kb_reject(proposal_id: str, reason: str) -> dict[str, Any]:
 
 @mcp.tool()
 def kb_reject_extracted(
-    page_id: str | None = None, reason: str | None = None,
+    page_id: str | None = None,
+    reason: str | None = None,
 ) -> dict[str, Any]:
     """Mass-reject pending edges the auto-extractor filed (issue #224).
 
@@ -786,7 +845,9 @@ def kb_reject_extracted(
     """
     try:
         rejected = reject_auto_extracted(
-            _store(), rejected_by=_agent(), page_id=page_id,
+            _store(),
+            rejected_by=_agent(),
+            page_id=page_id,
             **({"reason": reason} if reason else {}),
         )
     except (ArtifactNotFoundError, ValueError, ProposalError) as e:
@@ -799,7 +860,10 @@ def kb_expire(apply: bool = False, days: int | None = None) -> dict[str, Any]:
     """Expire stale pending proposals (dry-run unless apply=True)."""
     try:
         result = expire_pending(
-            _store(), apply=apply, expired_by=EXPIRE_ACTOR, days=days,
+            _store(),
+            apply=apply,
+            expired_by=EXPIRE_ACTOR,
+            days=days,
         )
     except (ArtifactNotFoundError, ValueError, ProposalError) as e:
         raise ValueError(str(e)) from e
@@ -818,7 +882,9 @@ def kb_expire(apply: bool = False, days: int | None = None) -> dict[str, Any]:
 @mcp.tool()
 def kb_supersede(old_claim_id: str, new_claim_id: str) -> dict[str, Any]:
     old, new = life.supersede(
-        _store(), old_claim_id=old_claim_id, new_claim_id=new_claim_id,
+        _store(),
+        old_claim_id=old_claim_id,
+        new_claim_id=new_claim_id,
         actor=_agent(),
     )
     return {"old": old.id, "new": new.id, "status": old.status.value}
@@ -826,8 +892,7 @@ def kb_supersede(old_claim_id: str, new_claim_id: str) -> dict[str, Any]:
 
 @mcp.tool()
 def kb_contradict(claim_a: str, claim_b: str) -> dict[str, Any]:
-    a, b, rel = life.contradict(_store(), claim_a=claim_a, claim_b=claim_b,
-                                actor=_agent())
+    a, b, rel = life.contradict(_store(), claim_a=claim_a, claim_b=claim_b, actor=_agent())
     return {"a": a.id, "b": b.id, "relation_id": rel.id}
 
 
@@ -841,6 +906,23 @@ def kb_archive(claim_id: str) -> dict[str, Any]:
 def kb_confirm(claim_id: str) -> dict[str, Any]:
     c = life.confirm(_store(), claim_id=claim_id, actor=_agent())
     return {"id": c.id, "last_confirmed_at": c.last_confirmed_at}
+
+
+@mcp.tool()
+def kb_mark_lesson_followed(
+    claim_id: str, followed: bool, context: str | None = None
+) -> dict[str, Any]:
+    """Record a followed/not-followed observation for a lesson claim (#428).
+
+    Append-only: appends a lesson.followed audit event, edits nothing else.
+    """
+    return life.mark_lesson_followed(
+        _store(),
+        claim_id=claim_id,
+        followed=followed,
+        actor=_agent(),
+        context=context,
+    )
 
 
 @mcp.tool()
@@ -917,7 +999,9 @@ async def kb_session_start(task: str | None = None, note: str | None = None) -> 
     ctx = mcp.get_context()
     if ctx.session is not None:
         volunteer_context.register_mcp_push(
-            sess.id, ctx.session, asyncio.get_running_loop(),
+            sess.id,
+            ctx.session,
+            asyncio.get_running_loop(),
         )
     return sess.model_dump(mode="json")
 
@@ -936,11 +1020,12 @@ def kb_session_end(session_id: str, note: str | None = None) -> dict[str, Any]:
 
 
 @mcp.tool()
-def kb_crystallize(session_id: str, write_summary_page: bool = True
-                   ) -> dict[str, Any]:
+def kb_crystallize(session_id: str, write_summary_page: bool = True) -> dict[str, Any]:
     """Approve every pending proposal in `session_id` (host must trust the agent)."""
     return sess_mod.crystallize(
-        _store(), session_id, approver=_agent(),
+        _store(),
+        session_id,
+        approver=_agent(),
         write_summary_page=write_summary_page,
     )
 
@@ -960,8 +1045,12 @@ def kb_lint(stale_days: int = 180) -> dict[str, Any]:
     return {
         "ok": report.ok,
         "findings": [
-            {"severity": f.severity, "code": f.code,
-             "message": f.message, "object_ids": f.object_ids}
+            {
+                "severity": f.severity,
+                "code": f.code,
+                "message": f.message,
+                "object_ids": f.object_ids,
+            }
             for f in report.findings
         ],
         "counts": report.counts,
@@ -974,8 +1063,12 @@ def kb_doctor() -> dict[str, Any]:
     return {
         "ok": report.ok,
         "findings": [
-            {"severity": f.severity, "code": f.code,
-             "message": f.message, "object_ids": f.object_ids}
+            {
+                "severity": f.severity,
+                "code": f.code,
+                "message": f.message,
+                "object_ids": f.object_ids,
+            }
             for f in report.findings
         ],
         "counts": report.counts,
@@ -999,8 +1092,10 @@ def kb_export_check(bundle_path: str) -> dict[str, Any]:
     s = _store()
     r = bundle.export_check(bundle.fenced_bundle_path(s, bundle_path))
     return {
-        "ok": r.ok, "bundle_id": r.bundle_id,
-        "files_checked": r.files_checked, "issues": r.issues,
+        "ok": r.ok,
+        "bundle_id": r.bundle_id,
+        "files_checked": r.files_checked,
+        "issues": r.issues,
     }
 
 
@@ -1009,9 +1104,12 @@ def kb_import_check(bundle_path: str) -> dict[str, Any]:
     s = _store()
     r = bundle.import_check(s.kb_dir, bundle.fenced_bundle_path(s, bundle_path))
     return {
-        "ok": r.ok, "bundle_id": r.bundle_id,
-        "new_files": r.new_files, "conflicts": r.conflicts,
-        "identical_files": len(r.identical), "issues": r.issues,
+        "ok": r.ok,
+        "bundle_id": r.bundle_id,
+        "new_files": r.new_files,
+        "conflicts": r.conflicts,
+        "identical_files": len(r.identical),
+        "issues": r.issues,
     }
 
 
@@ -1044,13 +1142,18 @@ def kb_audit(
 
 @mcp.tool()
 def kb_reindex_embeddings(
-    *, backfill: bool = False, force: bool = False, model: str | None = None,
+    *,
+    backfill: bool = False,
+    force: bool = False,
+    model: str | None = None,
 ) -> dict[str, Any]:
     """Re-encode every artifact under the current embedding adapter."""
     from .embeddings.migration import backfill_embeddings
+
     store = _store()
     if model:
         from .embeddings import get_embedder
+
         get_embedder(model)
     n = backfill_embeddings(store, force=force)
     return {"touched": n, "model": _current_model_name()}
@@ -1058,10 +1161,13 @@ def kb_reindex_embeddings(
 
 @mcp.tool()
 def kb_dedup_scan(
-    *, threshold: float = 0.95, dry_run: bool = False,
+    *,
+    threshold: float = 0.95,
+    dry_run: bool = False,
 ) -> dict[str, Any]:
     """Find near-duplicate artifacts via embedding cosine."""
     from .embeddings.dedup import scan_all
+
     store = _store()
     rows = scan_all(store.kb_dir, threshold=threshold, dry_run=dry_run)
     return {"duplicates": rows, "threshold": threshold}
@@ -1072,6 +1178,7 @@ def kb_eval_embeddings(*, queries_path: str, k: int = 10) -> dict[str, Any]:
     """Run retrieval eval over a JSONL queries file."""
 
     from .embeddings.scorer import evaluate
+
     store = _store()
     return evaluate(
         kb_dir=store.kb_dir,
@@ -1085,13 +1192,12 @@ def kb_embeddings_stats() -> dict[str, Any]:
     """Model identity, per-kind counts, query cache stats."""
     from . import index_db
     from .embeddings.cache import query_cache_stats
+
     store = _store()
     meta = index_db.get_embedding_meta(store.kb_dir)
     counts: dict[str, int] = {}
     with index_db.open_db(store.kb_dir) as conn:
-        for k, n in conn.execute(
-            "SELECT kind, COUNT(*) FROM embedding_index GROUP BY kind"
-        ):
+        for k, n in conn.execute("SELECT kind, COUNT(*) FROM embedding_index GROUP BY kind"):
             counts[k] = int(n)
     return {
         "model": meta.get("embedding_model"),
@@ -1112,6 +1218,7 @@ def kb_why(claim_id: str, *, depth: int = 3) -> dict[str, Any]:
     depth: how many hops of provenance to expand (default 3).
     """
     from . import provenance as prov
+
     return prov.why(_store(), claim_id=claim_id, depth=depth)
 
 
@@ -1119,15 +1226,15 @@ def kb_why(claim_id: str, *, depth: int = 3) -> dict[str, Any]:
 def kb_trace(from_id: str, to_id: str) -> dict[str, Any]:
     """Shortest typed-edge path between two artifacts (or found=false)."""
     from . import provenance as prov
+
     return prov.trace(_store(), from_id=from_id, to_id=to_id)
 
 
 @mcp.tool()
-def kb_impact(
-    claim_id: str, *, depth: int = 1, op: str | None = None
-) -> dict[str, Any]:
+def kb_impact(claim_id: str, *, depth: int = 1, op: str | None = None) -> dict[str, Any]:
     """Forward impact: dependents, and breakage if op (archive/contradict/supersede)."""
     from . import provenance as prov
+
     return prov.impact(_store(), claim_id=claim_id, depth=depth, op=op)
 
 
@@ -1135,6 +1242,7 @@ def kb_impact(
 def kb_graph_export(*, session: str | None = None, format: str = "dot") -> dict[str, Any]:
     """Render the provenance DAG (or one session's subgraph) as dot/mermaid."""
     from . import provenance as prov
+
     graph = prov.graph_export(_store(), session=session, fmt=format)
     return {"format": format, "graph": graph}
 
@@ -1143,6 +1251,7 @@ def kb_graph_export(*, session: str | None = None, format: str = "dot") -> dict[
 def kb_provenance_rebuild() -> dict[str, Any]:
     """Rebuild the prov_edges cache from durable files; returns edge count."""
     from . import provenance as prov
+
     return {"edges": prov.rebuild_prov_edges(_store())}
 
 
@@ -1166,6 +1275,7 @@ def kb_detect_themes(
     top_k: maximum clusters to return (default from config or 10).
     """
     from . import themes
+
     store = _store()
     result = themes.detect_themes(
         store,
@@ -1204,6 +1314,7 @@ def kb_propose_theme(
     Pass a cluster from kb.detect_themes directly.
     """
     from . import themes
+
     store = _store()
     actor = agent or os.environ.get("VOUCH_AGENT", "unknown-agent")
     cluster = themes.ThemeCluster(
@@ -1220,6 +1331,7 @@ def kb_propose_theme(
 def _current_model_name() -> str:
     try:
         from .embeddings import get_embedder
+
         return get_embedder().name
     except Exception:
         return ""

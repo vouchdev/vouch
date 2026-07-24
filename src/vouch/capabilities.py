@@ -66,6 +66,7 @@ METHODS = [
     "kb.contradict",
     "kb.archive",
     "kb.confirm",
+    "kb.mark_lesson_followed",
     "kb.clear_claims",
     "kb.cite",
     "kb.source_verify",
@@ -127,6 +128,7 @@ def capabilities(*, publish_skills: bool = True) -> Capabilities:
     retrieval = ["fts5", "substring"]
     try:
         from .embeddings import get_embedder
+
         get_embedder()
         retrieval.append("embedding")
         retrieval.append("hybrid")
