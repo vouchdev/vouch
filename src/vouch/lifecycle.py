@@ -11,10 +11,20 @@ behind a config flag rather than refactoring this module.
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-from . import audit
-from .models import Claim, ClaimStatus, Evidence, Relation, RelationType
+from . import audit, index_db
+from .models import (
+    Claim,
+    ClaimStatus,
+    Evidence,
+    ProposalKind,
+    ProposalStatus,
+    Relation,
+    RelationType,
+)
+from .proposals import strip_claim_markers
 from .storage import ArtifactNotFoundError, KBStore
 
 
@@ -217,6 +227,82 @@ def clear_claims(
             )
 
     return to_clear
+
+
+@dataclass
+class DeadRefsWipeResult:
+    """Outcome of `wipe_dead_claim_refs` (dry-run or apply)."""
+
+    pages: dict[str, list[str]] = field(default_factory=dict)
+    proposals: dict[str, list[str]] = field(default_factory=dict)
+    dry_run: bool = False
+
+    @property
+    def dropped(self) -> int:
+        return sum(len(v) for v in self.pages.values()) + sum(
+            len(v) for v in self.proposals.values()
+        )
+
+
+def wipe_dead_claim_refs(
+    store: KBStore,
+    *,
+    actor: str,
+    dry_run: bool = False,
+) -> DeadRefsWipeResult:
+    """Strip references to claims that no longer exist, KB-wide.
+
+    Covers durable pages and pending PAGE proposals: the frontmatter claim
+    list and the inline `[claim: …]` body markers both lose the dead ids.
+    Claims themselves are untouched — an archived claim's file still exists,
+    so only ids that resolve to nothing count as dead. One audited bulk
+    event records exactly which ids were removed from where.
+    """
+    result = DeadRefsWipeResult(dry_run=dry_run)
+    for page in store.list_pages():
+        dead = [c for c in page.claims if not store._claim_path(c).exists()]
+        if not dead:
+            continue
+        result.pages[page.id] = dead
+        if dry_run:
+            continue
+        page.claims = [c for c in page.claims if c not in dead]
+        page.body = strip_claim_markers(page.body, dead)
+        page.updated_at = datetime.now(UTC)
+        store.update_page(page)
+        with index_db.open_db(store.kb_dir) as conn:
+            index_db.index_page(
+                conn, id=page.id, title=page.title, body=page.body,
+                type=page.type, tags=page.tags,
+            )
+    for prop in store.list_proposals(ProposalStatus.PENDING):
+        if prop.kind != ProposalKind.PAGE:
+            continue
+        refs = prop.payload.get("claims") or []
+        dead = [c for c in refs if not store._claim_path(c).exists()]
+        if not dead:
+            continue
+        result.proposals[prop.id] = dead
+        if dry_run:
+            continue
+        prop.payload["claims"] = [c for c in refs if c not in dead]
+        body = prop.payload.get("body")
+        if isinstance(body, str):
+            prop.payload["body"] = strip_claim_markers(body, dead)
+        store.update_proposal(prop)
+    if not dry_run and (result.pages or result.proposals):
+        audit.log_event(
+            store.kb_dir,
+            event="page.dead_refs_wipe",
+            actor=actor,
+            object_ids=[*result.pages, *result.proposals],
+            data={
+                "pages": result.pages,
+                "proposals": result.proposals,
+                "dropped": result.dropped,
+            },
+        )
+    return result
 
 
 def cite(store: KBStore, claim_id: str) -> list[Evidence | dict]:

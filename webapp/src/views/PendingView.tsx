@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { BookOpen, Check, LoaderCircle, Merge, X } from 'lucide-react'
+import { BookOpen, Check, Eraser, LoaderCircle, Merge, X } from 'lucide-react'
 import { useState } from 'react'
 import { EmptyState } from '../components/EmptyState'
 import { ErrorCard } from '../components/ErrorCard'
@@ -59,6 +59,14 @@ type CompileReport = {
   dry_run: boolean
 }
 
+// Shape of the kb.wipe_dead_refs envelope (lifecycle.DeadRefsWipeResult).
+type DeadRefsReport = {
+  pages: Record<string, string[]>
+  proposals: Record<string, string[]>
+  dropped: number
+  dry_run: boolean
+}
+
 /** One queue row: a pending proposal plus the project it belongs to. */
 interface Row {
   project: ProjectState
@@ -81,6 +89,8 @@ export function PendingView() {
   const [checked, setChecked] = useState<Set<string>>(new Set())
   const [clearing, setClearing] = useState(false)
   const [clearReason, setClearReason] = useState('')
+  const [deadRefRows, setDeadRefRows] = useState<Row[]>([])
+  const [wipePreview, setWipePreview] = useState<DeadRefsReport | null>(null)
 
   const pending = useFanout<Proposal[]>(['pending'], 'kb.list_pending', {}, { refetchInterval: 10_000 })
   useErrorToast(pending.errors.length > 0, pending.errors[0]?.error)
@@ -165,7 +175,9 @@ export function PendingView() {
   function decisionFailed(err: unknown) {
     const code = err instanceof VouchRpcError ? err.code : undefined
     const message = err instanceof Error ? err.message : String(err)
-    toast('error', code ? `${code}: ${message}` : message)
+    // dead_claim_refs renders as a decision card (strip & approve?), not a
+    // failure toast — the reviewer has a next step, nothing went wrong.
+    if (code !== 'dead_claim_refs') toast('error', code ? `${code}: ${message}` : message)
     setDecisionError({ code, message })
   }
 
@@ -183,12 +195,13 @@ export function PendingView() {
   }
 
   const approve = useMutation({
-    mutationFn: (row: Row) =>
-      rpc<{ kind: string; id: string }>(row.project.conn, 'kb.approve', {
-        proposal_id: row.proposal.id,
+    mutationFn: (vars: { row: Row; dropMissingClaims?: boolean }) =>
+      rpc<{ kind: string; id: string }>(vars.row.project.conn, 'kb.approve', {
+        proposal_id: vars.row.proposal.id,
+        ...(vars.dropMissingClaims ? { drop_missing_claims: true } : {}),
       }),
-    onMutate: removeOptimistically,
-    onError: (err, _row, ctx) => {
+    onMutate: (vars) => removeOptimistically(vars.row),
+    onError: (err, _vars, ctx) => {
       rollback(ctx)
       decisionFailed(err)
     },
@@ -253,20 +266,62 @@ export function PendingView() {
 
   // Batch approve: approve every checked approvable row. No bulk endpoint exists —
   // loop client-side per project, the same shape as clear (reject-all).
+  // Rows refused with dead_claim_refs are collected for a one-click
+  // strip-and-retry pass instead of counting as plain failures.
   const approveSelected = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (vars: { rows: Row[]; dropMissingClaims?: boolean }) => {
       const results = await Promise.allSettled(
-        approveTargets.map((r) =>
-          rpc(r.project.conn, 'kb.approve', { proposal_id: r.proposal.id }),
+        vars.rows.map((r) =>
+          rpc(r.project.conn, 'kb.approve', {
+            proposal_id: r.proposal.id,
+            ...(vars.dropMissingClaims ? { drop_missing_claims: true } : {}),
+          }),
         ),
       )
-      const ok = results.filter((x) => x.status === 'fulfilled').length
-      return { ok, failed: results.length - ok }
+      const deadRefs: Row[] = []
+      let ok = 0
+      let failed = 0
+      results.forEach((res, i) => {
+        if (res.status === 'fulfilled') ok += 1
+        else if (res.reason instanceof VouchRpcError && res.reason.code === 'dead_claim_refs')
+          deadRefs.push(vars.rows[i])
+        else failed += 1
+      })
+      return { ok, failed, deadRefs }
     },
     onError: decisionFailed,
-    onSuccess: ({ ok, failed }) => {
-      toast(failed ? 'info' : 'success', `Approved ${ok}${failed ? ` (${failed} failed)` : ''}`)
+    onSuccess: ({ ok, failed, deadRefs }) => {
+      setDeadRefRows(deadRefs)
+      const parts = [`Approved ${ok}`]
+      if (deadRefs.length) parts.push(`${deadRefs.length} cite missing claims`)
+      if (failed) parts.push(`${failed} failed`)
+      toast(failed ? 'info' : 'success', parts.join(' — '))
       setChecked(new Set())
+      afterDecision()
+    },
+  })
+
+  // Wipe dead refs is KB-wide (pages + pending page proposals), so it is
+  // scoped to a single project like compile. Two-step: a dry-run previews
+  // what would be stripped, the confirm click applies it.
+  const canWipe = !aggregated && !!conn && hasMethod('kb.wipe_dead_refs')
+  const wipeDeadRefs = useMutation({
+    mutationFn: (vars: { dryRun: boolean }) =>
+      rpc<DeadRefsReport>(conn!, 'kb.wipe_dead_refs', { dry_run: vars.dryRun }),
+    onError: decisionFailed,
+    onSuccess: (res) => {
+      if (res.dry_run) {
+        if (res.dropped === 0) toast('info', 'No dead claim references found')
+        else setWipePreview(res)
+        return
+      }
+      setWipePreview(null)
+      toast(
+        'success',
+        `Stripped ${res.dropped} dead reference(s) from ` +
+          `${Object.keys(res.pages).length} page(s) and ` +
+          `${Object.keys(res.proposals).length} pending proposal(s)`,
+      )
       afterDecision()
     },
   })
@@ -303,6 +358,52 @@ export function PendingView() {
     if (e.event === 'compile.run') freshApprovals = 0
     else if (e.event === 'proposal.claim.approve') freshApprovals += 1
   }
+
+  // Rendered on the empty queue too: dead references live in durable pages,
+  // so the cleanup is offered even when nothing is pending.
+  const wipeBar = canWipe ? (
+    <div className="flex items-center gap-3 border-b border-rule bg-paper-2 px-4 py-2.5">
+      {wipePreview ? (
+        <>
+          <span className="text-xs font-medium text-accent-2">
+            {wipePreview.dropped} dead claim ref(s) in {Object.keys(wipePreview.pages).length} page(s),{' '}
+            {Object.keys(wipePreview.proposals).length} pending proposal(s)
+          </span>
+          <button
+            onClick={() => wipeDeadRefs.mutate({ dryRun: false })}
+            disabled={wipeDeadRefs.isPending}
+            className="rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-paper transition hover:bg-accent-2 disabled:opacity-40"
+          >
+            Wipe {wipePreview.dropped} dead ref(s)
+          </button>
+          <button
+            onClick={() => setWipePreview(null)}
+            className="rounded-lg border border-rule px-3 py-1.5 text-xs text-ink-2 transition hover:bg-paper-3"
+          >
+            Cancel
+          </button>
+        </>
+      ) : (
+        <>
+          <button
+            onClick={() => wipeDeadRefs.mutate({ dryRun: true })}
+            disabled={wipeDeadRefs.isPending}
+            className="flex items-center gap-2 rounded-lg border border-accent/40 px-3 py-1.5 text-xs font-semibold text-accent-2 transition hover:bg-accent/10"
+          >
+            {wipeDeadRefs.isPending ? (
+              <LoaderCircle size={13} className="animate-spin" />
+            ) : (
+              <Eraser size={13} />
+            )}
+            Wipe dead claim refs
+          </button>
+          <span className="text-xs text-sepia">
+            strip references to claims that no longer exist (audited)
+          </span>
+        </>
+      )}
+    </div>
+  ) : null
 
   // The compile bar renders on the empty queue too — that is the natural
   // starting state for an ingest pass over already-approved claims.
@@ -362,6 +463,7 @@ export function PendingView() {
     return (
       <div className="flex h-full flex-col">
         {compileBar}
+        {wipeBar}
         <div className="min-h-0 flex-1">
           <EmptyState
             title="The queue is clear"
@@ -376,6 +478,7 @@ export function PendingView() {
     <div className="flex h-full">
       <div className="flex w-96 shrink-0 flex-col border-r border-rule">
         {compileBar}
+        {wipeBar}
         {canClear &&
           (clearing ? (
             <div className="border-b border-rule bg-paper-2 px-4 py-2.5">
@@ -435,7 +538,7 @@ export function PendingView() {
             {approveTargets.length >= 1 && (
               <>
                 <button
-                  onClick={() => approveSelected.mutate()}
+                  onClick={() => approveSelected.mutate({ rows: approveTargets })}
                   disabled={approveSelected.isPending}
                   className="flex items-center gap-2 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-paper transition hover:bg-accent-2 disabled:opacity-40"
                 >
@@ -454,6 +557,30 @@ export function PendingView() {
                 </button>
               </>
             )}
+          </div>
+        )}
+        {deadRefRows.length > 0 && (
+          <div className="flex items-center gap-3 border-b border-rule bg-paper-2 px-4 py-2.5">
+            <span className="text-xs font-medium text-accent-2">
+              {deadRefRows.length} proposal(s) cite claims that no longer exist
+            </span>
+            <button
+              onClick={() => {
+                const rows = deadRefRows
+                setDeadRefRows([])
+                approveSelected.mutate({ rows, dropMissingClaims: true })
+              }}
+              disabled={approveSelected.isPending}
+              className="rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-paper transition hover:bg-accent-2 disabled:opacity-40"
+            >
+              Strip dead refs & approve
+            </button>
+            <button
+              onClick={() => setDeadRefRows([])}
+              className="text-xs text-sepia transition hover:text-ink"
+            >
+              dismiss
+            </button>
           </div>
         )}
         {canMerge && mergeRows.length >= 2 && (
@@ -565,11 +692,40 @@ export function PendingView() {
               </div>
             </dl>
 
-            {decisionError && (
+            {decisionError?.code === 'dead_claim_refs' ? (
+              <div className="mb-4 rounded-xl border border-accent/50 bg-paper-2 p-4">
+                <p className="mb-2 text-sm text-ink-2">
+                  This page cites claim(s) that no longer exist. Remove the dead
+                  references and approve what remains? The dropped ids are
+                  recorded in the audit log.
+                </p>
+                <p className="mb-3 break-words font-mono text-xs text-sepia">
+                  {decisionError.message}
+                </p>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => {
+                      setDecisionError(null)
+                      approve.mutate({ row: selected, dropMissingClaims: true })
+                    }}
+                    disabled={approve.isPending}
+                    className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-paper hover:bg-accent-2 disabled:opacity-40"
+                  >
+                    Strip dead refs & approve
+                  </button>
+                  <button
+                    onClick={() => setDecisionError(null)}
+                    className="rounded-lg border border-rule px-4 py-2 text-sm text-ink-2 hover:bg-paper-3"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : decisionError ? (
               <div className="mb-4">
                 <ErrorCard code={decisionError.code} message={decisionError.message} />
               </div>
-            )}
+            ) : null}
 
             {!canDecide ? (
               <p className="text-sm text-sepia">
@@ -607,7 +763,7 @@ export function PendingView() {
             ) : (
               <div className="flex gap-3">
                 <button
-                  onClick={() => approve.mutate(selected)}
+                  onClick={() => approve.mutate({ row: selected })}
                   disabled={approve.isPending}
                   className="flex items-center gap-2 rounded-lg bg-ok/90 px-5 py-2.5 text-sm font-semibold text-paper transition hover:bg-ok disabled:opacity-40"
                 >

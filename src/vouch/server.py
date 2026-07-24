@@ -756,11 +756,21 @@ def _proposal_response(result, dry_run: bool) -> dict[str, Any]:
 
 
 @mcp.tool()
-def kb_approve(proposal_id: str, reason: str | None = None) -> dict[str, Any]:
-    """Approve a proposal → durable artifact. Use carefully."""
+def kb_approve(
+    proposal_id: str,
+    reason: str | None = None,
+    drop_missing_claims: bool = False,
+) -> dict[str, Any]:
+    """Approve a proposal → durable artifact. Use carefully.
+
+    A page proposal citing claims that no longer exist is refused; pass
+    drop_missing_claims=True to strip the dead references and approve what
+    remains (the dropped ids are recorded in the audit event).
+    """
     try:
         artifact = approve(_store(), proposal_id, approved_by=_agent(),
-                           reason=reason)
+                           reason=reason,
+                           drop_missing_claims=drop_missing_claims)
     except (ArtifactNotFoundError, ValueError, ProposalError) as e:
         raise ValueError(str(e)) from e
     return {"kind": type(artifact).__name__.lower(), "id": artifact.id}
@@ -876,6 +886,30 @@ def kb_clear_claims(
         "count": len(to_clear),
         "claim_ids": [c.id for c in to_clear],
         "dry_run": dry_run,
+    }
+
+
+@mcp.tool()
+def kb_wipe_dead_refs(dry_run: bool = False) -> dict[str, Any]:
+    """Strip references to claims that no longer exist, KB-wide.
+
+    Covers durable pages and pending page proposals: the frontmatter claim
+    list and inline `[claim: …]` markers both lose ids that resolve to no
+    claim file. Audited as one bulk event. Use after claims were archived,
+    redacted, or bulk-cleared and pages still point at them.
+
+    Args:
+        dry_run: If True, report what would be stripped without writing.
+
+    Returns:
+        Per-page and per-proposal dead ids, total dropped count.
+    """
+    r = life.wipe_dead_claim_refs(_store(), actor=_agent(), dry_run=dry_run)
+    return {
+        "pages": r.pages,
+        "proposals": r.proposals,
+        "dropped": r.dropped,
+        "dry_run": r.dry_run,
     }
 
 
