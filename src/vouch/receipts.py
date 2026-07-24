@@ -58,7 +58,7 @@ def verify_receipt(evidence: Evidence, source_bytes: bytes) -> ReceiptResult:
     when the decoded span equals the quote exactly.
     """
     start, end, quote = evidence.byte_start, evidence.byte_end, evidence.quote
-    if start is None or end is None or quote is None:
+    if start is None or end is None or not quote:
         return ReceiptResult(ReceiptStatus.NO_RECEIPT, "no byte-offset span")
     if start > end or end > len(source_bytes):
         return ReceiptResult(
@@ -184,7 +184,7 @@ def verify_evidence(store: KBStore, evidence: Evidence) -> ReceiptResult:
     """
     from .storage import ArtifactNotFoundError
 
-    if evidence.byte_start is None or evidence.byte_end is None or evidence.quote is None:
+    if evidence.byte_start is None or evidence.byte_end is None or not evidence.quote:
         return ReceiptResult(ReceiptStatus.NO_RECEIPT, "no byte-offset span")
     try:
         source_bytes = store.read_source_content(evidence.source_id)

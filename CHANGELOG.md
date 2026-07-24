@@ -89,6 +89,17 @@ All notable changes to vouch are documented here. Format follows
   per-prompt block, the session banner, `vouch status` and the opt-in
   question all say so rather than calling it "this repo's" knowledge.
 
+### Fixed
+- `receipts.verify_receipt()` and `receipts.verify_evidence()` no longer
+  report `VERIFIED`/fall through past their guard for an empty-quote,
+  zero-length byte span. both guards only checked `quote is None`, not an
+  empty string, so `quote=""` with `byte_start == byte_end` decoded to
+  `""`, trivially equaled the empty quote, and `verify_receipt` returned
+  `VERIFIED` -- despite carrying no actual quoted text, contradicting the
+  function's own docstring. `locate_span` already refused to mint such a
+  receipt on the propose path; this closes the same gap on the verify
+  path, reachable via bundle import or sync.
+
 ## [1.5.0] — 2026-07-20
 
 ### Added
