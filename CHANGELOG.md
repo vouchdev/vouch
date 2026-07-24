@@ -273,6 +273,13 @@ All notable changes to vouch are documented here. Format follows
   in config.yaml (#476).
 
 ### Fixed
+- secret masking now catches JSON/quoted-key credentials
+  (`"password": "..."`, `'api_key': '...'`). the key's closing quote sat
+  between the name and the `:` and broke the assignment regex, so the most
+  common structured secret shape — and exactly the file family vouch writes
+  (settings.json, quoted yaml) — slipped through `capture.observe` into the
+  gitignored buffer that rolls into a committed session page and the
+  append-only audit log. the value is masked and the key/quotes kept legible (#549).
 - approve/reject/expire record the audit event *before* moving the
   proposal to decided/. a crash between the two used to leave a durable
   decision with no authoritative history; it now leaves a pending

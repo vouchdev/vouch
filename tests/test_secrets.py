@@ -40,6 +40,35 @@ def test_masks_key_value_assignment_but_keeps_the_key_name() -> None:
     assert "PASSWORD" in out
 
 
+def test_masks_json_and_quoted_key_credentials() -> None:
+    """A quoted key — JSON `"password": "..."` or quoted-YAML/py — is the most
+    common structured shape a pasted credential takes, and exactly what this
+    codebase writes (settings.json). The key's closing quote used to sit
+    between the name and the `:` and break the match, so these leaked."""
+    for text, secret in (
+        ('"password": "hunter2supersecret"', "hunter2supersecret"),
+        ("'api_key': 'swordfishalpha'", "swordfishalpha"),
+        ('"secret":"nowhitespacehere"', "nowhitespacehere"),
+    ):
+        out = mask_secrets(text)
+        assert secret not in out, text
+        assert REDACTION in out
+        assert contains_secret(text) is True
+    # the key name and its quotes stay legible
+    assert '"password":' in mask_secrets('"password": "hunter2supersecret"')
+
+
+def test_quoted_key_masking_no_false_positive() -> None:
+    """The quoted-key change must not mask a sensitive-looking word that has
+    no assignment (no separator, or a too-short value)."""
+    for text in (
+        '"password" is required for login',   # quote but no `:`/`=`
+        "password: hi",                        # value under the 6-char floor
+    ):
+        assert mask_secrets(text) == text
+        assert contains_secret(text) is False
+
+
 def test_masks_private_key_block() -> None:
     begin = f"-----BEGIN RSA {_PK}-----"
     end = f"-----END RSA {_PK}-----"
