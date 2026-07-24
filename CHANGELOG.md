@@ -390,6 +390,14 @@ All notable changes to vouch are documented here. Format follows
 - demo: dual-path llm configuration — compile & summarize run through
   session-capture replay or directly against the api via a stdlib shim
   wired as `compile.llm_cmd` with a byo `ANTHROPIC_API_KEY`.
+- `vouch contradict-scan` — an offline scanner that groups approved claims
+  by shared entity and heuristically flags same-topic pairs that disagree
+  in polarity. `--dry-run` (default) only prints candidates; without it,
+  each surviving pair files a pending `contradicts` relation proposal via
+  `proposals.propose_relation` for a human `vouch approve` — the scanner
+  itself never writes a `Relation` or a `CONTESTED` status. `--threshold`,
+  `--entity`, and `--limit` tune the scan. scoring lives in the new
+  `src/vouch/contradictions.py`. (#314)
 
 ### Changed
 - ``kb.list_*`` JSONL/MCP responses now use a dict envelope

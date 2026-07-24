@@ -31,6 +31,7 @@ from . import audit as audit_mod
 from . import capture as capture_mod
 from . import codex_rollout as codex_rollout_mod
 from . import compile as compile_mod
+from . import contradictions as contradictions_mod
 from . import digest as digest_mod
 from . import fetch as fetch_mod
 from . import hub as hub_mod
@@ -3574,6 +3575,43 @@ def dedup(threshold: float, dry_run: bool) -> None:
         return
     for r in rows:
         click.echo(f"{r['kind']}/{r['id']} ~ {r['kind']}/{r['near_id']}  cos={r['cosine']:.4f}")
+
+
+@cli.command(name="contradict-scan")
+@click.option("--threshold", default=contradictions_mod.DEFAULT_THRESHOLD,
+              show_default=True, type=float)
+@click.option("--entity", default=None, help="Restrict the scan to one entity id.")
+@click.option("--dry-run/--no-dry-run", default=True, show_default=True)
+@click.option("--limit", default=None, type=int,
+              help="Cap the number of pairs proposed in one run.")
+def contradict_scan(
+    threshold: float, entity: str | None, dry_run: bool, limit: int | None,
+) -> None:
+    """Scan approved claims for candidate conflicting pairs.
+
+    Groups claims by shared entity and flags same-topic pairs that disagree
+    in polarity. Advisory only: with --dry-run (the default) this only
+    prints candidates. Without it, each surviving pair files a pending
+    `contradicts` relation proposal for a human `vouch approve` — it never
+    writes a Relation or a CONTESTED status itself.
+    """
+    store = _load_store()
+    with _cli_errors():
+        rows = contradictions_mod.scan(
+            store, threshold=threshold, entity=entity,
+            dry_run=dry_run, limit=limit, proposed_by=_whoami(),
+        )
+    if not rows:
+        click.echo("contradict-scan: no candidates found")
+        return
+    for r in rows:
+        line = (
+            f"{r['claim_a']} >< {r['claim_b']}  "
+            f"entity={r['entity']} score={r['score']:.3f}"
+        )
+        if "proposal_id" in r:
+            line += f"  proposal={r['proposal_id']}"
+        click.echo(line)
 
 
 @cli.group()
