@@ -89,6 +89,14 @@ All notable changes to vouch are documented here. Format follows
   per-prompt block, the session banner, `vouch status` and the opt-in
   question all say so rather than calling it "this repo's" knowledge.
 
+### Fixed
+- `graph.find_neighbors()` no longer leaks edges to excluded neighbors.
+  superseded/archived/redacted claims and missing nodes were already filtered
+  out of the returned `nodes` list, but the edge pointing at them was still
+  included -- `kb.neighbors` (mcp, jsonl, and cli surfaces all share this
+  code path) could hand back an edge whose `target` referenced a claim id
+  the response itself said didn't exist.
+
 ## [1.5.0] — 2026-07-20
 
 ### Added

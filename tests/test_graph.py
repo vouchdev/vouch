@@ -93,6 +93,10 @@ def test_find_neighbors_excludes_superseded_claims(store: KBStore) -> None:
     result = graph.find_neighbors(store, "new", depth=1)
     assert {n["id"] for n in result["nodes"]} == set()
     assert "old" not in {n["id"] for n in result["nodes"]}
+    # the edge to the excluded neighbor must not leak either -- a client
+    # that trusts `nodes` as the visible set would otherwise see a "supersedes"
+    # edge pointing at a claim id it was never told exists.
+    assert result["edges"] == []
 
 
 def test_find_neighbors_unknown_node_raises(store: KBStore) -> None:
