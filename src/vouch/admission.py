@@ -61,6 +61,16 @@ _MIN_LETTER_RATIO = 0.5
 # claims is worse than letting a rare single-'#' heading reach human review.
 _HEADING_RE = re.compile(r"^#{2,6}\s")
 _LEADING_MARKDOWN_RE = re.compile(r"^[>\-*+\s]+")
+# A span whose entire body is one emphasis run — optionally prefixed by an emoji
+# or other non-word decoration — is a section label, not a claim: "✨ **What's
+# new**", "**Summary**", "📝 **Notes**". The '##' heading rule above misses this
+# emoji/bold heading convention. Only a *fully* wrapped span is caught, so a
+# claim that merely contains inline emphasis ("use **kwargs ...", "ships with
+# **trusted** publishing") keeps prose outside the run and is admitted; and the
+# run must be *closed*, so a lone opening ** (the **kwargs precision case) is
+# left alone — the closing delimiter is what marks a label rather than a marker.
+_LEADING_DECORATION_RE = re.compile(r"^[^\w*_]+")
+_EMPHASIS_LABEL_RE = re.compile(r"(\*{1,3}|_{1,3})[^*_]+\1")
 
 DEFAULT_ENABLED = True
 DEFAULT_MIN_CONFIDENCE = 0.0
@@ -145,6 +155,19 @@ def _delimiters_balanced(s: str) -> bool:
     return not stack  # leftover open — truncated tail
 
 
+def _is_emphasis_label(text: str) -> bool:
+    """True if the whole span is a single closed emphasis run.
+
+    Catches the emoji/bold heading convention — "✨ **What's new**" — that the
+    ``##`` rule in :func:`assess_claim` cannot see. Leading emoji/symbol
+    decoration is stripped first; the run must then be closed and span the
+    entire remainder, so inline emphasis inside real prose and a lone opening
+    ``**kwargs`` are both left untouched.
+    """
+    candidate = _LEADING_DECORATION_RE.sub("", text).strip()
+    return bool(_EMPHASIS_LABEL_RE.fullmatch(candidate))
+
+
 def assess_claim(
     text: str, *, confidence: float | None = None, min_confidence: float = 0.0
 ) -> AdmissionVerdict:
@@ -152,6 +175,8 @@ def assess_claim(
     stripped = text.strip()
     if _HEADING_RE.match(stripped):
         return _reject("markdown heading, not a claim")
+    if _is_emphasis_label(stripped):
+        return _reject("emphasis-wrapped label, not a claim")
     core = _LEADING_MARKDOWN_RE.sub("", stripped).strip()
     if not core:
         return _reject("empty after stripping markdown markers")
