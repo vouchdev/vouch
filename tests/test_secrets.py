@@ -107,18 +107,26 @@ def test_cli_redact_command(tmp_path, monkeypatch) -> None:
 
 def test_masks_json_quoted_key_credentials() -> None:
     """JSON / quoted-key forms must not leak past the assignment mask (#549)."""
-    cases = (
-        '"password": "hunter2secret"',
-        "'api_key': 'abcdefghij'",
-        '"token" : "abcdefghij"',
-    )
-    for text in cases:
-        out = mask_secrets(text)
-        assert "hunter2secret" not in out
-        assert "abcdefghij" not in out
-        assert REDACTION in out
+    assert mask_secrets('"password": "hunter2secret"') == '"password": "[redacted-secret]"'
+    assert mask_secrets("'api_key': 'abcdefghij'") == "'api_key': '[redacted-secret]'"
+    assert mask_secrets('"token" : "abcdefghij"') == '"token" : "[redacted-secret]"'
+
+
+def test_masks_quoted_value_with_whitespace_and_escapes() -> None:
+    """Quoted values are whole units — whitespace must not leak a trailing token."""
+    text = '"password": "hunter2 secret"'
+    out = mask_secrets(text)
+    assert "hunter2 secret" not in out
+    assert "hunter2" not in out
+    assert out == '"password": "[redacted-secret]"'
+
+    escaped = '"password": "say \"hi\" nowxx"'
+    out2 = mask_secrets(escaped)
+    assert "nowxx" not in out2
+    assert out2 == '"password": "[redacted-secret]"'
 
 
 def test_masks_plain_assignment_still_works() -> None:
     assert "hunter2secret" not in mask_secrets("password=hunter2secret")
     assert "hunter2secret" not in mask_secrets("password: hunter2secret")
+    assert mask_secrets("password=hunter2secret") == "password=[redacted-secret]"
