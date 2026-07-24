@@ -89,6 +89,17 @@ All notable changes to vouch are documented here. Format follows
   per-prompt block, the session banner, `vouch status` and the opt-in
   question all say so rather than calling it "this repo's" knowledge.
 
+### Fixed
+- `vouch sync --as-proposals` no longer crashes when the inbound KB
+  carries a receipt-backed claim whose evidence AND source are both new
+  here. the gated apply registered substrate in one sorted path walk, and
+  `evidence/...` sorts ahead of `sources/...`, so `put_evidence` raised
+  "cites unknown source" for evidence arriving alongside its own source —
+  aborting the whole sync partway with no audit event, on input
+  `sync check` had just called ok (and that `vouch import-proposals`
+  accepts for the identical bundle). sources are now registered before
+  evidence, the same pass-1 order `import_as_proposals` already uses.
+
 ## [1.5.0] — 2026-07-20
 
 ### Added
