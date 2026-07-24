@@ -22,8 +22,34 @@ export class VouchHttpError extends Error {
 
 let seq = 0
 
+// The identity this console acts as. Sent on every call as X-Vouch-Agent so
+// approvals/proposals are attributed to a human reviewer rather than the
+// tokenless `unknown-agent` default — the server derives approved_by from it,
+// and a distinct reviewer no longer self-collides with the proposing agent.
+export const REVIEWER_KEY = 'vouch-ui.reviewer.v1'
+export const DEFAULT_REVIEWER = 'console'
+
+export function reviewerId(): string {
+  try {
+    return localStorage.getItem(REVIEWER_KEY)?.trim() || DEFAULT_REVIEWER
+  } catch {
+    return DEFAULT_REVIEWER
+  }
+}
+
+export function setReviewerId(id: string): void {
+  try {
+    localStorage.setItem(REVIEWER_KEY, id.trim())
+  } catch {
+    /* private-mode / storage-disabled: fall back to the default reviewer */
+  }
+}
+
 function baseHeaders(conn: VouchConnectionInfo): Record<string, string> {
-  const h: Record<string, string> = { 'x-vouch-target': conn.endpoint }
+  const h: Record<string, string> = {
+    'x-vouch-target': conn.endpoint,
+    'x-vouch-agent': reviewerId(),
+  }
   if (conn.token) h.authorization = `Bearer ${conn.token}`
   return h
 }
