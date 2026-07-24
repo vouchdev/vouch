@@ -59,6 +59,10 @@ export function proxyMiddleware(): (req: IncomingMessage, res: ServerResponse, n
     const headers: Record<string, string> = {}
     if (req.headers['content-type']) headers['content-type'] = String(req.headers['content-type'])
     if (req.headers.authorization) headers.authorization = String(req.headers.authorization)
+    // Reviewer identity: a human approving in the console must be attributed to
+    // themselves, not left as the tokenless `unknown-agent` default (which
+    // collides with the proposing agent and trips the self-approval gate).
+    if (req.headers['x-vouch-agent']) headers['x-vouch-agent'] = String(req.headers['x-vouch-agent'])
 
     const upstream = mod.request(
       {
