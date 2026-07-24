@@ -21,15 +21,28 @@ _WIKILINK_RE = re.compile(r"\[\[([^\]|#]+)")
 def _link_index(pages: list[Page]) -> dict[str, Page]:
     """Map every resolvable name (title, id/slug, alias) to its page.
 
-    Keys are lowercased. Earlier pages win a name collision (``setdefault``),
-    so a later page's alias never shadows an existing page's title.
+    Keys are lowercased. Resolution is tiered so a stronger handle always beats
+    a weaker one regardless of page order: every title is registered first,
+    then every id/slug, then every alias, each with ``setdefault``. A page
+    titled ``Retry Policy`` therefore owns that name even when an earlier page
+    in the list carries it only as an alias — otherwise the resolved target
+    depended on ``list_pages()`` ordering. Within a single tier the earlier
+    page still wins a genuine collision (two pages sharing a title).
     """
     index: dict[str, Page] = {}
+
+    def register(name: object, page: Page) -> None:
+        key = str(name).strip().lower()
+        if key:
+            index.setdefault(key, page)
+
     for page in pages:
-        for name in (page.title, page.id, *(page.metadata.get("aliases") or [])):
-            key = str(name).strip().lower()
-            if key:
-                index.setdefault(key, page)
+        register(page.title, page)
+    for page in pages:
+        register(page.id, page)
+    for page in pages:
+        for alias in page.metadata.get("aliases") or []:
+            register(alias, page)
     return index
 
 

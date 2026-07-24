@@ -89,6 +89,18 @@ All notable changes to vouch are documented here. Format follows
   per-prompt block, the session banner, `vouch status` and the opt-in
   question all say so rather than calling it "this repo's" knowledge.
 
+### Fixed
+- **wiki render now resolves a `[[link]]` to the page actually titled that,
+  not to whichever page happens to list the name as an alias first**
+  (`wiki_render`). the link index registered each page's title, id and
+  aliases in one pass, so `setdefault` made resolution order-dependent: if a
+  page carrying "Retry Policy" only as an alias sorted ahead of the page
+  titled "Retry Policy", `[[Retry Policy]]` resolved to the wrong page and its
+  backlink landed on the alias holder in the `render-wiki` map-of-content —
+  contradicting the module's own promise that an alias never shadows a title.
+  the index is now built in tiers (every title, then every id/slug, then every
+  alias), so a real title always wins regardless of `list_pages()` order.
+
 ## [1.5.0] — 2026-07-20
 
 ### Added
