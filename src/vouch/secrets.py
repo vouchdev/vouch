@@ -36,12 +36,29 @@ _SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
 _BEARER = re.compile(r"(?i)\b(Bearer)\s+[A-Za-z0-9._~+/=-]{10,}")
 
 # key=value / key: value for sensitive-looking names — mask the value, keep the
-# name so the redaction is legible.
+# name so the redaction is legible. Optional quote after the name covers JSON /
+# quoted-key shapes (`"password": "..."`). Quoted values are matched as a whole
+# unit (whitespace + escapes allowed) and their delimiters are preserved so the
+# redacted form stays structurally valid and cannot leak a trailing token.
 _ASSIGNMENT = re.compile(
     r"(?i)\b(api[_-]?key|secret|token|password|passwd|pwd|access[_-]?key)\b"
-    r"(\s*[:=]\s*)"
-    r"[\"']?[^\s\"']{6,}[\"']?"
+    r"([\"']?\s*[:=]\s*)"
+    r"(?:"
+    r"\"((?:\\.|[^\"\\]){6,})\""
+    r"|'((?:\\.|[^'\\]){6,})'"
+    r"|([^\s\"']{6,})"
+    r")"
 )
+
+
+def _redact_assignment(match: re.Match[str]) -> str:
+    """Keep key + separator; replace value, preserving quote delimiters."""
+    head = f"{match.group(1)}{match.group(2)}"
+    if match.group(3) is not None:
+        return f'{head}"{REDACTION}"'
+    if match.group(4) is not None:
+        return f"{head}'{REDACTION}'"
+    return f"{head}{REDACTION}"
 
 
 def mask_secrets(text: str) -> str:
@@ -49,7 +66,7 @@ def mask_secrets(text: str) -> str:
     for pat in _SECRET_PATTERNS:
         text = pat.sub(REDACTION, text)
     text = _BEARER.sub(rf"\1 {REDACTION}", text)
-    text = _ASSIGNMENT.sub(rf"\1\2{REDACTION}", text)
+    text = _ASSIGNMENT.sub(_redact_assignment, text)
     return text
 
 
