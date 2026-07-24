@@ -428,6 +428,98 @@ def test_vault_to_kb_deduplicates_pending_proposals(
     )
 
 
+def test_vault_to_kb_second_different_edit_files_new_proposal(
+    store: KBStore, vault: Path,
+) -> None:
+    """A second, *different* edit made while the first proposal is still
+    pending must file its own proposal. The dedup helper documents exactly
+    this ("allowing a second different vault edit to file a new proposal
+    even while the first is still pending"), but the call site never passed
+    ``body``, so the page-id-only match swallowed the second edit and
+    misreported it as unchanged."""
+    kb_to_vault(store, vault)
+    mirror = vault / VAULT_DIR / "pages" / "alpha-page.md"
+    base = mirror.read_text(encoding="utf-8")
+
+    mirror.write_text(
+        base.replace("Original body.", "Edit A."), encoding="utf-8"
+    )
+    r1 = vault_to_kb(store, vault, actor="vault-sync")
+    assert "alpha-page" in r1.pages_proposed
+
+    mirror.write_text(
+        base.replace("Original body.", "Edit B."), encoding="utf-8"
+    )
+    r2 = vault_to_kb(store, vault, actor="vault-sync")
+    assert "alpha-page" in r2.pages_proposed, (
+        "second different edit was misclassified as unchanged: "
+        f"{r2.pages_skipped_unchanged}"
+    )
+    proposals = list((store.kb_dir / "proposed").glob("*.yaml"))
+    assert len(proposals) == 2
+
+
+def test_vault_to_kb_frontmatter_only_edit_files_new_proposal(
+    store: KBStore, vault: Path,
+) -> None:
+    """A second edit that changes only frontmatter (body untouched) is
+    still a different edit and must file its own proposal — the dedup
+    fingerprint covers the whole file, not just the body."""
+    kb_to_vault(store, vault)
+    mirror = vault / VAULT_DIR / "pages" / "alpha-page.md"
+    base = mirror.read_text(encoding="utf-8")
+    assert "title: Alpha page" in base
+
+    mirror.write_text(
+        base.replace("title: Alpha page", "title: Alpha page (draft)"),
+        encoding="utf-8",
+    )
+    r1 = vault_to_kb(store, vault, actor="vault-sync")
+    assert "alpha-page" in r1.pages_proposed
+
+    mirror.write_text(
+        base.replace("title: Alpha page", "title: Alpha page (final)"),
+        encoding="utf-8",
+    )
+    r2 = vault_to_kb(store, vault, actor="vault-sync")
+    assert "alpha-page" in r2.pages_proposed, (
+        "frontmatter-only edit was misclassified as unchanged: "
+        f"{r2.pages_skipped_unchanged}"
+    )
+    proposals = list((store.kb_dir / "proposed").glob("*.yaml"))
+    assert len(proposals) == 2
+
+
+def test_sync_vault_preserves_second_edit_while_first_pending(
+    store: KBStore, vault: Path,
+) -> None:
+    """sync_vault's contract is that the forward pass captures user edits as
+    proposals *before* the backward pass overwrites the mirror. A second
+    different edit while the first proposal is pending must therefore end up
+    in a proposal — not be skipped forward and then destroyed backward."""
+    sync_vault(store, vault)
+    mirror = vault / VAULT_DIR / "pages" / "alpha-page.md"
+    base = mirror.read_text(encoding="utf-8")
+
+    mirror.write_text(
+        base.replace("Original body.", "Edit A."), encoding="utf-8"
+    )
+    sync_vault(store, vault)
+
+    mirror.write_text(
+        base.replace("Original body.", "Edit B."), encoding="utf-8"
+    )
+    sync_vault(store, vault)
+
+    proposals = list((store.kb_dir / "proposed").glob("*.yaml"))
+    assert any(
+        "Edit B." in p.read_text(encoding="utf-8") for p in proposals
+    ), (
+        "edit B was silently destroyed: not captured in any proposal, and "
+        "the backward pass rewrote the mirror with KB-canonical content"
+    )
+
+
 def test_vault_to_kb_warns_on_claim_stub_edit(
     store: KBStore, vault: Path, caplog: pytest.LogCaptureFixture,
 ) -> None:

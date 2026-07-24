@@ -89,6 +89,16 @@ All notable changes to vouch are documented here. Format follows
   per-prompt block, the session banner, `vouch status` and the opt-in
   question all say so rather than calling it "this repo's" knowledge.
 
+### Fixed
+- vault sync no longer destroys a second vault edit made while the first
+  proposal is still pending. the pending-proposal dedup matched on page id
+  alone (its body-aware mode was never wired to the call site), so the
+  forward pass skipped the new edit as "unchanged" and the backward pass
+  then rewrote the mirror with KB-canonical content — the edit vanished
+  with no proposal, no warning, and no file. the dedup now compares the
+  edited body, so a genuinely different edit files its own proposal while
+  duplicate re-runs still coalesce.
+
 ## [1.5.0] — 2026-07-20
 
 ### Added
