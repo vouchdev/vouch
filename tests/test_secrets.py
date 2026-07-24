@@ -120,7 +120,9 @@ def test_masks_quoted_value_with_whitespace_and_escapes() -> None:
     assert "hunter2" not in out
     assert out == '"password": "[redacted-secret]"'
 
-    escaped = '"password": "say \"hi\" nowxx"'
+    # Value body includes escaped quotes: say \"hi\" nowxx
+    escaped = '"password": "say \\"hi\\" nowxx"'
+    assert '\\"hi\\"' in escaped
     out2 = mask_secrets(escaped)
     assert "nowxx" not in out2
     assert out2 == '"password": "[redacted-secret]"'
