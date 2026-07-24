@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from vouch import recall
-from vouch.models import ClaimStatus
+from vouch.models import ClaimStatus, PageStatus
 from vouch.proposals import approve, propose_claim, propose_page
 from vouch.storage import KBStore, _starter_config
 
@@ -45,6 +45,18 @@ def test_digest_excludes_retracted_claims(store: KBStore) -> None:
     d = recall.build_digest(store)
     assert "live fact" in d
     assert "archived fact" not in d
+
+
+def test_digest_excludes_archived_pages(store: KBStore) -> None:
+    _approve_page(store, "live design")
+    archived = _approve_page(store, "obsolete design")
+    archived.status = PageStatus.ARCHIVED
+    store.update_page(archived)
+
+    d = recall.build_digest(store)
+
+    assert "live design" in d
+    assert "obsolete design" not in d
 
 
 def test_empty_kb_digest_is_empty(store: KBStore) -> None:
