@@ -113,18 +113,40 @@ export function PendingView() {
   const clearTargets = rows.filter((r) => hasMethod('kb.reject', r.project.conn.endpoint))
   const canClear = clearTargets.length > 0
   // Intersect with the live queue: a proposal decided elsewhere mid-selection
-  // must not be sent to merge. Merge combines proposals inside ONE KB — a
-  // mixed-project selection cannot be merged.
+  // must not be acted on. Merge combines PAGES inside ONE KB; batch-approve can
+  // target any approvable row, across projects.
   const checkedRows = rows.filter((r) => checked.has(rowKey(r)))
-  const mergeProject = checkedRows[0]?.project ?? null
-  const mergeSameProject = checkedRows.every((r) => r.project === mergeProject)
-  const mergeIds = mergeSameProject ? checkedRows.map((r) => r.proposal.id) : []
+  const mergeRows = checkedRows.filter((r) => r.proposal.kind === 'page')
+  const mergeProject = mergeRows[0]?.project ?? null
+  const mergeSameProject = mergeRows.every((r) => r.project === mergeProject)
+  const mergeIds = mergeSameProject ? mergeRows.map((r) => r.proposal.id) : []
+  // Batch approve: every row whose endpoint advertises kb.approve is selectable;
+  // the action targets the checked subset.
+  const approvableRows = rows.filter((r) => hasMethod('kb.approve', r.project.conn.endpoint))
+  const approveTargets = approvableRows.filter((r) => checked.has(rowKey(r)))
+  const allApprovableChecked =
+    approvableRows.length > 0 && approveTargets.length === approvableRows.length
+  const canCheck = (r: Row) =>
+    hasMethod('kb.approve', r.project.conn.endpoint) || (canMerge && r.proposal.kind === 'page')
 
   function toggleChecked(key: string) {
     setChecked((prev) => {
       const next = new Set(prev)
       if (next.has(key)) next.delete(key)
       else next.add(key)
+      return next
+    })
+  }
+
+  function toggleAllApprovable() {
+    setChecked((prev) => {
+      const next = new Set(prev)
+      const keys = approvableRows.map(rowKey)
+      const allOn = keys.length > 0 && keys.every((k) => next.has(k))
+      for (const k of keys) {
+        if (allOn) next.delete(k)
+        else next.add(k)
+      }
       return next
     })
   }
@@ -226,6 +248,26 @@ export function PendingView() {
       setSelectedKey(`${vars.project.conn.endpoint} ${res.proposal_id}`)
       void qc.invalidateQueries({ queryKey: ['pending'] })
       void qc.invalidateQueries({ queryKey: ['stats'] })
+    },
+  })
+
+  // Batch approve: approve every checked approvable row. No bulk endpoint exists —
+  // loop client-side per project, the same shape as clear (reject-all).
+  const approveSelected = useMutation({
+    mutationFn: async () => {
+      const results = await Promise.allSettled(
+        approveTargets.map((r) =>
+          rpc(r.project.conn, 'kb.approve', { proposal_id: r.proposal.id }),
+        ),
+      )
+      const ok = results.filter((x) => x.status === 'fulfilled').length
+      return { ok, failed: results.length - ok }
+    },
+    onError: decisionFailed,
+    onSuccess: ({ ok, failed }) => {
+      toast(failed ? 'info' : 'success', `Approved ${ok}${failed ? ` (${failed} failed)` : ''}`)
+      setChecked(new Set())
+      afterDecision()
     },
   })
 
@@ -378,7 +420,43 @@ export function PendingView() {
               <span className="text-xs text-sepia">reject all {clearTargets.length} pending at once</span>
             </div>
           ))}
-        {canMerge && checkedRows.length >= 2 && (
+        {approvableRows.length > 0 && (
+          <div className="flex items-center gap-3 border-b border-rule bg-paper-2 px-4 py-2.5">
+            <label className="flex cursor-pointer items-center gap-2 text-xs text-ink-2">
+              <input
+                type="checkbox"
+                aria-label="select all pending"
+                checked={allApprovableChecked}
+                onChange={toggleAllApprovable}
+                className="accent-accent"
+              />
+              select all
+            </label>
+            {approveTargets.length >= 1 && (
+              <>
+                <button
+                  onClick={() => approveSelected.mutate()}
+                  disabled={approveSelected.isPending}
+                  className="flex items-center gap-2 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-paper transition hover:bg-accent-2 disabled:opacity-40"
+                >
+                  {approveSelected.isPending ? (
+                    <LoaderCircle size={13} className="animate-spin" />
+                  ) : (
+                    <Check size={13} />
+                  )}
+                  Approve {approveTargets.length} selected
+                </button>
+                <button
+                  onClick={() => setChecked(new Set())}
+                  className="text-xs text-sepia transition hover:text-ink"
+                >
+                  clear
+                </button>
+              </>
+            )}
+          </div>
+        )}
+        {canMerge && mergeRows.length >= 2 && (
           <div className="flex items-center gap-3 border-b border-rule bg-paper-2 px-4 py-2.5">
             <button
               onClick={() => merge.mutate({ project: mergeProject!, ids: mergeIds })}
@@ -386,7 +464,7 @@ export function PendingView() {
               title={mergeSameProject ? undefined : 'merge combines proposals within one project'}
               className="flex items-center gap-2 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-paper transition hover:bg-accent-2 disabled:opacity-40"
             >
-              <Merge size={13} /> Merge {checkedRows.length} into one
+              <Merge size={13} /> Merge {mergeRows.length} into one
             </button>
             {!mergeSameProject && (
               <span className="text-xs text-accent-2">pick pages from one project</span>
@@ -402,11 +480,11 @@ export function PendingView() {
         <ul className="min-h-0 flex-1 overflow-y-auto">
           {rows.map((r) => (
             <li key={rowKey(r)} className="flex items-stretch border-b border-rule/60">
-              {canMerge && r.proposal.kind === 'page' && (
+              {canCheck(r) && (
                 <label className="flex shrink-0 cursor-pointer items-start py-5 pl-4">
                   <input
                     type="checkbox"
-                    aria-label={`select ${r.proposal.id} for merge`}
+                    aria-label={`select ${r.proposal.id}`}
                     checked={checked.has(rowKey(r))}
                     onChange={() => toggleChecked(rowKey(r))}
                     className="accent-accent"
