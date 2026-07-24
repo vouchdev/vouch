@@ -1793,9 +1793,19 @@ def propose_claim_cmd(
     "--no-approve", is_flag=True,
     help="File the claims but never auto-approve, even if the receipt gate is on.",
 )
+@click.option(
+    "--max-claims", type=int, default=None,
+    help="Keep only the N most information-dense spans (density selection). "
+         "Unset captures every quotable span.",
+)
+@click.option(
+    "--budget-chars", type=int, default=None,
+    help="Keep the densest spans that fit within this many characters.",
+)
 @click.option("--json", "as_json", is_flag=True, help="Emit source id + counts as json.")
 def ingest_cmd(
-    path: Path, title: str | None, no_approve: bool, as_json: bool
+    path: Path, title: str | None, no_approve: bool,
+    max_claims: int | None, budget_chars: int | None, as_json: bool,
 ) -> None:
     """Ingest a file as a source and extract receipt-backed claims from it.
 
@@ -1803,6 +1813,10 @@ def ingest_cmd(
     against the source is approved with no human -- "run vouch on a doc and it
     just captures the knowledge." Without the gate the claims are filed pending
     for review; a claim that cannot quote its source is never rubber-stamped.
+
+    --max-claims / --budget-chars bound the capture to the most informative
+    spans instead of restating the whole document -- the selection knob that
+    keeps the facts worth a claim and drops filler.
     """
     from . import extract as extract_mod
 
@@ -1813,6 +1827,8 @@ def ingest_cmd(
             proposed_by=_whoami(),
             title=title or path.name,
             auto_approve=not no_approve,
+            max_claims=max_claims,
+            budget_chars=budget_chars,
         )
     pending = sum(
         1 for p in store.list_proposals(ProposalStatus.PENDING)
