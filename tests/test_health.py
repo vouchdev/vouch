@@ -6,8 +6,15 @@ from pathlib import Path
 
 import pytest
 
-from vouch import health, index_db
-from vouch.models import Claim, ClaimStatus, Proposal, ProposalKind, ProposalStatus
+from vouch import health, index_db, proposals
+from vouch.models import (
+    Claim,
+    ClaimStatus,
+    Entity,
+    Proposal,
+    ProposalKind,
+    ProposalStatus,
+)
 from vouch.storage import KBStore, _yaml_dump
 
 
@@ -294,6 +301,75 @@ def test_fsck_decided_missing_artifact(store: KBStore) -> None:
     report = health.fsck(store)
     codes = {f.code for f in report.findings}
     assert "decided_missing_artifact" in codes
+
+
+def _approve_entity_delete(store: KBStore) -> Entity:
+    """Create and then delete an entity through the real review gate."""
+    created = proposals.propose_entity(
+        store, name="acme example", entity_type="company", proposed_by="agent",
+    )
+    entity = proposals.approve(store, created.id, approved_by="reviewer")
+    assert isinstance(entity, Entity)
+    deletion = proposals.propose_delete(
+        store, target_kind="entity", target_id=entity.id, proposed_by="agent",
+    )
+    proposals.approve(store, deletion.id, approved_by="reviewer")
+    return entity
+
+
+def test_fsck_approved_delete_with_artifact_gone_is_clean(store: KBStore) -> None:
+    """An approved delete whose target is gone is the healthy case.
+
+    Regression: the presence map only covered create kinds, so any KB with
+    an approved delete proposal crashed fsck with a KeyError.
+    """
+    _approve_entity_delete(store)
+
+    report = health.fsck(store)
+    codes = {f.code for f in report.findings}
+    assert "decided_missing_artifact" not in codes
+    assert "decided_delete_artifact_present" not in codes
+    assert report.ok is True
+
+
+def test_fsck_flags_approved_delete_artifact_still_present(store: KBStore) -> None:
+    """An approved delete whose target survived on disk is the drift case —
+    a crash between the artifact removal and the decided-move leaves the
+    target in place; simulate it by recreating the entity after approval."""
+    entity = _approve_entity_delete(store)
+    store.put_entity(entity)
+
+    report = health.fsck(store)
+    codes = {f.code for f in report.findings}
+    assert "decided_delete_artifact_present" in codes
+    assert report.ok is False
+
+
+def test_fsck_flags_approved_delete_with_invalid_target_kind(
+    store: KBStore,
+) -> None:
+    """A decided delete with an unknown target_kind is drift, not clean.
+
+    No current write path produces this (propose_delete validates the
+    kind), so hand-land the decided YAML the way an older writer or a
+    hand edit could have left it — fsck is the after-the-fact net.
+    """
+    store.put_proposal(Proposal(
+        id="prop-del-bad",
+        kind=ProposalKind.DELETE,
+        proposed_by="agent",
+        payload={"target_kind": "wormhole", "id": "x", "snapshot": {}},
+        status=ProposalStatus.APPROVED,
+    ))
+    src_path = store.kb_dir / "proposed" / "prop-del-bad.yaml"
+    dst_path = store.kb_dir / "decided" / "prop-del-bad.yaml"
+    dst_path.write_text(src_path.read_text())
+    src_path.unlink()
+
+    report = health.fsck(store)
+    codes = {f.code for f in report.findings}
+    assert "decided_delete_invalid_target_kind" in codes
+    assert report.ok is False
 
 
 def test_fsck_index_orphan_row(store: KBStore) -> None:
