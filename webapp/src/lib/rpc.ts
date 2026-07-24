@@ -44,7 +44,28 @@ export async function rpc<T>(
   if (!body.ok || body.error) {
     throw new VouchRpcError(body.error?.code ?? 'unknown', body.error?.message ?? 'unknown error')
   }
-  return body.result as T
+  return unwrapListEnvelope(method, body.result) as T
+}
+
+/**
+ * `kb.list_*` results moved from a bare array to a `{ items, _meta }` dict
+ * envelope (server deprecation, remove_in 1.4.0). Consumers still type these
+ * as flat arrays, so unwrap `items` here and keep tolerating the old shape —
+ * one place, so the fan-out, optimistic caches, and views are untouched.
+ * `kb.list_sessions` keeps its own `{ sessions }` key and has no `items`, so it
+ * passes through unchanged.
+ */
+function unwrapListEnvelope<T>(method: string, result: T): T {
+  if (
+    method.startsWith('kb.list_') &&
+    result !== null &&
+    typeof result === 'object' &&
+    !Array.isArray(result) &&
+    Array.isArray((result as { items?: unknown }).items)
+  ) {
+    return (result as unknown as { items: T }).items
+  }
+  return result
 }
 
 export async function fetchHealth(conn: VouchConnectionInfo): Promise<boolean> {
