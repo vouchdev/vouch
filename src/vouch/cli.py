@@ -73,6 +73,7 @@ from .proposals import (
     ProposalError,
     check_approvable,
     expire_pending,
+    missing_claim_refs,
     propose_claim,
     propose_delete,
     propose_entity,
@@ -1596,7 +1597,19 @@ def triage(proposal_ids: tuple[str, ...], as_json: bool, reverse: bool) -> None:
     help="Best-effort: approve every id that can be approved and report the "
     "rest, instead of the default all-or-nothing precheck.",
 )
-def approve(proposal_ids: tuple[str, ...], reason: str | None, keep_going: bool) -> None:
+@click.option(
+    "--drop-missing-claims",
+    is_flag=True,
+    help="Strip references to claims that no longer exist from page "
+    "proposals instead of refusing to approve them (dropped ids are "
+    "recorded in the audit event).",
+)
+def approve(
+    proposal_ids: tuple[str, ...],
+    reason: str | None,
+    keep_going: bool,
+    drop_missing_claims: bool,
+) -> None:
     """Approve one or more proposals — converts each into a durable artifact.
 
     Pass several ids to approve a batch in one call (useful for CI and
@@ -1611,16 +1624,46 @@ def approve(proposal_ids: tuple[str, ...], reason: str | None, keep_going: bool)
       aborts the whole batch and nothing is approved.
     - --keep-going (best-effort): approve each id independently, report the
       failures, and exit non-zero if any failed.
+
+    A page proposal citing claims that no longer exist blocks the batch;
+    interactively you are offered to strip the dead references, and
+    --drop-missing-claims does the same without the prompt.
     """
     store = _load_store()
     approver = _whoami()
 
     if not keep_going:
-        blocked = [
-            (pid, reason_blocked)
-            for pid in proposal_ids
-            if (reason_blocked := check_approvable(store, pid, approved_by=approver))
-        ]
+        blocked: list[tuple[str, str]] = []
+        dead_blocked: list[tuple[str, list[str]]] = []
+        for pid in proposal_ids:
+            why = check_approvable(store, pid, approved_by=approver)
+            if not why:
+                continue
+            # A dead claim reference is a decision, not a defect: offer the
+            # strip-and-approve path instead of a hard abort. Any other block
+            # (typo, already decided, self-approval) still aborts the batch.
+            if "references unknown claim" in why:
+                dead = missing_claim_refs(store, store.get_proposal(pid))
+                if dead:
+                    dead_blocked.append((pid, dead))
+                    continue
+            blocked.append((pid, why))
+        if dead_blocked and not drop_missing_claims:
+            for pid, dead in dead_blocked:
+                click.echo(
+                    f"! {pid}: cites missing claim(s): {', '.join(dead)}", err=True
+                )
+            if sys.stdin.isatty() and click.confirm(
+                f"strip the dead claim reference(s) from {len(dead_blocked)} "
+                "proposal(s) and approve?"
+            ):
+                drop_missing_claims = True
+            else:
+                blocked.extend(
+                    (pid, f"cites missing claim(s): {', '.join(dead)} "
+                     "(use --drop-missing-claims to strip them)")
+                    for pid, dead in dead_blocked
+                )
         if blocked:
             for pid, why in blocked:
                 click.echo(f"✗ {pid}: {why}", err=True)
@@ -1632,7 +1675,10 @@ def approve(proposal_ids: tuple[str, ...], reason: str | None, keep_going: bool)
     failures = 0
     for pid in proposal_ids:
         try:
-            artifact = do_approve(store, pid, approved_by=approver, reason=reason)
+            artifact = do_approve(
+                store, pid, approved_by=approver, reason=reason,
+                drop_missing_claims=drop_missing_claims,
+            )
         except (ArtifactNotFoundError, ValueError, ProposalError, LifecycleError) as e:
             failures += 1
             click.echo(f"✗ {pid}: {e}", err=True)
@@ -2592,6 +2638,53 @@ def claims_clear(auto_only: bool, before: str | None, confirm: bool, dry_run: bo
         )
 
     click.echo(f"cleared {len(to_clear)} claims")
+
+
+@cli.command(name="wipe-dead-refs")
+@click.option("--dry-run", is_flag=True, default=False,
+              help="Preview what would be stripped without making changes")
+@click.option("--confirm", "skip_confirm", is_flag=True, default=False,
+              help="Skip confirmation prompt")
+def wipe_dead_refs(dry_run: bool, skip_confirm: bool) -> None:
+    """Strip references to claims that no longer exist, KB-wide.
+
+    Scans durable pages and pending page proposals for claim ids that
+    resolve to no claim file (archived claims still resolve) and removes
+    them — frontmatter list and inline [claim: …] markers both. One
+    audited bulk event records what was removed. Run after claims were
+    redacted or bulk-cleared and lint reports orphan_page_ref.
+    """
+    store = _load_store()
+    with _cli_errors():
+        preview = life.wipe_dead_claim_refs(store, actor=_whoami(), dry_run=True)
+
+    if not preview.pages and not preview.proposals:
+        click.echo("no dead claim references found")
+        return
+
+    click.echo(f"found {preview.dropped} dead claim reference(s):")
+    for page_id, dead in preview.pages.items():
+        click.echo(f"  page {page_id}: {', '.join(dead)}")
+    for pid, dead in preview.proposals.items():
+        click.echo(f"  proposal {pid}: {', '.join(dead)}")
+
+    if dry_run:
+        click.echo("(dry-run mode: no changes made)")
+        return
+
+    if not skip_confirm and not click.confirm(
+        f"\nStrip {preview.dropped} dead reference(s)?"
+    ):
+        click.echo("cancelled")
+        return
+
+    with _cli_errors():
+        result = life.wipe_dead_claim_refs(store, actor=_whoami(), dry_run=False)
+    click.echo(
+        f"stripped {result.dropped} dead reference(s) from "
+        f"{len(result.pages)} page(s) and {len(result.proposals)} "
+        "pending proposal(s)"
+    )
 
 
 @cli.command()

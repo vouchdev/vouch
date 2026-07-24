@@ -67,6 +67,7 @@ METHODS = [
     "kb.archive",
     "kb.confirm",
     "kb.clear_claims",
+    "kb.wipe_dead_refs",
     "kb.cite",
     "kb.source_verify",
     "kb.session_start",

@@ -46,6 +46,7 @@ from .models import ProposalStatus
 from .page_filters import filter_pages
 from .proposals import (
     EXPIRE_ACTOR,
+    DeadClaimRefsError,
     ProposalError,
     approve,
     expire_pending,
@@ -508,7 +509,8 @@ def _h_propose_delete(p: dict) -> dict:
 
 def _h_approve(p: dict) -> dict:
     a = approve(_store(), p["proposal_id"], approved_by=_agent(),
-                reason=p.get("reason"))
+                reason=p.get("reason"),
+                drop_missing_claims=bool(p.get("drop_missing_claims", False)))
     return {"kind": type(a).__name__.lower(), "id": a.id}
 
 
@@ -558,6 +560,18 @@ def _h_contradict(p: dict) -> dict:
 def _h_archive(p: dict) -> dict:
     c = life.archive(_store(), claim_id=p["claim_id"], actor=_agent())
     return {"id": c.id, "status": c.status.value}
+
+
+def _h_wipe_dead_refs(p: dict) -> dict:
+    r = life.wipe_dead_claim_refs(
+        _store(), actor=_agent(), dry_run=bool(p.get("dry_run", False)),
+    )
+    return {
+        "pages": r.pages,
+        "proposals": r.proposals,
+        "dropped": r.dropped,
+        "dry_run": r.dry_run,
+    }
 
 
 def _h_confirm(p: dict) -> dict:
@@ -885,6 +899,7 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.archive": _h_archive,
     "kb.confirm": _h_confirm,
     "kb.clear_claims": _h_clear_claims,
+    "kb.wipe_dead_refs": _h_wipe_dead_refs,
     "kb.cite": _h_cite,
     "kb.source_verify": _h_source_verify,
     "kb.session_start": _h_session_start,
@@ -940,6 +955,14 @@ def handle_request(envelope: dict) -> dict:
         return {
             "id": req_id, "ok": False,
             "error": {"code": "missing_param", "message": str(e)},
+        }
+    except DeadClaimRefsError as e:
+        # Distinct code so interactive clients can offer "strip dead refs
+        # and approve" and retry with drop_missing_claims — a message-match
+        # on invalid_request would be a brittle contract.
+        return {
+            "id": req_id, "ok": False,
+            "error": {"code": "dead_claim_refs", "message": str(e)},
         }
     except (ValueError, ProposalError, ArtifactNotFoundError) as e:
         return {
