@@ -312,6 +312,16 @@ def parse_codex_transcript(path: Path, *, max_messages: int = 2000) -> dict[str,
                     session["git_branch"] = git["branch"]
                 continue
 
+            # codex records the turn's model on `turn_context`, not on
+            # `session_meta`, so without this the normalized transcript's model
+            # is always none for codex while the claude parser fills it. first
+            # non-empty wins (the model can change across turns; keep the first).
+            if rtype == "turn_context":
+                model = payload.get("model")
+                if isinstance(model, str) and model.strip() and session["model"] is None:
+                    session["model"] = model.strip()
+                continue
+
             if rtype != "response_item":
                 continue
             if len(messages) >= max_messages:
