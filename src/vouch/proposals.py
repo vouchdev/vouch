@@ -191,7 +191,7 @@ def propose_claim(
                 raise ProposalError(f"unknown source/evidence id: {eid}") from e
     claim_id = slug_hint or _slugify(text)
     claim_text = text.strip()
-    payload = {
+    payload: dict[str, Any] = {
         "id": claim_id,
         "text": claim_text,
         "type": claim_type,
@@ -201,6 +201,16 @@ def propose_claim(
         "tags": tags or [],
     }
     _stamp_scope(store, payload, scope)
+    # Validate against the Claim model itself (same check approve()'s
+    # Claim(**payload) construction and the batch precheck in
+    # _payload_block_reason both already perform) so an out-of-range
+    # confidence or other model-level constraint violation is rejected here,
+    # at propose time, rather than filing a proposal that can never pass
+    # approve() and sits stuck in the pending queue until someone notices.
+    try:
+        Claim(**payload)
+    except (ValidationError, TypeError) as e:
+        raise ProposalError(f"invalid claim payload: {e}") from e
     exclude_claim: str | None = None
     if (store.kb_dir / "claims" / f"{claim_id}.yaml").exists():
         exclude_claim = claim_id
@@ -355,13 +365,23 @@ def propose_entity(
 ) -> Proposal:
     if not name.strip():
         raise ProposalError("entity name is empty")
-    payload = {
+    payload: dict[str, Any] = {
         "id": slug_hint or _slugify(name),
         "name": name.strip(),
         "type": entity_type,
         "aliases": aliases or [],
         "description": description,
     }
+    # Validate against the Entity model itself (same check approve()'s
+    # Entity(**payload) construction and the batch precheck in
+    # _payload_block_reason both already perform) so an invalid entity type
+    # is rejected here, at propose time, rather than filing a proposal that
+    # can never pass approve() and sits stuck in the pending queue until
+    # someone notices.
+    try:
+        Entity(**payload)
+    except (ValidationError, TypeError) as e:
+        raise ProposalError(f"invalid entity payload: {e}") from e
     return _file_proposal(
         store, kind=ProposalKind.ENTITY, payload=payload,
         proposed_by=proposed_by, session_id=session_id,
@@ -410,7 +430,7 @@ def propose_relation(
                     f"unknown source/evidence id: {eid}"
                 ) from e
     rid = f"{src}--{relation}--{target}"
-    payload = {
+    payload: dict[str, Any] = {
         "id": _slugify(rid),
         "source": src,
         "relation": relation,
@@ -418,6 +438,16 @@ def propose_relation(
         "confidence": confidence,
         "evidence": evidence or [],
     }
+    # Validate against the Relation model itself (same check approve()'s
+    # Relation(**payload) construction and the batch precheck in
+    # _payload_block_reason both already perform) so an out-of-range
+    # confidence or an invalid relation type is rejected here, at propose
+    # time, rather than filing a proposal that can never pass approve() and
+    # sits stuck in the pending queue until someone notices.
+    try:
+        Relation(**payload)
+    except (ValidationError, TypeError) as e:
+        raise ProposalError(f"invalid relation payload: {e}") from e
     return _file_proposal(
         store, kind=ProposalKind.RELATION, payload=payload,
         proposed_by=proposed_by, session_id=session_id,
