@@ -281,6 +281,12 @@ All notable changes to vouch are documented here. Format follows
 - demo image build: `hatch_build.py` (the build hook pyproject.toml
   declares for console bundling) is copied into the docker build context;
   the image had been unbuildable since the hook landed (#474).
+- `recall.load_config` and `capture.load_config` now degrade to their
+  defaults on a malformed numeric value (e.g. `max_chars: a lot`), matching
+  the fallback contract their docstrings already promised and the pattern
+  `compile.load_config` already used. previously a config typo raised an
+  uncaught `ValueError` out of the SessionStart recall hook and any
+  hook-driven `observe()`/`finalize()` call (#488).
 
 ## [1.3.0] — 2026-07-14
 

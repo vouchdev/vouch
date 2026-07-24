@@ -93,6 +93,17 @@ def test_load_config_recall_not_a_mapping(store: KBStore) -> None:
     assert recall.load_config(store).enabled is True
 
 
+def test_load_config_bad_max_chars_falls_back_to_default(store: KBStore) -> None:
+    # a config typo (max_chars: a lot) must degrade, not take down the
+    # SessionStart hook that reads this config on every new session.
+    store.config_path.write_text(
+        "recall:\n  enabled: true\n  max_chars: a lot\n", encoding="utf-8"
+    )
+    cfg = recall.load_config(store)
+    assert cfg.enabled is True
+    assert cfg.max_chars == recall.DEFAULT_MAX_CHARS
+
+
 def test_cli_recall_emits_digest(store: KBStore) -> None:
     from click.testing import CliRunner
 
