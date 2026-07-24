@@ -39,7 +39,7 @@ _BEARER = re.compile(r"(?i)\b(Bearer)\s+[A-Za-z0-9._~+/=-]{10,}")
 # name so the redaction is legible.
 _ASSIGNMENT = re.compile(
     r"(?i)\b(api[_-]?key|secret|token|password|passwd|pwd|access[_-]?key)\b"
-    r"(\s*[:=]\s*)"
+    r"([\"']?\s*[:=]\s*)"
     r"[\"']?[^\s\"']{6,}[\"']?"
 )
 

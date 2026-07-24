@@ -103,3 +103,22 @@ def test_cli_redact_command(tmp_path, monkeypatch) -> None:
     result = CliRunner().invoke(cli, ["redact", "c1"])
     assert result.exit_code == 0, result.output
     assert "ghp_" not in store.get_claim("c1").text
+
+
+def test_masks_json_quoted_key_credentials() -> None:
+    """JSON / quoted-key forms must not leak past the assignment mask (#549)."""
+    cases = (
+        '"password": "hunter2secret"',
+        "'api_key': 'abcdefghij'",
+        '"token" : "abcdefghij"',
+    )
+    for text in cases:
+        out = mask_secrets(text)
+        assert "hunter2secret" not in out
+        assert "abcdefghij" not in out
+        assert REDACTION in out
+
+
+def test_masks_plain_assignment_still_works() -> None:
+    assert "hunter2secret" not in mask_secrets("password=hunter2secret")
+    assert "hunter2secret" not in mask_secrets("password: hunter2secret")
