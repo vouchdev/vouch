@@ -273,6 +273,13 @@ All notable changes to vouch are documented here. Format follows
   in config.yaml (#476).
 
 ### Fixed
+- `sync_vault` catches the `ProposalError` that `propose_page` raises for a
+  deleted citation, not just `ArtifactNotFoundError`. a vault edit to a page
+  whose cited claim/entity/source was since removed hit propose_page's id
+  validation, which converts the miss to `ProposalError` — so the
+  `except ArtifactNotFoundError` handler never fired and the error escaped as
+  an uncaught traceback, bypassing the CLI's `except VaultSyncError` renderer.
+  it now surfaces as the intended one-line `VaultSyncError` (#547).
 - approve/reject/expire record the audit event *before* moving the
   proposal to decided/. a crash between the two used to leave a durable
   decision with no authoritative history; it now leaves a pending
