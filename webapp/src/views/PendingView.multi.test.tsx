@@ -77,3 +77,26 @@ test('approve routes to the project the proposal belongs to', async () => {
   const approveCalls = vi.mocked(rpc).mock.calls.filter(([, m]) => m === 'kb.approve')
   expect(approveCalls).toHaveLength(1)
 })
+
+test('batch approve: select all then approve fires kb.approve once per checked row', async () => {
+  renderWithProviders(<PendingView />)
+  await screen.findByText('claim living in project a')
+  await userEvent.click(screen.getByRole('checkbox', { name: /select all pending/i }))
+  await userEvent.click(await screen.findByRole('button', { name: /approve 2 selected/i }))
+
+  await waitFor(() => {
+    const approveCalls = vi.mocked(rpc).mock.calls.filter(([, m]) => m === 'kb.approve')
+    expect(approveCalls).toHaveLength(2)
+  })
+  // each approval routed to the project that owns the proposal
+  const approved = vi
+    .mocked(rpc)
+    .mock.calls.filter(([, m]) => m === 'kb.approve')
+    .map(([conn, , params]) => [conn.endpoint, (params as { proposal_id: string }).proposal_id])
+  expect(approved).toEqual(
+    expect.arrayContaining([
+      [TEST_ENDPOINT, 'prop-from-a'],
+      [TEST_ENDPOINT_B, 'prop-from-b'],
+    ]),
+  )
+})

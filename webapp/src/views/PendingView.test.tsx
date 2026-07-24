@@ -151,10 +151,10 @@ test('merge: selecting two page proposals sends kb.merge_pending and shows the m
     throw new Error(`unexpected ${method}`)
   })
   renderWithProviders(<PendingView />)
-  await userEvent.click(await screen.findByLabelText('select prop-page-a for merge'))
+  await userEvent.click(await screen.findByLabelText('select prop-page-a'))
   // one selection is not mergeable yet
   expect(screen.queryByRole('button', { name: /merge/i })).not.toBeInTheDocument()
-  await userEvent.click(screen.getByLabelText('select prop-page-b for merge'))
+  await userEvent.click(screen.getByLabelText('select prop-page-b'))
   await userEvent.click(screen.getByRole('button', { name: /merge 2 into one/i }))
   await waitFor(() =>
     expect(rpc).toHaveBeenCalledWith(expect.anything(), 'kb.merge_pending', {
@@ -164,7 +164,7 @@ test('merge: selecting two page proposals sends kb.merge_pending and shows the m
   expect(await screen.findByText(/merged 2 → prop-merged/i)).toBeInTheDocument()
 })
 
-test('merge checkboxes are absent when kb.merge_pending is not advertised', async () => {
+test('selection checkbox drives batch-approve; merge button is absent without kb.merge_pending', async () => {
   const pageA = {
     ...PROPOSAL,
     id: 'prop-page-a',
@@ -174,7 +174,11 @@ test('merge checkboxes are absent when kb.merge_pending is not advertised', asyn
   vi.mocked(rpc).mockResolvedValue([pageA])
   renderWithProviders(<PendingView />)
   await screen.findByText(/prop-page-a/)
-  expect(screen.queryByLabelText(/for merge/)).not.toBeInTheDocument()
+  // the row is approvable, so a selection checkbox is present for batch approve …
+  expect(screen.getByLabelText('select prop-page-a')).toBeInTheDocument()
+  // … but with kb.merge_pending unadvertised there is no merge action
+  await userEvent.click(screen.getByLabelText('select prop-page-a'))
+  expect(screen.queryByRole('button', { name: /merge/i })).not.toBeInTheDocument()
 })
 
 test('approve removes the proposal from the queue before the server responds (optimistic)', async () => {
