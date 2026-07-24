@@ -356,6 +356,25 @@ def test_fsck_orphan_embedding(store: KBStore) -> None:
     assert "orphan_embedding" in codes
 
 
+def test_fsck_orphan_embedding_cleared_by_reindex(store: KBStore) -> None:
+    """A reindex is the natural remedy for an orphan embedding, but
+    reset() skipped the legacy `embeddings` table, so the ghost vector
+    survived `vouch index` and the fsck warning could never be cleared."""
+    src = store.put_source(b"e")
+    c = Claim(id="real", text="t", evidence=[src.id])
+    store.put_claim(c)
+    with index_db.open_db(store.kb_dir) as conn:
+        index_db.index_embedding(conn, kind="claim", id="ghost", vec=[0.1, 0.2])
+    assert "orphan_embedding" in {f.code for f in health.fsck(store).findings}
+
+    health.rebuild_index(store)
+
+    report = health.fsck(store)
+    assert "orphan_embedding" not in {f.code for f in report.findings}, (
+        "reindex did not clear the orphaned legacy embedding row"
+    )
+
+
 def test_fsck_surfaces_invalid_claim_yaml_without_crashing(
     store: KBStore,
 ) -> None:

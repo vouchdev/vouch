@@ -47,3 +47,30 @@ def test_index_via_approve(store: KBStore) -> None:
     approve(store, pr.id, approved_by="u")
     hits = index_db.search(store.kb_dir, "indexed")
     assert any(k == "claim" for k, *_ in hits)
+
+
+def test_reset_clears_legacy_embeddings_table(store: KBStore) -> None:
+    """reset() promises to clear every derived table, embedding vectors
+    included — but the legacy `embeddings` table (the one
+    `search_embeddings` scans) was left out, so a deleted artifact's
+    vector survived a full reindex and kept coming back as a semantic
+    hit: exactly the orphaned-hits case the docstring warns about."""
+    with index_db.open_db(store.kb_dir) as conn:
+        index_db.index_embedding(conn, kind="claim", id="ghost", vec=[0.1, 0.2])
+
+    index_db.reset(store.kb_dir)
+
+    with index_db.open_db(store.kb_dir) as conn:
+        count = conn.execute("SELECT COUNT(*) FROM embeddings").fetchone()[0]
+    assert count == 0
+
+
+def test_deindex_removes_legacy_embedding_row(store: KBStore) -> None:
+    """deindex() documents removing the embedding rows for a deleted
+    artifact; it cleared `embedding_index` but left the legacy
+    `embeddings` row behind."""
+    with index_db.open_db(store.kb_dir) as conn:
+        index_db.index_embedding(conn, kind="claim", id="c1", vec=[0.1, 0.2])
+        index_db.deindex(conn, kind="claim", id="c1")
+        count = conn.execute("SELECT COUNT(*) FROM embeddings").fetchone()[0]
+    assert count == 0

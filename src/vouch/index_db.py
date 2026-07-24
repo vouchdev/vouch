@@ -122,6 +122,7 @@ def reset(kb_dir: Path) -> None:
             "DELETE FROM claims_fts;"
             "DELETE FROM pages_fts;"
             "DELETE FROM entities_fts;"
+            "DELETE FROM embeddings;"
             "DELETE FROM embedding_index;"
             "DELETE FROM query_embedding_cache;"
             "DELETE FROM embedding_dupes;"
@@ -190,11 +191,12 @@ def deindex(conn: sqlite3.Connection, *, kind: str, id: str) -> None:
     """Remove every derived index row for a deleted artifact.
 
     FTS row for claim/page/entity (relations have no FTS table); the
-    embedding row for any kind (every put_* calls _embed_and_store, so an
-    embedding may exist for a relation too); and any provenance edge that
-    touches the id. prov_edges is otherwise rebuildable via
-    `kb.provenance_rebuild` — this keeps state.db consistent without a
-    full rebuild.
+    embedding rows for any kind — both the legacy `embeddings` vector
+    table that `search_embeddings` scans and the newer `embedding_index`
+    (every put_* calls _embed_and_store, so an embedding may exist for a
+    relation too); and any provenance edge that touches the id.
+    prov_edges is otherwise rebuildable via `kb.provenance_rebuild` —
+    this keeps state.db consistent without a full rebuild.
     """
     if kind == "claim":
         conn.execute("DELETE FROM claims_fts WHERE id = ?", (id,))
@@ -202,6 +204,9 @@ def deindex(conn: sqlite3.Connection, *, kind: str, id: str) -> None:
         conn.execute("DELETE FROM pages_fts WHERE id = ?", (id,))
     elif kind == "entity":
         conn.execute("DELETE FROM entities_fts WHERE id = ?", (id,))
+    conn.execute(
+        "DELETE FROM embeddings WHERE kind = ? AND id = ?", (kind, id)
+    )
     conn.execute(
         "DELETE FROM embedding_index WHERE kind = ? AND id = ?", (kind, id)
     )
