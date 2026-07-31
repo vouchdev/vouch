@@ -27,6 +27,7 @@ import yaml
 
 from . import __version__, bundle, health, hub_client, volunteer_context
 from . import adopt as adopt_mod
+from . import agent_provision as agent_provision_mod
 from . import agents as agents_mod
 from . import audit as audit_mod
 from . import capture as capture_mod
@@ -121,6 +122,7 @@ def _cli_errors() -> Iterator[None]:
         chatgpt_import_mod.ChatGPTImportError,
         codex_rollout_mod.CodexRolloutError,
         agents_mod.AgentError,
+        agent_provision_mod.AgentProvisionError,
         pins_mod.PinError,
     ) as e:
         raise click.ClickException(str(e)) from e
@@ -162,7 +164,17 @@ def _whoami() -> str:
     # agent invokes the CLI it sets VOUCH_AGENT; honour it as the actor so
     # multi-agent attribution stays consistent across transports. VOUCH_USER
     # remains an escape hatch; OS user is the friendly default for humans.
-    return os.environ.get("VOUCH_AGENT") or os.environ.get("VOUCH_USER") or getpass.getuser()
+    # Agent-provisioned KBs stamp `agent.caller` into config so the proposer
+    # identity survives even when the host forgot to export VOUCH_AGENT.
+    env = os.environ.get("VOUCH_AGENT") or os.environ.get("VOUCH_USER")
+    if env:
+        return env
+    with contextlib.suppress(Exception):
+        store = KBStore(discover_root())
+        stamped = agent_provision_mod.caller_from_store(store)
+        if stamped:
+            return stamped
+    return getpass.getuser()
 
 
 def _emit_json(obj) -> None:
@@ -267,14 +279,83 @@ def _bootstrap_kb(
     type=click.Choice(available_templates()),
     help="Seed preset applied on top of the starter KB.",
 )
-def init(path: str, template: str) -> None:
-    """Initialise a .vouch/ knowledge base at PATH."""
+@click.option(
+    "--agent/--no-agent",
+    default=False,
+    help="Provision an agent-scoped KB + local credential + claim token "
+    "(see --agent-caller). The credential is never printed.",
+)
+@click.option(
+    "--agent-caller",
+    default=None,
+    help="Persistent proposer identity for --agent (required with --agent).",
+)
+@click.option(
+    "--json",
+    "as_json",
+    is_flag=True,
+    help="Emit machine-readable JSON (agent mode: includes claim_command, "
+    "never the credential value).",
+)
+def init(
+    path: str,
+    template: str,
+    agent: bool,
+    agent_caller: str | None,
+    as_json: bool,
+) -> None:
+    """Initialise a .vouch/ knowledge base at PATH.
+
+    With ``--agent``, provisions an agent-scoped KB under the machine data
+    dir (or ``--path``), writes a local credential that is never echoed, and
+    prints a claim token the human runs via ``vouch agents claim``.
+    """
+    if agent_caller and not agent:
+        raise click.UsageError("--agent-caller requires --agent")
+    if agent and not agent_caller:
+        raise click.UsageError("--agent requires --agent-caller")
+
+    if agent:
+        assert agent_caller is not None
+        override = None if path == "." else Path(path).resolve()
+        with _cli_errors():
+            result = agent_provision_mod.provision(
+                agent_caller,
+                bootstrap=lambda root: _bootstrap_kb(root, template=template),
+                path=override,
+                actor=_whoami(),
+            )
+        if as_json:
+            _emit_json(result.public_dict())
+            return
+        rec = result.record
+        verb = "Reused" if not result.created_kb else "Initialised"
+        click.echo(f"{verb} agent KB for {rec.caller!r} at {rec.kb_dir}")
+        click.echo(f"Credential written to {result.credential_path} (not shown)")
+        click.echo("Set this in the agent environment (never paste into chat):")
+        click.echo(f"  export VOUCH_AGENT={rec.caller}")
+        click.echo(f"  export VOUCH_KB_PATH={rec.kb_dir}")
+        click.echo("Claim this agent from a project KB with:")
+        click.echo(f"  vouch agents claim {rec.claim_token}")
+        return
+
     # _cli_errors so a refused identity mint (corrupt config.yaml) reads as
     # a one-line error, not a traceback.
     with _cli_errors():
         store, seed, template_result = _bootstrap_kb(
             Path(path).resolve(), template=template
         )
+    if as_json:
+        _emit_json({
+            "kb_dir": str(store.kb_dir),
+            "root": str(store.root),
+            "starter_created": seed.created_anything,
+            "starter_claim_id": seed.claim_id,
+            "template": (
+                None if template_result is None else template_result.template
+            ),
+        })
+        return
     click.echo(f"Initialised KB at {store.kb_dir}")
     if seed.created_anything:
         click.echo(f"Seeded starter claim: {seed.claim_id}")
@@ -3994,6 +4075,62 @@ def agents_resume(name: str) -> None:
 def agents_revoke(name: str) -> None:
     """Permanently stop this credential. Terminal — issue a new token instead."""
     _transition(name, agents_mod.AgentStatus.REVOKED, "revoked")
+
+
+@agents_group.command("claim")
+@click.argument("token")
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Preview what would move; write nothing and leave the claim token usable.",
+)
+@click.option(
+    "--retire",
+    is_flag=True,
+    help="Archive agent-KB copies of claims that landed durable in the project.",
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit the claim result as JSON.")
+def agents_claim(token: str, dry_run: bool, retire: bool, as_json: bool) -> None:
+    """Bind a provisioned agent to this project KB and adopt its knowledge.
+
+    Run from the project after ``vouch init --agent`` printed a claim token.
+    Ownership transfer goes through the same review gate as ``vouch adopt``;
+    the agent's local credential and agent-KB artifacts stay untouched.
+    """
+    store = _load_store()
+    with _cli_errors():
+        result = agent_provision_mod.claim(
+            token,
+            store,
+            actor=_whoami(),
+            dry_run=dry_run,
+            retire=retire,
+        )
+        # Mirror into the project agent registry (#607) so claim shows up in
+        # `vouch agents list`. Best-effort: a prior manual register must not
+        # block the ownership transfer that already succeeded.
+        if not dry_run and not result.already_claimed:
+            with contextlib.suppress(agents_mod.AgentError):
+                agents_mod.register(
+                    store,
+                    subject=trust_mod.auth_subject_for_token(result.record.credential),
+                    name=result.record.caller,
+                    actor=_whoami(),
+                    note="claimed via vouch agents claim",
+                )
+    if as_json:
+        _emit_json(result.public_dict())
+        return
+    verb = "Already bound" if result.already_claimed else "Claimed"
+    if dry_run:
+        verb = "Would claim"
+    click.echo(
+        f"{verb} agent {result.record.caller!r} → {store.root} "
+        f"(sources={len(result.adopt.sources)}, "
+        f"durable={len(result.adopt.claims_durable)}, "
+        f"pending={len(result.adopt.claims_pending)}, "
+        f"skipped={len(result.adopt.claims_skipped)})"
+    )
 
 
 @cli.command("pin")

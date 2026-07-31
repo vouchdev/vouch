@@ -12,6 +12,7 @@ audit event, so multi-agent setups can attribute writes correctly.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 from pathlib import Path
 from typing import Any
@@ -100,7 +101,18 @@ def _agent() -> str:
     subject = trust_mod.current().auth_subject
     if subject is not None:
         return f"token:{subject}"
-    return os.environ.get("VOUCH_AGENT", "unknown-agent")
+    env = os.environ.get("VOUCH_AGENT")
+    if env:
+        return env
+    # Agent-provisioned KBs stamp `agent.caller` so attribution survives when
+    # the host forgot to export VOUCH_AGENT (issue #606).
+    from . import agent_provision as agent_provision_mod
+
+    with contextlib.suppress(Exception):
+        stamped = agent_provision_mod.caller_from_store(_store())
+        if stamped:
+            return stamped
+    return "unknown-agent"
 
 
 # === capabilities / status ================================================

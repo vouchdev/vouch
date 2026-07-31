@@ -308,6 +308,166 @@ def adopt(
     return report
 
 
+def adopt_kb(
+    project: KBStore,
+    source_kb: KBStore,
+    *,
+    actor: str = ADOPT_ACTOR,
+    retire: bool = False,
+    dry_run: bool = False,
+    origin_label: str | None = None,
+) -> AdoptReport:
+    """Adopt every live source/claim from ``source_kb`` into ``project``.
+
+    Same gate path as :func:`adopt`, but without an origin-folder filter —
+    used when the source KB *is* the agent's own store (issue #606 claim),
+    not a personal catch-all that stamped ``metadata.origin_path``.
+
+    Kept as a sibling of ``adopt`` rather than a rewrite of it: the personal
+    fallback path stays byte-stable; this path is the ownership-transfer
+    surface and carries its own tests in ``tests/test_adopt.py``.
+    """
+    label = origin_label or str(source_kb.root)
+    source_identity = source_kb.identity()
+    project_identity = project.identity()
+    report = AdoptReport(
+        origin=label,
+        from_kb=source_identity[0] if source_identity else None,
+        to_kb=project_identity[0] if project_identity else None,
+        dry_run=dry_run,
+    )
+    sources = list(source_kb.list_sources())
+    if not sources:
+        return report
+    source_ids = {s.id for s in sources}
+    pairs = _claims_citing(source_kb, source_ids)
+    rationale = (
+        f"adopted from agent KB {report.from_kb or '(no id)'} ({label})"
+    )
+
+    if dry_run:
+        report.sources = sorted(
+            sid for sid in source_ids if not _source_exists(project, sid)
+        )
+        queued = _pending_payload_ids(project)
+        gate_open = _receipts_auto_approve(project)
+        for claim, receipt in pairs:
+            if _already_durable(project, claim) or claim.id in queued:
+                report.claims_skipped.append(claim.id)
+            elif receipt is not None and gate_open:
+                report.claims_durable.append(claim.id)
+            else:
+                report.claims_pending.append(claim.id)
+        return report
+
+    for src in sources:
+        if _source_exists(project, src.id):
+            continue
+        content = source_kb.read_source_content(src.id)
+        project.put_source(
+            content,
+            title=src.title,
+            source_type=str(src.type),
+            media_type=src.media_type,
+            tags=_with_tag(src.tags, "adopted"),
+            metadata={
+                **src.metadata,
+                "adopted_from": report.from_kb,
+            },
+            scope=proposals_mod.default_scope(project),
+        )
+        report.sources.append(src.id)
+
+    queued = _pending_payload_ids(project)
+    landed_durable: list[str] = []
+    for claim, receipt in pairs:
+        if _already_durable(project, claim) or claim.id in queued:
+            report.claims_skipped.append(claim.id)
+            continue
+        if receipt is not None and receipt.quote:
+            result = proposals_mod.propose_quoted_claim(
+                project,
+                text=claim.text,
+                source_id=receipt.source_id,
+                quote=receipt.quote,
+                proposed_by=actor,
+                claim_type=str(claim.type),
+                confidence=claim.confidence,
+                tags=_with_tag(claim.tags, "adopted"),
+                rationale=rationale,
+                slug_hint=claim.id,
+            )
+            if result is None:
+                report.claims_skipped.append(claim.id)
+                continue
+            durable = proposals_mod.resolve_pending_receipt_claim(
+                project,
+                result.proposal,
+                actor=actor,
+                reason="adopted from agent KB (receipt re-verified)",
+            )
+            if durable is not None:
+                report.claims_durable.append(durable.id)
+                landed_durable.append(claim.id)
+            else:
+                try:
+                    filed = project.get_proposal(result.proposal.id)
+                except ArtifactNotFoundError:
+                    filed = None
+                if filed is not None and filed.status == ProposalStatus.PENDING:
+                    report.claims_pending.append(claim.id)
+                else:
+                    report.claims_skipped.append(claim.id)
+        else:
+            evidence = [eid for eid in claim.evidence if eid in source_ids]
+            if not evidence:
+                report.claims_skipped.append(claim.id)
+                continue
+            proposals_mod.propose_claim(
+                project,
+                text=claim.text,
+                evidence=evidence,
+                proposed_by=actor,
+                claim_type=str(claim.type),
+                confidence=claim.confidence,
+                tags=_with_tag(claim.tags, "adopted"),
+                rationale=rationale,
+                slug_hint=claim.id,
+            )
+            report.claims_pending.append(claim.id)
+
+    if retire:
+        for claim_id in landed_durable:
+            try:
+                lifecycle.archive(source_kb, claim_id=claim_id, actor=actor)
+            except Exception:
+                continue
+            report.retired.append(claim_id)
+
+    moved = bool(report.sources or report.claims_durable or report.claims_pending)
+    if moved:
+        data = {
+            "origin": report.origin,
+            "sources": len(report.sources),
+            "claims_durable": len(report.claims_durable),
+            "claims_pending": len(report.claims_pending),
+            "retired": len(report.retired),
+        }
+        audit_mod.log_event(
+            project.kb_dir,
+            event="kb.adopt",
+            actor=actor,
+            data={**data, "direction": "in", "from_kb": report.from_kb},
+        )
+        audit_mod.log_event(
+            source_kb.kb_dir,
+            event="kb.adopt",
+            actor=actor,
+            data={**data, "direction": "out", "to_kb": report.to_kb},
+        )
+    return report
+
+
 def _already_durable(project: KBStore, claim: Claim) -> bool:
     try:
         project.get_claim(claim.id)

@@ -517,3 +517,210 @@ def test_global_install_survives_a_failing_personal_kb(
     assert r.exit_code == 0, r.output
     assert "could not set up the personal KB" in r.output
     assert (fake_home / ".claude" / "settings.json").is_file()
+
+
+# --- adopt_kb (agent claim ownership transfer, issue #606) -----------------
+
+
+def _seed_agent_receipt_claim(agent: KBStore) -> tuple[str, str]:
+    """Return (source_id, claim_id) for a receipt-backed durable claim."""
+    from vouch import proposals
+
+    body = (
+        b"The deploy cadence for this service is every second Tuesday.\n"
+        b"Rollbacks use the blue-green switch.\n"
+    )
+    src = agent.put_source(body, title="ops-note", source_type="file")
+    quote = "The deploy cadence for this service is every second Tuesday."
+    filed = proposals.propose_quoted_claim(
+        agent,
+        text=quote,
+        source_id=src.id,
+        quote=quote,
+        proposed_by="agent",
+    )
+    assert filed is not None
+    durable = proposals.resolve_pending_receipt_claim(
+        agent, filed.proposal, actor="agent", reason="trusted-agent"
+    )
+    assert durable is not None
+    return src.id, durable.id
+
+
+def test_adopt_kb_empty_source_returns_quietly(tmp_path: Path) -> None:
+    source = KBStore.init(tmp_path / "agent")
+    project = KBStore.init(tmp_path / "proj")
+    # Drop starter sources so the agent KB is empty of adoptable content.
+    for src in list(source.list_sources()):
+        (source.kb_dir / "sources" / f"{src.id}.yaml").unlink(missing_ok=True)
+        blob = source.kb_dir / "blobs" / src.id
+        if blob.exists():
+            blob.unlink()
+    # list_sources may still see starters via index — use a brand-new empty dir
+    empty = KBStore.init(tmp_path / "empty-agent")
+    # Wipe everything under sources/
+    sources_dir = empty.kb_dir / "sources"
+    if sources_dir.is_dir():
+        for p in sources_dir.iterdir():
+            p.unlink()
+    report = adopt_mod.adopt_kb(project, empty, origin_label="agent:empty")
+    assert report.sources == []
+    assert report.claims_durable == []
+    assert report.origin == "agent:empty"
+
+
+def test_adopt_kb_moves_receipt_claims_through_the_gate(tmp_path: Path) -> None:
+    agent = KBStore.init(tmp_path / "agent")
+    _src_id, claim_id = _seed_agent_receipt_claim(agent)
+    project = KBStore.init(tmp_path / "proj")
+
+    report = adopt_mod.adopt_kb(project, agent, origin_label="agent:ci")
+    assert claim_id in report.claims_durable
+    assert report.sources
+    assert project.get_claim(claim_id).text
+    assert "adopted" in project.get_claim(claim_id).tags
+    proj_events = [e for e in audit.read_events(project.kb_dir) if e.event == "kb.adopt"]
+    assert proj_events and proj_events[0].data["from_kb"] == agent.identity()[0]
+
+
+def test_adopt_kb_dry_run_and_closed_gate(tmp_path: Path) -> None:
+    agent = KBStore.init(tmp_path / "agent")
+    _src_id, claim_id = _seed_agent_receipt_claim(agent)
+    project = KBStore.init(tmp_path / "proj")
+    before = {c.id for c in project.list_claims()}
+
+    preview = adopt_mod.adopt_kb(project, agent, dry_run=True)
+    assert claim_id in preview.claims_durable
+    assert {c.id for c in project.list_claims()} == before
+
+    cfg = yaml.safe_load(project.config_path.read_text(encoding="utf-8"))
+    cfg.setdefault("review", {})["auto_approve_on_receipt"] = False
+    cfg["review"].pop("approver_role", None)
+    project.config_path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+
+    closed_preview = adopt_mod.adopt_kb(project, agent, dry_run=True)
+    assert claim_id in closed_preview.claims_pending
+
+    report = adopt_mod.adopt_kb(project, agent)
+    assert claim_id in report.claims_pending
+    assert claim_id not in report.claims_durable
+
+
+def test_adopt_kb_is_idempotent_and_skips_queued(tmp_path: Path) -> None:
+    agent = KBStore.init(tmp_path / "agent")
+    _src_id, claim_id = _seed_agent_receipt_claim(agent)
+    project = KBStore.init(tmp_path / "proj")
+    first = adopt_mod.adopt_kb(project, agent)
+    assert claim_id in first.claims_durable
+    again = adopt_mod.adopt_kb(project, agent)
+    assert claim_id in again.claims_skipped
+    assert again.sources == []
+
+
+def test_adopt_kb_retire_archives_source_copies(tmp_path: Path) -> None:
+    agent = KBStore.init(tmp_path / "agent")
+    _src_id, claim_id = _seed_agent_receipt_claim(agent)
+    project = KBStore.init(tmp_path / "proj")
+    report = adopt_mod.adopt_kb(project, agent, retire=True)
+    assert claim_id in report.retired
+    assert agent.get_claim(claim_id).status == ClaimStatus.ARCHIVED
+    assert project.get_claim(claim_id).status == ClaimStatus.WORKING
+
+
+def test_adopt_kb_evidence_only_lands_pending(tmp_path: Path) -> None:
+    """Bare source-id evidence (no receipt) always files PENDING."""
+    from vouch.models import Claim
+
+    agent = KBStore.init(tmp_path / "agent")
+    body = b"Bare evidence claim about nightly refresh at 02:00 UTC.\n"
+    src = agent.put_source(body, title="note", source_type="file")
+    claim = agent.put_claim(
+        Claim(id="bare-evidence", text="nightly refresh at 02:00 UTC", evidence=[src.id])
+    )
+    project = KBStore.init(tmp_path / "proj")
+    report = adopt_mod.adopt_kb(project, agent)
+    assert claim.id in report.claims_pending
+    pending = project.list_proposals(ProposalStatus.PENDING)
+    assert any(p.payload.get("id") == claim.id for p in pending)
+
+
+def test_adopt_kb_skips_receiptless_evidence_object_citations(tmp_path: Path) -> None:
+    """Evidence rows without a quote cite the source but cannot re-propose."""
+    from vouch.models import Claim, Evidence
+
+    agent = KBStore.init(tmp_path / "agent")
+    body = b"A source that is only cited via an evidence object, no quote.\n"
+    src = agent.put_source(body, title="note", source_type="file")
+    ev = agent.put_evidence(
+        Evidence(id="ev-no-quote", source_id=src.id, locator="L1", quote=None)
+    )
+    claim = agent.put_claim(
+        Claim(
+            id="via-ev",
+            text="cited only through evidence object",
+            evidence=[ev.id],
+        )
+    )
+    project = KBStore.init(tmp_path / "proj")
+    report = adopt_mod.adopt_kb(project, agent)
+    assert claim.id in report.claims_skipped
+
+
+def test_adopt_kb_retire_continues_when_archive_fails(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from vouch import lifecycle
+
+    agent = KBStore.init(tmp_path / "agent")
+    _src_id, claim_id = _seed_agent_receipt_claim(agent)
+    project = KBStore.init(tmp_path / "proj")
+
+    def boom(*_a, **_k):
+        raise RuntimeError("archive denied")
+
+    monkeypatch.setattr(lifecycle, "archive", boom)
+    report = adopt_mod.adopt_kb(project, agent, retire=True)
+    assert claim_id in report.claims_durable
+    assert report.retired == []
+
+
+def test_adopt_kb_skips_when_propose_returns_none(tmp_path: Path, monkeypatch) -> None:
+    from vouch import proposals
+
+    agent = KBStore.init(tmp_path / "agent")
+    _src_id, claim_id = _seed_agent_receipt_claim(agent)
+    project = KBStore.init(tmp_path / "proj")
+    monkeypatch.setattr(proposals, "propose_quoted_claim", lambda *a, **k: None)
+    report = adopt_mod.adopt_kb(project, agent)
+    assert claim_id in report.claims_skipped
+
+
+def test_adopt_kb_skips_when_proposal_vanishes_after_resolve(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from vouch import proposals
+    from vouch.storage import ArtifactNotFoundError
+
+    agent = KBStore.init(tmp_path / "agent")
+    _src_id, claim_id = _seed_agent_receipt_claim(agent)
+    project = KBStore.init(tmp_path / "proj")
+
+    class _Fake:
+        id = "vanished-proposal"
+
+    class _Result:
+        proposal = _Fake()
+
+    monkeypatch.setattr(
+        proposals, "propose_quoted_claim", lambda *a, **k: _Result()
+    )
+    monkeypatch.setattr(
+        proposals, "resolve_pending_receipt_claim", lambda *a, **k: None
+    )
+
+    def _missing(_self, _pid):
+        raise ArtifactNotFoundError("gone")
+
+    monkeypatch.setattr(KBStore, "get_proposal", _missing)
+    report = adopt_mod.adopt_kb(project, agent)
+    assert claim_id in report.claims_skipped

@@ -7,6 +7,19 @@ All notable changes to vouch are documented here. Format follows
 ## [Unreleased]
 
 ### Added
+- **agent-native provisioning — `vouch init --agent` plus a claim handshake**
+  (#606): an agent can provision its own scoped KB and persistent proposer
+  identity (`agent.caller`) without a human first creating a project KB.
+  `vouch init --agent --agent-caller <name>` writes a local credential
+  (chmod 0600, never echoed to stdout) under
+  `$XDG_CONFIG_HOME/vouch/agent-credentials.yaml`, stamps the agent KB under
+  `$XDG_DATA_HOME/vouch/agents/<caller>/`, and emits a claim token. The human
+  binds that agent to a project with `vouch agents claim <token>`, which
+  transfers ownership and adopts knowledge through the same review gate as
+  `vouch adopt` (via additive `adopt_kb`, leaving the personal-fallback
+  `adopt` path byte-stable). MCP/JSONL/CLI fall back to the stamped
+  `agent.caller` when `VOUCH_AGENT` is unset. Claiming also registers the
+  agent in the project's `#607` registry when possible.
 - **correction capture — the pushback becomes a proposal** (#430): the adapter
   captured tool *outcomes* passively but never the single highest-signal event
   in a session, the user correcting the agent ("no, we deploy from `main` not
