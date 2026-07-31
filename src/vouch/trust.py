@@ -82,13 +82,26 @@ class VouchTrust:
     remote: bool
     caller_kind: CallerKind
     auth_subject: str | None
+    # Empty means unscoped, i.e. every scope — the back-compat rule that keeps
+    # tokens issued before #608 working exactly as they did.
+    scopes: tuple[str, ...] = ()
 
     def as_meta_block(self) -> dict[str, Any]:
-        return {
+        block: dict[str, Any] = {
             "remote": self.remote,
             "caller_kind": self.caller_kind,
             "auth_subject": self.auth_subject,
         }
+        # Only surfaced when the credential is actually scoped, so unscoped
+        # callers see the same block they saw before.
+        if self.scopes:
+            block["scopes"] = list(self.scopes)
+        return block
+
+    def permits(self, method: str) -> bool:
+        from .scopes import permits as _permits
+
+        return _permits(self.scopes, method)
 
 
 # Presets — one per transport entry point.
@@ -170,13 +183,42 @@ def authorized_bearer_token(
     return token if gate(auth_subject_for_token(token)) else None
 
 
-def with_auth_subject(trust: VouchTrust, token: str | None) -> VouchTrust:
+def with_auth_subject(
+    trust: VouchTrust, token: str | None, *, scopes: tuple[str, ...] = ()
+) -> VouchTrust:
     if token is None:
         return trust
     return VouchTrust(
         remote=trust.remote,
         caller_kind=trust.caller_kind,
         auth_subject=auth_subject_for_token(token),
+        scopes=scopes,
+    )
+
+
+class ScopeDenied(PermissionError):
+    """The active credential's scopes do not cover this method."""
+
+
+def require_scope(method: str) -> None:
+    """Raise :class:`ScopeDenied` when the active credential may not call it.
+
+    One check, called from both dispatch points, so MCP / JSONL / HTTP inherit
+    scoping from the same place rather than three near-identical guards.
+    """
+    from .scopes import scope_for_method
+
+    trust = current()
+    if trust.permits(method):
+        return
+    required = scope_for_method(method)
+    detail = (
+        f"requires {required}" if required
+        else "is not classified under any scope"
+    )
+    raise ScopeDenied(
+        f"{method} {detail}; this credential holds "
+        f"{', '.join(trust.scopes) or 'no scopes'}"
     )
 
 
@@ -196,11 +238,19 @@ def finish_kb_result(result: Any) -> Any:
 _F = TypeVar("_F", bound=Callable[..., Any])
 
 
+def method_name_for_tool(tool_name: str) -> str:
+    """``kb_read_page`` -> ``kb.read_page`` — the MCP naming convention."""
+    return tool_name.replace("_", ".", 1)
+
+
 def wrap_tool_fn(fn: _F) -> _F:
-    """Wrap a sync or async MCP tool so dict results carry ``_meta.vouch_trust``."""
+    """Wrap a sync or async MCP tool: scope check in, trust metadata out."""
+    method = method_name_for_tool(fn.__name__)
+
     if inspect.iscoroutinefunction(fn):
 
         async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+            require_scope(method)
             return finish_kb_result(await fn(*args, **kwargs))
 
         async_wrapper.__name__ = fn.__name__
@@ -208,6 +258,7 @@ def wrap_tool_fn(fn: _F) -> _F:
         return async_wrapper  # type: ignore[return-value]
 
     def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
+        require_scope(method)
         return finish_kb_result(fn(*args, **kwargs))
 
     sync_wrapper.__name__ = fn.__name__

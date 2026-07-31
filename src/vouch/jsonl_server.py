@@ -1080,11 +1080,20 @@ def handle_request(envelope: dict) -> dict:
             "error": {"code": "method_not_found", "message": f"unknown method: {method}"},
         }
     try:
+        # Scope check before dispatch: a credential that may not call this
+        # must not reach the handler, so a denied call cannot have side
+        # effects on the way to being refused.
+        trust_mod.require_scope(method)
         result = HANDLERS[method](params)
         return {
             "id": req_id,
             "ok": True,
             "result": trust_mod.finish_kb_result(result),
+        }
+    except trust_mod.ScopeDenied as e:
+        return {
+            "id": req_id, "ok": False,
+            "error": {"code": "permission_denied", "message": str(e)},
         }
     except skills_mod.SkillsDisabledError as e:
         return {

@@ -65,6 +65,11 @@
       "title": "Review Gated",
       "type": "boolean"
     },
+    "scopes": {
+      "additionalProperties": true,
+      "title": "Scopes",
+      "type": "object"
+    },
     "scoping": {
       "additionalProperties": true,
       "title": "Scoping",

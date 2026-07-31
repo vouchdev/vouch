@@ -3961,7 +3961,8 @@ def agents_group() -> None:
 @click.option("--subject", required=True,
               help="The token's auth subject (vouch agents subject <token>).")
 @click.option("--scope", "scopes", multiple=True,
-              help="Advisory scope to record (repeatable).")
+              help="Grant a scope (repeatable): kb:read, kb:propose, "
+                   "kb:approve, kb:admin. No --scope means unscoped (all).")
 @click.option("--note", default=None, help="What this agent is for.")
 def agents_register(name: str, subject: str, scopes: tuple[str, ...],
                     note: str | None) -> None:

@@ -12,6 +12,7 @@ from click.testing import CliRunner
 from vouch import agents, audit, trust
 from vouch.agents import AgentError, AgentStatus
 from vouch.cli import cli
+from vouch.scopes import PROPOSE, READ
 from vouch.storage import KBStore
 
 TOKEN = "s3cret-token-example"
@@ -53,11 +54,11 @@ def test_register_names_a_subject_without_storing_the_token(
 def test_registry_round_trips(store: KBStore, subject: str) -> None:
     agents.register(
         store, subject=subject, name="ci-bot", actor="human",
-        scopes=("read", "propose"), note="the CI proposer",
+        scopes=(READ, PROPOSE), note="the CI proposer",
     )
     loaded = agents.load_registry(store)
     assert len(loaded) == 1
-    assert loaded[0].scopes == ("read", "propose")
+    assert loaded[0].scopes == (READ, PROPOSE)
     assert loaded[0].note == "the CI proposer"
 
 
@@ -150,11 +151,11 @@ def test_every_transition_is_audited(
 
 def test_registration_is_audited(store: KBStore, subject: str) -> None:
     agents.register(
-        store, subject=subject, name="ci-bot", actor="human", scopes=("propose",)
+        store, subject=subject, name="ci-bot", actor="human", scopes=(PROPOSE,)
     )
     ev = next(e for e in audit.read_events(store.kb_dir) if e.event == "agent.register")
     assert ev.data["name"] == "ci-bot"
-    assert ev.data["scopes"] == ["propose"]
+    assert ev.data["scopes"] == [PROPOSE]
 
 
 # --- the authentication gate ---------------------------------------------
@@ -349,14 +350,14 @@ def test_cli_register_list_show_roundtrip(store: KBStore, subject: str) -> None:
     assert "no registered agents" in empty.output
 
     reg = runner.invoke(cli, [
-        "agents", "register", "ci-bot", "--subject", subject, "--scope", "propose",
+        "agents", "register", "ci-bot", "--subject", subject, "--scope", PROPOSE,
     ])
     assert reg.exit_code == 0, reg.output
 
     listed = runner.invoke(cli, ["agents", "list"])
     assert "ci-bot" in listed.output
     assert "active" in listed.output
-    assert "propose" in listed.output
+    assert PROPOSE in listed.output
 
     shown = runner.invoke(cli, ["agents", "show", "ci-bot"])
     assert shown.exit_code == 0, shown.output

@@ -581,6 +581,10 @@ class Capabilities(BaseModel):
             "audit_log": True,
         }
     )
+    # Per-credential scopes (#608). Additive: an unscoped caller gets
+    # `unscoped: true` and the full method list, which is what every
+    # pre-#608 deployment sees.
+    scopes: dict[str, Any] = Field(default_factory=dict)
     scoping: dict[str, Any] = Field(
         default_factory=lambda: {
             "enabled": True,

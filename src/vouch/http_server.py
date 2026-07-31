@@ -210,7 +210,12 @@ async def _rpc(request: Request) -> JSONResponse:
         tuple(getattr(request.app.state, "vouch_bearer_tokens", ()) or ()),
         gate=agents_mod.subject_is_active,
     )
-    trust = trust_mod.with_auth_subject(trust_mod.JSONL_HTTP, bearer)
+    trust = trust_mod.with_auth_subject(
+        trust_mod.JSONL_HTTP, bearer,
+        scopes=agents_mod.subject_scopes(
+            trust_mod.auth_subject_for_token(bearer)
+        ) if bearer else (),
+    )
 
     def _dispatch() -> dict[str, Any]:
         # The actor and the trust marker are both ContextVars. They're set
@@ -293,7 +298,12 @@ class _McpTrustASGI:
             self._accepted,
             gate=agents_mod.subject_is_active,
         )
-        trust = trust_mod.with_auth_subject(trust_mod.MCP_HTTP, bearer)
+        trust = trust_mod.with_auth_subject(
+            trust_mod.MCP_HTTP, bearer,
+            scopes=agents_mod.subject_scopes(
+                trust_mod.auth_subject_for_token(bearer)
+            ) if bearer else (),
+        )
         token = trust_mod.set_trust_context(trust)
         try:
             await self._app(scope, receive, send)

@@ -41,6 +41,7 @@ from typing import TYPE_CHECKING, Any
 import yaml
 
 from . import audit as audit_mod
+from . import scopes as scopes_mod
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .storage import KBStore
@@ -190,6 +191,10 @@ def register(
         raise AgentError("register needs the token's auth subject")
     if not name:
         raise AgentError("register needs a name")
+    try:
+        scopes = scopes_mod.parse_scopes(scopes)
+    except scopes_mod.ScopeError as e:
+        raise AgentError(str(e)) from e
 
     agents = load_registry(store)
     for existing in agents:
@@ -270,6 +275,33 @@ def is_active(store: KBStore, subject: str) -> bool:
         (a for a in load_registry(store) if a.subject == subject.strip()), None
     )
     return agent is None or agent.status is AgentStatus.ACTIVE
+
+
+def scopes_for_subject(store: KBStore, subject: str) -> tuple[str, ...]:
+    """The scopes a registered subject holds; empty (= unscoped) if unknown.
+
+    Unknown subjects stay unscoped so a token that predates the registry keeps
+    every power it had — the same back-compat rule `is_active` follows.
+    """
+    agent = next(
+        (a for a in load_registry(store) if a.subject == subject.strip()), None
+    )
+    return agent.scopes if agent is not None else ()
+
+
+def subject_scopes(subject: str) -> tuple[str, ...]:
+    """Store-resolving scope lookup for the transport chokepoint."""
+    from .storage import KBStore, discover_root
+
+    try:
+        store = KBStore(discover_root())
+    except Exception:
+        return ()
+    try:
+        return scopes_for_subject(store, subject)
+    except Exception:  # pragma: no cover - defensive
+        logger.debug("agents: registry unreadable, treating subject as unscoped")
+        return ()
 
 
 def subject_is_active(subject: str) -> bool:

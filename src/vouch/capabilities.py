@@ -13,6 +13,8 @@ from pathlib import Path
 
 from . import __version__
 from . import hot_memory as hot_mod
+from . import scopes as scopes_mod
+from . import trust as trust_mod
 from .models import Capabilities
 from .openclaw.context_engine import describe_engine
 
@@ -156,6 +158,7 @@ def capabilities(*, publish_skills: bool = True) -> Capabilities:
         context_engines=[describe_engine()],
         mcp={"publish_skills": publish_skills},
         host_compat=_load_host_compat(),
+        scopes=scopes_mod.describe(trust_mod.current().scopes),
         hot_memory={
             "sidebar_key": "vouch_hot_memory",
             "list_envelope": True,
