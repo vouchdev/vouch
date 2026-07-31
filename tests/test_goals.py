@@ -170,11 +170,12 @@ def test_unknown_status_and_no_op_transition_are_refused(store: KBStore) -> None
 
 def test_only_lifecycle_mutates_a_stored_goal() -> None:
     """`store.update_goal` is the single mutation path, and only
-    `lifecycle.set_goal_status` may call it.
+    `lifecycle` may call it (`set_goal_status` and cascade unlink).
 
-    A second caller would be a status move that skipped the audit-log append
-    — exactly the parallel write path the north star forbids. Storage and the
-    test suite are excluded: one defines the method, the other exercises it.
+    A second module calling storage directly would be a write that skipped
+    the audit-log append — exactly the parallel write path the north star
+    forbids. Storage and the test suite are excluded: one defines the
+    method, the other exercises it.
     """
     src_dir = Path(life.__file__).parent
     callers = sorted(

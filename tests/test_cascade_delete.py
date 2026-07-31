@@ -112,6 +112,37 @@ def test_plan_mirrors_referenced_by_for_a_page_cited_claim(store: KBStore) -> No
     ]
 
 
+def test_plan_and_apply_unlink_goal_cited_claims(store: KBStore) -> None:
+    """Goals are first-class claim referrers after #427 — cascade must free them."""
+    from vouch.models import Goal
+
+    _claim(store, "c1")
+    store.put_goal(Goal(id="keep-c1", title="keep c1", claims=["c1"]))
+    assert referenced_by(store, "claim", "c1") == ["goal 'keep-c1'"]
+    assert cascade_plan(store, "claim", "c1") == [
+        {"kind": "goal", "id": "keep-c1", "unlink_claims": ["c1"]}
+    ]
+    pr = propose_delete(
+        store, target_kind="claim", target_id="c1", proposed_by="agent",
+        cascade=True,
+    )
+    approve(store, pr.id, approved_by="reviewer")
+    assert store.get_goal("keep-c1").claims == []
+    with pytest.raises(ArtifactNotFoundError):
+        store.get_claim("c1")
+    assert "goal.cascade_unlink" in _events(store)
+
+
+def test_plan_unlinks_goal_cited_entities(store: KBStore) -> None:
+    from vouch.models import Goal
+
+    store.put_entity(Entity(id="e1", name="E", type=EntityType.CONCEPT))
+    store.put_goal(Goal(id="track-e1", title="track e1", entities=["e1"]))
+    assert cascade_plan(store, "entity", "e1") == [
+        {"kind": "goal", "id": "track-e1", "unlink_entities": ["e1"]}
+    ]
+
+
 def test_plan_deletes_relations_and_unlinks_pages(store: KBStore) -> None:
     _claim(store, "c1")
     _claim(store, "c2")
@@ -342,6 +373,24 @@ def test_applier_skips_a_claim_already_unlinked(store: KBStore) -> None:
         actor="reviewer",
     ) == []
     assert "claim.cascade_unlink" not in _events(store)
+
+
+def test_applier_skips_a_goal_that_vanished(store: KBStore) -> None:
+    assert _apply_cascade(
+        store, [{"kind": "goal", "id": "gone", "unlink_claims": ["c1"]}],
+        actor="reviewer",
+    ) == []
+
+
+def test_applier_skips_a_goal_already_unlinked(store: KBStore) -> None:
+    from vouch.models import Goal
+
+    store.put_goal(Goal(id="g1", title="empty refs"))
+    assert _apply_cascade(
+        store, [{"kind": "goal", "id": "g1", "unlink_claims": ["c1"]}],
+        actor="reviewer",
+    ) == []
+    assert "goal.cascade_unlink" not in _events(store)
 
 
 def test_applier_skips_a_relation_that_vanished(store: KBStore) -> None:

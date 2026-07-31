@@ -1141,7 +1141,7 @@ class KBStore:
         return goal
 
     def update_goal(self, goal: Goal) -> Goal:
-        """Persist a mutated goal. Only `lifecycle.set_goal_status` calls this."""
+        """Persist a mutated goal. Only ``lifecycle`` may call this."""
         if not self._goal_path(goal.id).exists():
             raise ArtifactNotFoundError(f"goal {goal.id}")
         # Round-trip so in-place mutation can't skip the model validators

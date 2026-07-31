@@ -155,6 +155,14 @@ All notable changes to vouch are documented here. Format follows
   artifact the caller could not already retrieve, and it touches no write path.
 
 ### Fixed
+- **delete gate / cascade now see goals that cite the target** (#727):
+  `referenced_by` and `cascade_plan` walked pages, claims, and relations
+  but never goals, even though `Goal.claims` / `Goal.entities` are
+  validated refs. Deleting a cited claim succeeded (empty gate), then
+  `set_goal_status` crashed with `ValueError` from `_validate_goal_refs`.
+  Goals now block delete, appear in the cascade plan, and are unlinked
+  via `lifecycle.cascade_unlink_goal_refs` (`goal.cascade_unlink` audit)
+  on approve — the same single-writer path as status moves.
 - **`extract` no longer fractures file paths/URLs into auto-approved
   garbage claims** (#702): the sentence segmenter only skipped a `.` as a
   boundary when it was flanked by digits on both sides (decimals/versions

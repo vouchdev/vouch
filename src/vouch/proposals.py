@@ -1318,6 +1318,9 @@ def referenced_by(store: KBStore, target_kind: str, target_id: str) -> list[str]
         for page in store.list_pages():
             if target_id in page.claims:
                 refs.append(f"page {page.id!r}")
+        for goal in store.list_goals():
+            if target_id in goal.claims:
+                refs.append(f"goal {goal.id!r}")
         for rel in store.list_relations():
             if _relation_refers_to(store, rel, target_kind, target_id):
                 refs.append(f"relation {rel.id!r}")
@@ -1341,6 +1344,9 @@ def referenced_by(store: KBStore, target_kind: str, target_id: str) -> list[str]
         for page in store.list_pages():
             if target_id in page.entities:
                 refs.append(f"page {page.id!r}")
+        for goal in store.list_goals():
+            if target_id in goal.entities:
+                refs.append(f"goal {goal.id!r}")
         for rel in store.list_relations():
             if _relation_refers_to(store, rel, target_kind, target_id):
                 refs.append(f"relation {rel.id!r}")
@@ -1366,11 +1372,11 @@ def cascade_plan(
     One step per referring artifact: a page citing the target in both its
     frontmatter and its body is one decision, not two.
 
-    Pages and claims lose their pointer; relations are deleted outright,
-    because an edge whose endpoint is gone has no meaning. Relations carry
-    no inbound refs of their own (`referenced_by` returns [] for them), so
-    the walk is one level deep by construction — there is no transitive
-    cascade to bound.
+    Pages, claims, and goals lose their pointer; relations are deleted
+    outright, because an edge whose endpoint is gone has no meaning.
+    Relations carry no inbound refs of their own (`referenced_by` returns
+    [] for them), so the walk is one level deep by construction — there is
+    no transitive cascade to bound.
     """
     if target_kind not in _DELETE_KINDS:
         raise ProposalError(
@@ -1383,6 +1389,11 @@ def cascade_plan(
             if target_id in page.claims:
                 steps.append(
                     {"kind": "page", "id": page.id, "unlink_claims": [target_id]}
+                )
+        for goal in store.list_goals():
+            if target_id in goal.claims:
+                steps.append(
+                    {"kind": "goal", "id": goal.id, "unlink_claims": [target_id]}
                 )
         steps.extend(_relation_cascade_steps(store, target_id))
         for claim in store.list_claims():
@@ -1409,6 +1420,11 @@ def cascade_plan(
             if target_id in page.entities:
                 steps.append(
                     {"kind": "page", "id": page.id, "unlink_entities": [target_id]}
+                )
+        for goal in store.list_goals():
+            if target_id in goal.entities:
+                steps.append(
+                    {"kind": "goal", "id": goal.id, "unlink_entities": [target_id]}
                 )
         steps.extend(_relation_cascade_steps(store, target_id))
     return steps
@@ -1487,6 +1503,24 @@ def _apply_cascade_claim(
     return True
 
 
+def _apply_cascade_goal(
+    store: KBStore, step: dict[str, Any], step_id: str, *, actor: str
+) -> bool:
+    # Lazy import: lifecycle imports strip_claim_markers from this module.
+    from . import lifecycle as life
+
+    return (
+        life.cascade_unlink_goal_refs(
+            store,
+            step_id,
+            unlink_claims=list(step.get("unlink_claims") or []),
+            unlink_entities=list(step.get("unlink_entities") or []),
+            actor=actor,
+        )
+        is not None
+    )
+
+
 def _apply_cascade(
     store: KBStore, steps: list[dict[str, Any]], *, actor: str
 ) -> list[str]:
@@ -1522,6 +1556,9 @@ def _apply_cascade(
                 continue
         elif kind == "claim":
             if not _apply_cascade_claim(store, step, step_id, actor=actor):
+                continue
+        elif kind == "goal":
+            if not _apply_cascade_goal(store, step, step_id, actor=actor):
                 continue
         else:
             continue

@@ -200,6 +200,29 @@ def test_unreferenced_claim_is_deletable(store: KBStore) -> None:
     assert referenced_by(store, "claim", "lonely") == []
 
 
+def test_claim_referenced_by_goal(store: KBStore) -> None:
+    """Goals cite claims; the delete gate must see that (#727)."""
+    from vouch.models import Goal
+
+    _claim(store, "c1")
+    store.put_goal(Goal(id="keep-c1", title="keep c1 live", claims=["c1"]))
+    refs = referenced_by(store, "claim", "c1")
+    assert refs == ["goal 'keep-c1'"]
+    with pytest.raises(ProposalError, match="referenced"):
+        propose_delete(
+            store, target_kind="claim", target_id="c1", proposed_by="a",
+        )
+
+
+def test_entity_referenced_by_goal(store: KBStore) -> None:
+    from vouch.models import Goal
+
+    store.put_entity(Entity(id="e1", name="E", type=EntityType.CONCEPT))
+    store.put_goal(Goal(id="track-e1", title="track e1", entities=["e1"]))
+    refs = referenced_by(store, "entity", "e1")
+    assert refs == ["goal 'track-e1'"]
+
+
 def test_entity_referenced_by_claim(store: KBStore) -> None:
     store.put_entity(Entity(id="e1", name="E", type=EntityType.CONCEPT))
     src = store.put_source(b"s")

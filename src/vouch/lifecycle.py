@@ -176,6 +176,45 @@ def confirm(store: KBStore, *, claim_id: str, actor: str) -> Claim:
 _CLOSED_GOAL_STATUSES = frozenset({GoalStatus.DONE, GoalStatus.ABANDONED})
 
 
+def cascade_unlink_goal_refs(
+    store: KBStore,
+    goal_id: str,
+    *,
+    unlink_claims: list[str] | None = None,
+    unlink_entities: list[str] | None = None,
+    actor: str,
+) -> Goal | None:
+    """Drop claim/entity pointers from a goal during cascade delete.
+
+    Companion to ``set_goal_status``: both are the only callers of
+    ``store.update_goal``. Pointer edits are not status moves, but they still
+    mutate durable goal yaml and must append their own audit event
+    (``goal.cascade_unlink``) rather than calling storage from proposals.
+    Returns ``None`` when the goal is gone or nothing to unlink (idempotent).
+    """
+    try:
+        goal = store.get_goal(goal_id)
+    except ArtifactNotFoundError:
+        return None
+    claims = [c for c in (unlink_claims or []) if c in goal.claims]
+    entities = [e for e in (unlink_entities or []) if e in goal.entities]
+    if not claims and not entities:
+        return None
+    goal.claims = [c for c in goal.claims if c not in claims]
+    goal.entities = [e for e in goal.entities if e not in entities]
+    goal.updated_at = datetime.now(UTC)
+    store.update_goal(goal)
+    audit.log_event(
+        store.kb_dir,
+        event="goal.cascade_unlink",
+        actor=actor,
+        object_ids=[goal.id],
+        data={"claims": claims, "entities": entities},
+        reversible=False,
+    )
+    return goal
+
+
 def set_goal_status(
     store: KBStore,
     *,
@@ -184,14 +223,15 @@ def set_goal_status(
     actor: str,
     reason: str | None = None,
 ) -> Goal:
-    """Move an approved goal to a new status. The only goal write path.
+    """Move an approved goal to a new status. The only status write path.
 
     Same posture as `archive` / `confirm` above: a status move is metadata
     about already-reviewed knowledge, not a new assertion, so it lands
     directly — but it lands *here*, in one place, so every transition appends
     a `goal.status` event to the audit log and a row to the goal's own
     `history`. Nothing else in the codebase may set `Goal.status`; if a future
-    change needs to, it belongs in this function.
+    change needs to, it belongs in this function. Claim/entity pointer edits
+    during cascade delete go through ``cascade_unlink_goal_refs``.
     """
     try:
         new_status = GoalStatus(status)
