@@ -7,6 +7,22 @@ All notable changes to vouch are documented here. Format follows
 ## [Unreleased]
 
 ### Added
+- **`kb.synthesize --file-as-page` — file a good answer back as a page
+  proposal** (roadmap 1.4, #736): `kb.synthesize` already produces
+  citation-bearing prose traceable to approved claims, but turning a good
+  answer into a page meant manually copying the text and re-typing the
+  cited claim ids into a separate `kb.propose_page` call. `file_as_page`
+  wires the two together — the answer's own claim ids become the new
+  page's `claims`, filed via the existing `propose_page`, still fully
+  gated: a pending proposal, never auto-approved. Skipped, not an error,
+  when the answer is empty or cites nothing (an uncited "answer" is the KB
+  saying it doesn't know, not knowledge worth filing) or when filing fails
+  (e.g. a title collision) — either way reported via the new
+  `page_proposal_id` / `page_proposal_skipped_reason` result fields.
+  Registered on MCP, JSONL, and CLI (`vouch synthesize --file-as-page
+  [--page-title T] [--agent A]`). Opt-in and additive — `file_as_page`
+  defaults to `False`, so every existing caller's result shape is
+  unchanged.
 - **bench: composite guards** (#616): `efficiency`, `consistency` and `canary`
   as bounded multipliers over the composite, plus a `bench_version` stamp on
   every report. Reported **beside** the composite, never folded into it —

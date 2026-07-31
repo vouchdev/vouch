@@ -263,12 +263,16 @@ def _h_context(p: dict) -> dict:
 
 
 def _h_synthesize(p: dict) -> dict:
+    file_as_page = bool(p.get("file_as_page", False))
     return synthesize(
         _store(),
         query=p["query"],
         depth=int(p.get("depth", 3)),
         max_chars=int(p.get("max_chars", 4000)),
         llm=bool(p.get("llm", False)),
+        file_as_page=file_as_page,
+        proposed_by=_agent() if file_as_page else None,
+        page_title=p.get("page_title"),
     )
 
 

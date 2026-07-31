@@ -375,6 +375,8 @@ def kb_synthesize(
     depth: int = 3,
     max_chars: int = 4000,
     llm: bool = False,
+    file_as_page: bool = False,
+    page_title: str | None = None,
 ) -> dict[str, Any]:
     """Answer a query from the review-gated KB, with inline `[id]` citations,
     an explicit gaps block, and a synthesis_confidence grade.
@@ -384,9 +386,17 @@ def kb_synthesize(
     claims only); `llm=True` drafts the answer with the deployment-configured
     LLM (compile.llm_cmd) grounded in pages and approved claims — citations
     are still verified mechanically, and the call is synchronous.
+
+    `file_as_page=True` additionally files the answer back as a page
+    proposal — still gated by review, never auto-approved. Skipped (not an
+    error) when the answer is empty or cites nothing; see
+    `page_proposal_id` / `page_proposal_skipped_reason` in the result.
     """
     return synthesize(
         _store(), query=query, depth=depth, max_chars=max_chars, llm=llm,
+        file_as_page=file_as_page,
+        proposed_by=_agent() if file_as_page else None,
+        page_title=page_title,
     )
 
 

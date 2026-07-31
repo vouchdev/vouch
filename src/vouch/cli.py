@@ -3837,12 +3837,28 @@ def context_hook() -> None:
     help="Draft the answer with the configured compile.llm_cmd, grounded in "
     "pages and approved claims (citations still verified mechanically).",
 )
-def synthesize(query: str, depth: int, max_chars: int, use_llm: bool) -> None:
+@click.option(
+    "--file-as-page", is_flag=True,
+    help="File the answer back as a page proposal — still gated by review, "
+    "never auto-approved. Skipped, not an error, if the answer is empty "
+    "or cites nothing.",
+)
+@click.option("--page-title", default=None,
+              help="Title for --file-as-page (default: 'Answer: <query>').")
+@click.option("--agent", "agent", default=None,
+              help="Proposer identity for --file-as-page (default: VOUCH_AGENT/whoami).")
+def synthesize(
+    query: str, depth: int, max_chars: int, use_llm: bool,
+    file_as_page: bool, page_title: str | None, agent: str | None,
+) -> None:
     """Answer a query from the KB, with inline citations."""
     store = _load_store()
     with _cli_errors():
         result = synth.synthesize(
             store, query=query, depth=depth, max_chars=max_chars, llm=use_llm,
+            file_as_page=file_as_page,
+            proposed_by=(agent or _whoami()) if file_as_page else None,
+            page_title=page_title,
         )
     _emit_json(result)
 

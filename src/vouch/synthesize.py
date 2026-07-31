@@ -26,6 +26,7 @@ from typing import Any, Literal
 from . import llm_draft
 from .context import build_context_pack
 from .models import Claim, ClaimStatus, Page, PageStatus
+from .proposals import ProposalError, propose_page
 from .storage import ArtifactNotFoundError, KBStore
 
 Confidence = Literal["high", "medium", "low"]
@@ -263,6 +264,9 @@ def synthesize(
     depth: int = 3,
     max_chars: int = 4000,
     llm: bool = False,
+    file_as_page: bool = False,
+    proposed_by: str | None = None,
+    page_title: str | None = None,
 ) -> dict[str, Any]:
     """Answer `query` from the review-gated KB, with inline citations.
 
@@ -272,12 +276,87 @@ def synthesize(
     and `_meta.synthesis_confidence`. With `llm=True` the answer is drafted
     by the deployment-configured LLM grounded in pages and approved claims;
     every citation is still verified mechanically.
+
+    `file_as_page=True` additionally files the answer back as a `PAGE`
+    proposal (`proposed_by` required) — gated by review like every other
+    write, never auto-approved. Skipped, not an error, when the answer is
+    empty or cites nothing: an uncited "answer" is the KB saying it doesn't
+    know, not knowledge worth filing. The result gains `page_proposal_id`
+    (`None` when skipped or filing failed) and, in either case,
+    `page_proposal_skipped_reason`.
     """
     if llm:
-        return _llm_synthesize(
+        result = _llm_synthesize(
             store, query=query, depth=depth, max_chars=max_chars,
         )
+    else:
+        result = _deterministic_synthesize(
+            store, query=query, depth=depth, max_chars=max_chars,
+        )
+    return _maybe_file_page_proposal(
+        store, result, query=query, file_as_page=file_as_page,
+        proposed_by=proposed_by, page_title=page_title,
+    )
 
+
+def _maybe_file_page_proposal(
+    store: KBStore,
+    result: dict[str, Any],
+    *,
+    query: str,
+    file_as_page: bool,
+    proposed_by: str | None,
+    page_title: str | None,
+) -> dict[str, Any]:
+    """Optionally file `result["answer"]` back as a PAGE proposal.
+
+    Never approves anything — `propose_page` goes through the same review
+    gate as every other write. Filing is skipped (not an error) when the
+    answer is empty or cites no claims: an uncited "answer" is the KB saying
+    it doesn't know, not knowledge worth filing. A `propose_page` failure
+    (e.g. a title collision) degrades the same way — the synthesis itself
+    already succeeded, and losing that to a secondary, optional step would
+    be a worse failure than reporting why filing didn't happen.
+    """
+    if not file_as_page:
+        return result
+    if proposed_by is None:
+        raise ValueError("file_as_page requires proposed_by")
+
+    answer = result["answer"]
+    cited_claims: list[str] = list(result["claims"])
+    if not answer or not cited_claims:
+        result["page_proposal_id"] = None
+        result["page_proposal_skipped_reason"] = "empty or uncited answer — nothing to file"
+        return result
+
+    title = (page_title or f"Answer: {query}").strip()
+    body_lines = [f"# {title}", "", answer]
+    if result["gaps"]:
+        body_lines += ["", "## Gaps", *(f"- {g}" for g in result["gaps"])]
+    body = "\n".join(body_lines) + "\n"
+
+    try:
+        pr = propose_page(
+            store, title=title, body=body, claim_ids=cited_claims,
+            proposed_by=proposed_by,
+            rationale=f"filed from kb.synthesize answer to: {query!r}",
+        )
+    except (ProposalError, ArtifactNotFoundError) as e:
+        result["page_proposal_id"] = None
+        result["page_proposal_skipped_reason"] = str(e)
+        return result
+
+    result["page_proposal_id"] = pr.id
+    result["page_proposal_skipped_reason"] = None
+    return result
+
+
+def _deterministic_synthesize(
+    store: KBStore, *, query: str, depth: int, max_chars: int,
+) -> dict[str, Any]:
+    """The no-LLM path, extracted verbatim from `synthesize` so `file_as_page`
+    can wrap either backend's result the same way."""
     pack = build_context_pack(store, query=query, limit=depth)
     items = pack["items"] if isinstance(pack, dict) else pack.items
 
