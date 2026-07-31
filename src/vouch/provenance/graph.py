@@ -9,19 +9,20 @@ to ``prov_edges`` and is validated against it.
 from __future__ import annotations
 
 from collections import deque
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable, Mapping
+from typing import Any
 
 from .. import audit
-from ..models import PageStatus, ProposalKind, ProposalStatus
+from ..models import PageStatus, Proposal, ProposalKind, ProposalStatus
 from ..storage import ArtifactNotFoundError, KBStore
-from .model import Edge, EdgeKind, NodeKind, sort_edges
+from .model import Edge, EdgeKind, NodeKind, NodeMeta, sort_edges
 
 
 class ProvGraph:
     """An in-memory typed DAG with outward/inward/undirected traversal."""
 
     def __init__(
-        self, edges: Iterable[Edge], node_kinds: dict[str, NodeKind] | None = None
+        self, edges: Iterable[Edge], node_meta: Mapping[str, NodeMeta] | None = None
     ) -> None:
         self.edges: list[Edge] = sort_edges(edges)
         self._out: dict[str, list[Edge]] = {}
@@ -29,23 +30,39 @@ class ProvGraph:
         for e in self.edges:
             self._out.setdefault(e.src_id, []).append(e)
             self._in.setdefault(e.dst_id, []).append(e)
-        self._node_kinds: dict[str, NodeKind] = dict(node_kinds or {})
+        self._meta: dict[str, NodeMeta] = dict(node_meta or {})
 
     # --- node introspection -------------------------------------------------
 
     def nodes(self) -> set[str]:
         return set(self._out) | set(self._in)
 
+    def meta(self) -> dict[str, NodeMeta]:
+        """Every node the build recorded, including any with no edges."""
+        return dict(self._meta)
+
+    def status_of(self, node: str) -> str:
+        """The node's review status, or ``""`` for nodes that have none."""
+        known = self._meta.get(node)
+        return known.status if known is not None else ""
+
+    def label_of(self, node: str) -> str:
+        """The node's own words, falling back to its id."""
+        known = self._meta.get(node)
+        return known.label if known is not None and known.label else node
+
     def kind_of(self, node: str) -> NodeKind:
         """Best-effort node kind, inferred from incident edges when unknown.
 
-        Inference keeps cache-loaded graphs (which carry no explicit kind map)
-        as informative as freshly-built ones.
+        Inference keeps graphs built from a bare edge list (an older cache, a
+        hand-assembled one in a test) as informative as freshly-built ones.
         """
-        known = self._node_kinds.get(node)
+        known = self._meta.get(node)
         if known is not None:
-            return known
+            return known.kind
         for e in self._out.get(node, []):
+            if e.kind is EdgeKind.TARGETS:
+                return NodeKind.PROPOSAL
             if e.kind in (
                 EdgeKind.CITES,
                 EdgeKind.SUPERSEDES,
@@ -136,15 +153,71 @@ def _reconstruct(
     return chain
 
 
+#: The two accumulators `build_graph` hands to its per-artifact helpers.
+_AddEdge = Callable[[str, str, EdgeKind, str, str | None], None]
+_NoteNode = Callable[[str, NodeKind, str, str], None]
+
+
+def _proposal_label(payload: Mapping[str, Any]) -> str:
+    """A pending proposal's own words — the same fallback ``vouch pending`` uses."""
+    for key in ("text", "title", "name"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _payload_refs(payload: Mapping[str, Any], key: str) -> list[str]:
+    """String ids under ``key``, tolerating a payload that predates the field."""
+    value = payload.get(key)
+    if not isinstance(value, list):
+        return []
+    return [ref for ref in value if isinstance(ref, str)]
+
+
+def _add_pending(pr: Proposal, add: _AddEdge, note: _NoteNode) -> None:
+    """Wire one pending proposal into the graph.
+
+    The node is keyed on the *proposal* id rather than on the artifact id the
+    payload would create: until approval that artifact does not exist, and a
+    proposal's prospective id may already be taken by a claim on disk — the
+    collision `approve` exists to catch. Edges reuse the durable kinds, so a
+    pending claim hangs off the sources it cites exactly as an approved one
+    does, and the only thing separating them in a renderer is the status.
+    """
+    payload = pr.payload
+    ts = pr.proposed_at.isoformat()
+    note(pr.id, NodeKind.PROPOSAL, pr.status.value, _proposal_label(payload))
+    if pr.session_id:
+        note(pr.session_id, NodeKind.SESSION, "", "")
+        add(pr.id, pr.session_id, EdgeKind.PROPOSED_IN, ts, pr.session_id)
+    if pr.kind is ProposalKind.DELETE:
+        # For a delete the payload id names an artifact that already exists —
+        # the one edge in the graph that points at something on its way out.
+        target = payload.get("id")
+        if isinstance(target, str):
+            add(pr.id, target, EdgeKind.TARGETS, ts, pr.session_id)
+        return
+    for ref in _payload_refs(payload, "evidence"):
+        add(pr.id, ref, EdgeKind.CITES, ts, pr.session_id)
+    for cid in _payload_refs(payload, "claims"):
+        add(pr.id, cid, EdgeKind.EMBEDS, ts, pr.session_id)
+
+
 def build_graph(store: KBStore) -> ProvGraph:
-    """Reconstruct the full provenance graph from durable files.
+    """Reconstruct the full provenance graph from files on disk.
 
     Deterministic: claims and pages are read in sorted order and the audit log
     in append order, so the emitted edge set is stable across runs — that is
     what makes the ``prov_edges`` cache verifiable against it.
+
+    Pending proposals are nodes too. They are the only part of the graph that
+    has not been through the gate, which is exactly why a reviewer needs to see
+    them: the frontier where the KB is about to change is not visible from the
+    durable artifacts alone.
     """
     edges: dict[tuple[str, str, str], Edge] = {}
-    node_kinds: dict[str, NodeKind] = {}
+    nodes: dict[str, NodeMeta] = {}
 
     def add(
         src: str,
@@ -157,10 +230,13 @@ def build_graph(store: KBStore) -> ProvGraph:
         if key not in edges:
             edges[key] = Edge(src, dst, kind, ts, session)
 
+    def note(node: str, kind: NodeKind, status: str = "", label: str = "") -> None:
+        nodes[node] = NodeMeta(kind, status, label)
+
     claims = store.list_claims()
     claim_ids = {c.id for c in claims}
     for c in claims:
-        node_kinds[c.id] = NodeKind.CLAIM
+        note(c.id, NodeKind.CLAIM, c.status.value, c.text)
 
     # claim -> proposing session, from approved claim proposals
     proposed_in: dict[str, str] = {}
@@ -189,10 +265,10 @@ def build_graph(store: KBStore) -> ProvGraph:
             try:
                 evd = store.get_evidence(ref)
             except ArtifactNotFoundError:
-                node_kinds.setdefault(ref, NodeKind.SOURCE)
+                nodes.setdefault(ref, NodeMeta(NodeKind.SOURCE))
             else:
-                node_kinds[ref] = NodeKind.EVIDENCE
-                node_kinds[evd.source_id] = NodeKind.SOURCE
+                note(ref, NodeKind.EVIDENCE)
+                note(evd.source_id, NodeKind.SOURCE)
                 add(
                     ref,
                     evd.source_id,
@@ -212,12 +288,12 @@ def build_graph(store: KBStore) -> ProvGraph:
             add(c.id, other, EdgeKind.CONTRADICTS, c_ts, sess)
 
         if sess:
-            node_kinds[sess] = NodeKind.SESSION
+            note(sess, NodeKind.SESSION)
             add(c.id, sess, EdgeKind.PROPOSED_IN, c_ts, sess)
 
         if c.id in approve_event:
             eid, ts = approve_event[c.id]
-            node_kinds[eid] = NodeKind.EVENT
+            note(eid, NodeKind.EVENT)
             add(c.id, eid, EdgeKind.APPROVED_BY, ts, sess)
 
     for p in store.list_pages():
@@ -227,9 +303,12 @@ def build_graph(store: KBStore) -> ProvGraph:
         # live set.
         if p.status is PageStatus.ARCHIVED:
             continue
-        node_kinds[p.id] = NodeKind.PAGE
+        note(p.id, NodeKind.PAGE, p.status.value, p.title)
         p_ts = p.updated_at.isoformat()
         for cid in p.claims:
             add(p.id, cid, EdgeKind.EMBEDS, p_ts)
 
-    return ProvGraph(edges.values(), node_kinds)
+    for pr in store.list_proposals(ProposalStatus.PENDING):
+        _add_pending(pr, add, note)
+
+    return ProvGraph(edges.values(), nodes)

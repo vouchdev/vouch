@@ -5,9 +5,13 @@ from / depends on B*. So a claim points at the source it cites, the session it
 was proposed in, the audit event that approved it, and the older claim it
 supersedes. ``why`` therefore walks edges *outward* from a node; ``impact`` walks
 them *inward* (who points at me). The two reverse kinds (``supersededBy`` /
-``contradictedBy``) are query-time labels for inbound traversal — only the seven
+``contradictedBy``) are query-time labels for inbound traversal — only the
 canonical kinds in :data:`STORED_KINDS` are ever persisted, which keeps the
 ``prov_edges`` cache free of duplicate mirror rows.
+
+:class:`NodeMeta` is the other half of a node: the kind, review status and
+human label a renderer needs, captured once during the build so no formatter
+has to re-read the artifact to answer "what is this, and has it been reviewed".
 """
 
 from __future__ import annotations
@@ -27,6 +31,7 @@ class EdgeKind(StrEnum):
     EMBEDS = "embeds"  # page -> claim it embeds as evidence
     PROPOSED_IN = "proposedIn"  # claim -> session it was proposed in
     APPROVED_BY = "approvedBy"  # claim -> audit event that approved it
+    TARGETS = "targets"  # pending delete proposal -> artifact it would remove
 
 
 class NodeKind(StrEnum):
@@ -36,6 +41,7 @@ class NodeKind(StrEnum):
     PAGE = "page"
     SESSION = "session"
     EVENT = "event"
+    PROPOSAL = "proposal"
     UNKNOWN = "unknown"
 
 
@@ -50,6 +56,7 @@ STORED_KINDS: frozenset[EdgeKind] = frozenset(
         EdgeKind.EMBEDS,
         EdgeKind.PROPOSED_IN,
         EdgeKind.APPROVED_BY,
+        EdgeKind.TARGETS,
     }
 )
 
@@ -101,6 +108,23 @@ class Edge:
             "event_ts": self.event_ts,
             "session_id": self.session_id,
         }
+
+
+@dataclass(frozen=True)
+class NodeMeta:
+    """What a renderer needs about one node, captured at build time.
+
+    ``status`` is the artifact's own review status — ``active``/``superseded``
+    for a claim, ``draft``/``active`` for a page, ``pending`` for an unreviewed
+    proposal — and is empty for structural nodes (sources, sessions, audit
+    events) that have none. ``label`` is the artifact's own words: a claim's
+    text, a page's title. Both are persisted with the edges so a cold read
+    renders identically to a hot one.
+    """
+
+    kind: NodeKind
+    status: str = ""
+    label: str = ""
 
 
 def sort_edges(edges: Iterable[Edge]) -> list[Edge]:

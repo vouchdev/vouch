@@ -3940,15 +3940,18 @@ def impact(claim_id: str, depth: int, if_op: str | None, as_json: bool) -> None:
     "fmt",
     default="dot",
     show_default=True,
-    type=click.Choice(["dot", "mermaid"]),
+    type=click.Choice(["dot", "mermaid", "json"]),
     help="Output format for the DAG.",
 )
 def graph(session: str | None, fmt: str) -> None:
-    """Render the provenance DAG as Graphviz dot or a mermaid flowchart."""
+    """Render the provenance DAG as Graphviz dot, mermaid, or json."""
     store = _load_store()
     with _cli_errors():
-        text = prov_mod.graph_export(store, session=session, fmt=fmt)
-    click.echo(text, nl=False)
+        rendered = prov_mod.graph_export(store, session=session, fmt=fmt)
+    if isinstance(rendered, dict):
+        click.echo(json.dumps(rendered, indent=2))
+        return
+    click.echo(rendered, nl=False)
 
 
 @cli.group(name="agents")

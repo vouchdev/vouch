@@ -8,6 +8,7 @@ here too (bare prose + indentation, no colour) so output diffs cleanly into a
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Any
 
 from ..models import PageStatus
 from ..storage import ArtifactNotFoundError, KBStore
@@ -260,21 +261,11 @@ def _session_subgraph_edges(graph: ProvGraph, session_id: str) -> list:  # type:
     ]
 
 
-def graph_export(
-    store: KBStore,
-    *,
-    session: str | None = None,
-    fmt: str = "dot",
-    use_cache: bool = True,
-) -> str:
-    """Render the DAG (or one session's subgraph) as Graphviz ``dot`` or
-    ``mermaid`` flowchart text."""
-    if fmt not in ("dot", "mermaid"):
-        raise ValueError(f"unknown graph format: {fmt!r} (use 'dot' or 'mermaid')")
-    graph = load_graph(store, use_cache=use_cache)
-    edges = (
-        _session_subgraph_edges(graph, session) if session is not None else graph.edges
-    )
+def _export_nodes(
+    graph: ProvGraph,
+    edges: list,  # type: ignore[type-arg]
+    session: str | None,
+) -> list[str]:
     nodes: list[str] = []
     seen: set[str] = set()
     for e in edges:
@@ -282,10 +273,46 @@ def graph_export(
             if n not in seen:
                 seen.add(n)
                 nodes.append(n)
+    if session is None:
+        # A pending proposal that cites nothing has no edges to be found by,
+        # and it is precisely the artifact a reviewer needs to see. Session
+        # subgraphs are defined by their edges, so they are left alone.
+        for node, meta in graph.meta().items():
+            if meta.kind is NodeKind.PROPOSAL and node not in seen:
+                seen.add(node)
+                nodes.append(node)
     nodes.sort()
+    return nodes
+
+
+def graph_export(
+    store: KBStore,
+    *,
+    session: str | None = None,
+    fmt: str = "dot",
+    use_cache: bool = True,
+) -> str | dict[str, Any]:
+    """Render the DAG (or one session's subgraph) for a consumer.
+
+    ``dot`` and ``mermaid`` return diagram text; ``json`` returns
+    ``{nodes, edges}`` for a renderer that lays the graph out itself, with each
+    node carrying the ``status`` that separates reviewed knowledge from the
+    pending frontier.
+    """
+    if fmt not in ("dot", "mermaid", "json"):
+        raise ValueError(
+            f"unknown graph format: {fmt!r} (use 'dot', 'mermaid' or 'json')"
+        )
+    graph = load_graph(store, use_cache=use_cache)
+    edges = (
+        _session_subgraph_edges(graph, session) if session is not None else graph.edges
+    )
+    nodes = _export_nodes(graph, edges, session)
     if fmt == "dot":
         return _to_dot(graph, nodes, edges)
-    return _to_mermaid(graph, nodes, edges)
+    if fmt == "mermaid":
+        return _to_mermaid(graph, nodes, edges)
+    return _to_json(graph, nodes, edges)
 
 
 def _dot_escape(text: str) -> str:
@@ -317,6 +344,33 @@ def _to_mermaid(graph: ProvGraph, nodes: list[str], edges: list) -> str:  # type
             f"  {alias[e.src_id]} -->|{e.kind.value}| {alias[e.dst_id]}"
         )
     return "\n".join(lines) + "\n"
+
+
+def _to_json(
+    graph: ProvGraph,
+    nodes: list[str],
+    edges: list,  # type: ignore[type-arg]
+) -> dict[str, Any]:
+    """Nodes and edges for a renderer, at the cost of zero extra file reads.
+
+    Kind, status and label all come off the in-memory graph — the same place
+    ``dot`` and ``mermaid`` read from — so this stays a pure formatting call on
+    a path whose whole point is that it does not re-open the KB per node.
+    """
+    return {
+        "nodes": [
+            {
+                "id": n,
+                "kind": graph.kind_of(n).value,
+                "label": graph.label_of(n),
+                "status": graph.status_of(n),
+            }
+            for n in nodes
+        ],
+        "edges": [
+            {"src": e.src_id, "dst": e.dst_id, "kind": e.kind.value} for e in edges
+        ],
+    }
 
 
 # --- human rendering ------------------------------------------------------

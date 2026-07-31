@@ -1382,7 +1382,7 @@ def kb_impact(
 
 @mcp.tool()
 def kb_graph_export(*, session: str | None = None, format: str = "dot") -> dict[str, Any]:
-    """Render the provenance DAG (or one session's subgraph) as dot/mermaid."""
+    """Render the provenance DAG (or one session's subgraph) as dot/mermaid/json."""
     from . import provenance as prov
     graph = prov.graph_export(_store(), session=session, fmt=format)
     return {"format": format, "graph": graph}

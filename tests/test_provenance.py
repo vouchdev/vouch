@@ -9,19 +9,34 @@ the audit log, and embedded by two live pages plus one draft.
 from __future__ import annotations
 
 import json
+from unittest.mock import patch
 
 import pytest
 from click.testing import CliRunner
 
-from vouch import audit
+from vouch import audit, index_db
 from vouch import lifecycle as life
 from vouch import provenance as prov
 from vouch import sessions as sess_mod
 from vouch.capabilities import capabilities
 from vouch.cli import cli
 from vouch.jsonl_server import HANDLERS, handle_request
-from vouch.models import Claim, Page, PageStatus, PageType
-from vouch.proposals import approve, propose_claim
+from vouch.models import (
+    Claim,
+    Evidence,
+    Page,
+    PageStatus,
+    PageType,
+    Proposal,
+    ProposalKind,
+)
+from vouch.proposals import (
+    approve,
+    propose_claim,
+    propose_delete,
+    propose_entity,
+    propose_page,
+)
 from vouch.storage import KBStore
 
 
@@ -166,6 +181,13 @@ def _edge_tuples(edges) -> list[tuple]:
     )
 
 
+def _edge(graph, src: str, dst: str) -> str:
+    """The kind of the single edge src -> dst, for readable assertions."""
+    kinds = [e.kind.value for e in graph.out_edges(src) if e.dst_id == dst]
+    assert len(kinds) == 1, f"expected one {src} -> {dst} edge, got {kinds}"
+    return kinds[0]
+
+
 def test_rebuild_matches_live_graph(store: KBStore) -> None:
     _seed(store)
     live = prov.build_graph(store).edges
@@ -216,6 +238,194 @@ def test_graph_export_session_subgraph(store: KBStore) -> None:
     ids = _seed(store)
     dot = prov.graph_export(store, session=ids["session"], fmt="dot")
     assert "c-new" in dot and "c-old" in dot
+
+
+# --- the pending frontier -------------------------------------------------
+
+
+def test_pending_claim_is_a_node_keyed_on_the_proposal(store: KBStore) -> None:
+    ids = _seed(store)
+    pr = propose_claim(
+        store, text="an unreviewed fact", evidence=[ids["src"]],
+        proposed_by="agentA", slug_hint="c-pending", session_id=ids["session"],
+    ).proposal
+
+    graph = prov.build_graph(store)
+    assert graph.kind_of(pr.id) is prov.NodeKind.PROPOSAL
+    assert graph.status_of(pr.id) == "pending"
+    assert graph.label_of(pr.id) == "an unreviewed fact"
+    # The prospective claim id is not a node — until approval it does not exist.
+    assert "c-pending" not in graph.nodes()
+    assert _edge(graph, pr.id, ids["src"]) == "cites"
+    assert _edge(graph, pr.id, ids["session"]) == "proposedIn"
+
+
+def test_pending_delete_targets_the_artifact_it_would_remove(store: KBStore) -> None:
+    ids = _seed(store)
+    store.put_claim(Claim(id="c-lonely", text="referenced by nobody",
+                          evidence=[ids["src"]]))
+    pr = propose_delete(
+        store, target_kind="claim", target_id="c-lonely", proposed_by="agentA",
+    )
+
+    graph = prov.build_graph(store)
+    assert _edge(graph, pr.id, "c-lonely") == "targets"
+    # and so the pending delete shows up as something depending on the claim
+    dependents = prov.impact(store, claim_id="c-lonely")["dependents"]
+    assert [d["source"] for d in dependents] == [pr.id]
+
+
+def test_pending_page_embeds_the_claims_it_would_collect(store: KBStore) -> None:
+    _seed(store)
+    pr = propose_page(
+        store, title="A pending page", body="draft", claim_ids=["c-new"],
+        proposed_by="agentA",
+    )
+
+    graph = prov.build_graph(store)
+    assert graph.label_of(pr.id) == "A pending page"
+    assert _edge(graph, pr.id, "c-new") == "embeds"
+
+
+def test_pending_proposal_with_no_edges_is_still_exported(store: KBStore) -> None:
+    """An orphan proposal is the one a reviewer is most likely to forget."""
+    _seed(store)
+    pr = propose_entity(
+        store, name="Acme Example", entity_type="company", proposed_by="agentA",
+    )
+
+    graph = prov.build_graph(store)
+    assert pr.id not in graph.nodes()  # no edges to be found by
+    exported = prov.graph_export(store, fmt="json")
+    assert pr.id in [n["id"] for n in exported["nodes"]]
+    # a session subgraph is edge-defined, so it does not pick the orphan up
+    scoped = prov.graph_export(store, session="does-not-exist", fmt="json")
+    assert scoped["nodes"] == []
+
+
+def test_a_claim_citing_evidence_keeps_the_span_between_it_and_the_source(
+    store: KBStore,
+) -> None:
+    """Citing an Evidence id, not a Source id, is the two-hop form."""
+    src = store.put_source(b"the retry limit is 3", title="runbook")
+    store.put_evidence(Evidence(id="ev-retry", source_id=src.id, locator="L1",
+                                quote="the retry limit is 3"))
+    store.put_claim(Claim(id="c-retry", text="retries stop at 3",
+                          evidence=["ev-retry"]))
+
+    graph = prov.build_graph(store)
+    assert graph.kind_of("ev-retry") is prov.NodeKind.EVIDENCE
+    assert graph.kind_of(src.id) is prov.NodeKind.SOURCE
+    assert _edge(graph, "c-retry", "ev-retry") == "cites"
+    assert _edge(graph, "ev-retry", src.id) == "derivedFrom"
+
+
+def test_a_bare_edge_list_still_reads_a_delete_proposal_as_one() -> None:
+    """A graph handed only edges — an older cache — infers kinds from them."""
+    graph = prov.ProvGraph([prov.Edge("20260101-000000-abcd1234", "c-1",
+                                      prov.EdgeKind.TARGETS)])
+    assert graph.kind_of("20260101-000000-abcd1234") is prov.NodeKind.PROPOSAL
+    assert graph.status_of("20260101-000000-abcd1234") == ""
+    assert graph.label_of("c-1") == "c-1"
+
+
+def test_a_proposal_the_payload_cannot_describe_falls_back_to_its_id(
+    store: KBStore,
+) -> None:
+    """Payloads written by an older vouch still have to render."""
+    store.put_proposal(
+        Proposal(
+            id="20260101-000000-deadbeef", kind=ProposalKind.CLAIM,
+            proposed_by="agentA", payload={"id": "c-odd", "evidence": "not-a-list"},
+        )
+    )
+    graph = prov.build_graph(store)
+    assert graph.label_of("20260101-000000-deadbeef") == "20260101-000000-deadbeef"
+    assert graph.out_edges("20260101-000000-deadbeef") == []
+
+
+# --- the json format ------------------------------------------------------
+
+
+def test_graph_export_json_carries_kind_status_and_label(store: KBStore) -> None:
+    ids = _seed(store)
+    pending = propose_claim(
+        store, text="an unreviewed fact", evidence=[ids["src"]],
+        proposed_by="agentA", slug_hint="c-pending",
+    ).proposal
+
+    data = prov.graph_export(store, fmt="json")
+    by_id = {n["id"]: n for n in data["nodes"]}
+    assert by_id["c-new"] == {
+        "id": "c-new", "kind": "claim", "label": "the newer fact",
+        "status": "working",
+    }
+    assert by_id["c-old"]["status"] == "superseded"
+    assert by_id["page-alpha"] == {
+        "id": "page-alpha", "kind": "page", "label": "Alpha", "status": "active",
+    }
+    assert by_id[pending.id]["status"] == "pending"
+    # structural nodes have no review status of their own
+    assert by_id[ids["src"]] == {
+        "id": ids["src"], "kind": "source", "label": ids["src"], "status": "",
+    }
+    assert {"src": "page-alpha", "dst": "c-new", "kind": "embeds"} in data["edges"]
+
+
+def test_graph_export_json_reads_no_artifact_per_node(store: KBStore) -> None:
+    """The whole point of carrying status on the graph: json stays a formatter.
+
+    `dot` and `mermaid` do zero I/O once the graph is loaded. If `json` had to
+    re-fetch each node to learn its status it would be the expensive format on
+    a path that exists to avoid re-reading.
+    """
+    _seed(store)
+    prov.load_graph(store)  # warm the cache; the export below must not re-read
+
+    def boom(*_args, **_kwargs):
+        raise AssertionError("graph_export re-read an artifact from disk")
+
+    with patch.object(KBStore, "get_claim", boom), patch.object(KBStore, "get_page", boom):
+        data = prov.graph_export(store, fmt="json")
+    assert data["nodes"] and data["edges"]
+
+
+def test_cached_and_freshly_built_graphs_agree_on_status(store: KBStore) -> None:
+    ids = _seed(store)
+    propose_claim(
+        store, text="an unreviewed fact", evidence=[ids["src"]],
+        proposed_by="agentA", slug_hint="c-pending",
+    )
+    fresh = prov.graph_export(store, fmt="json", use_cache=False)
+    cached = prov.graph_export(store, fmt="json", use_cache=True)
+    assert cached == fresh
+
+
+def test_filing_a_proposal_invalidates_the_cache(store: KBStore) -> None:
+    ids = _seed(store)
+    before = prov.prov_stamp(store)
+    prov.load_graph(store)
+    pr = propose_claim(
+        store, text="an unreviewed fact", evidence=[ids["src"]],
+        proposed_by="agentA", slug_hint="c-pending",
+    ).proposal
+    assert prov.prov_stamp(store) != before
+    assert pr.id in prov.load_graph(store).meta()
+
+
+def test_cached_node_of_an_unknown_kind_is_dropped(store: KBStore) -> None:
+    """A cache written by a newer vouch must not break an older one."""
+    _seed(store)
+    prov.rebuild_prov_edges(store)
+    with index_db.open_db(store.kb_dir) as conn:
+        index_db.index_prov_node(conn, id="c-new", kind="hologram")
+    assert "c-new" not in prov.cache.load_meta(store)
+
+
+def test_graph_export_rejects_an_unknown_format(store: KBStore) -> None:
+    _seed(store)
+    with pytest.raises(ValueError, match="dot"):
+        prov.graph_export(store, fmt="svg")
 
 
 # --- CLI ------------------------------------------------------------------
@@ -271,6 +481,14 @@ def test_cli_graph_dot(store: KBStore) -> None:
     assert res.output.startswith("digraph provenance")
 
 
+def test_cli_graph_json(store: KBStore) -> None:
+    _seed(store)
+    res = CliRunner().invoke(cli, ["graph", "--format", "json"])
+    assert res.exit_code == 0, res.output
+    data = json.loads(res.output)
+    assert {n["id"] for n in data["nodes"]} >= {"c-new", "page-alpha"}
+
+
 # --- kb.* RPC surface -----------------------------------------------------
 
 
@@ -304,6 +522,15 @@ def test_kb_trace_over_jsonl(store: KBStore) -> None:
                            "params": {"from": "page-alpha", "to": "c-old"}})
     assert resp["ok"] is True, resp
     assert resp["result"]["found"] is True
+
+
+def test_kb_graph_export_json_over_jsonl(store: KBStore) -> None:
+    _seed(store)
+    resp = handle_request({"id": "5", "method": "kb.graph_export",
+                           "params": {"format": "json"}})
+    assert resp["ok"] is True, resp
+    assert resp["result"]["format"] == "json"
+    assert "c-new" in [n["id"] for n in resp["result"]["graph"]["nodes"]]
 
 
 def test_kb_why_missing_param_over_jsonl(store: KBStore) -> None:

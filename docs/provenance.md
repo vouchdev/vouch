@@ -30,10 +30,25 @@ on B*, so `why` walks outward and `impact` walks inward.
 | `embeds` | page → claim | `page.claims` |
 | `proposedIn` | claim → session | approved proposal `session_id` |
 | `approvedBy` | claim → audit event | `proposal.*.approve` log entry |
+| `targets` | pending delete → artifact | delete proposal payload |
 
 The two `*By` mirrors are computed at query time by walking inbound, so the
-`prov_edges` cache stays free of duplicate rows — only the seven canonical kinds
-are persisted.
+`prov_edges` cache stays free of duplicate rows — only the canonical kinds are
+persisted.
+
+## The pending frontier
+
+Pending proposals are nodes too. A proposal is keyed on its own id rather than
+on the artifact id its payload would create — until approval that artifact does
+not exist, and the prospective id may already be taken — and it hangs off the
+graph by the same edge kinds a durable artifact uses: `cites` to the sources it
+quotes, `embeds` to the claims a proposed page would collect, `proposedIn` to
+the session that filed it, and `targets` to the artifact a delete would remove.
+
+The only thing separating a pending node from an approved one is its `status`.
+That is the point: the review gate is the product, and a picture of the KB that
+shows only what has already been approved hides the part a reviewer is there to
+look at.
 
 ## Commands
 
@@ -44,6 +59,7 @@ vouch trace <a> --to <b>                # shortest typed path between two artifa
 vouch impact <claim_id>                 # forward: pages, downstream claims that depend on it
 vouch impact <claim_id> --if archive    # dry-run a lifecycle op; exits non-zero if it breaks something
 vouch graph --session <session_id>      # render the DAG for one agent run as dot/mermaid
+vouch graph --format json               # nodes + edges for a renderer, status included
 vouch provenance rebuild                # rebuild the prov_edges cache from durable files
 ```
 
@@ -62,6 +78,25 @@ vouch provenance rebuild                # rebuild the prov_edges cache from dura
 Reviewer output is bare prose + indentation — no curses, no colours by default —
 so it diffs cleanly into a `gh pr comment` or a session log.
 
+## Graph export formats
+
+`dot` (default) and `mermaid` render diagram text. `json` returns the graph
+itself for a renderer that lays it out:
+
+```json
+{
+  "nodes": [{"id": "c-new", "kind": "claim", "label": "the newer fact",
+             "status": "working"}],
+  "edges": [{"src": "page-alpha", "dst": "c-new", "kind": "embeds"}]
+}
+```
+
+`kind`, `status` and `label` are captured while the graph is built and carried
+on it, so serialising costs no file reads — `json` is exactly as cheap as `dot`.
+Structural nodes (sources, sessions, audit events) have no review status of
+their own and report `""`. The console's Memory view is the first consumer;
+`webapp/src/views/MemoryNetworkView.tsx` colours each node by `status`.
+
 ## `kb.*` methods
 
 The same surface is reachable over every transport (MCP stdio, JSONL, HTTP):
@@ -78,17 +113,17 @@ They appear in `kb.capabilities` and pass the JSONL capabilities cross-check.
 
 ## The cache
 
-The `prov_edges(src_id, dst_id, kind, event_ts, session_id)` table in `state.db`
-is a derived index, gitignored alongside the rest of the cache. A freshness
-stamp (claim count + page count + audit-event count) lets a cold query decide
-whether the cache can be trusted; when stale, `load_graph` rebuilds it
+The `prov_edges(src_id, dst_id, kind, event_ts, session_id)` and
+`prov_nodes(id, kind, status, label)` tables in `state.db` are a derived index,
+gitignored alongside the rest of the cache. A freshness stamp (claim count +
+page count + audit-event count + pending-proposal count) lets a cold query
+decide whether the cache can be trusted; when stale, `load_graph` rebuilds it
 transparently. Correctness never depends on the cache — a rebuild is always an
-exact reconstruction of the live in-memory build, which a CI test asserts.
+exact reconstruction of the live in-memory build, which a CI test asserts, and
+a cache-loaded graph reports the same kind, status and label as a fresh one.
 
 ## Out of scope
 
-- A graphical web visualization of the DAG — a natural extension of the
-  `review-ui`, not this.
 - Mutating the graph directly; provenance is derived state.
 - Cross-KB / federated provenance.
 - Embedding-based "semantic neighbors" — provenance edges are strictly the

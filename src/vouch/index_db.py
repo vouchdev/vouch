@@ -86,6 +86,13 @@ CREATE TABLE IF NOT EXISTS prov_edges (
 
 CREATE INDEX IF NOT EXISTS prov_edges_dst ON prov_edges(dst_id);
 CREATE INDEX IF NOT EXISTS prov_edges_kind ON prov_edges(kind);
+
+CREATE TABLE IF NOT EXISTS prov_nodes (
+    id              TEXT PRIMARY KEY,
+    kind            TEXT NOT NULL,
+    status          TEXT NOT NULL DEFAULT '',
+    label           TEXT NOT NULL DEFAULT ''
+);
 """
 
 
@@ -127,6 +134,7 @@ def reset(kb_dir: Path) -> None:
             "DELETE FROM query_embedding_cache;"
             "DELETE FROM embedding_dupes;"
             "DELETE FROM prov_edges;"
+            "DELETE FROM prov_nodes;"
             "DELETE FROM index_meta WHERE key LIKE 'embedding_%';"
             "DELETE FROM index_meta WHERE key LIKE 'prov_%';"
         )
@@ -212,6 +220,7 @@ def deindex(conn: sqlite3.Connection, *, kind: str, id: str) -> None:
     conn.execute(
         "DELETE FROM prov_edges WHERE src_id = ? OR dst_id = ?", (id, id)
     )
+    conn.execute("DELETE FROM prov_nodes WHERE id = ?", (id,))
 
 
 # --- provenance edges (derived cache for `vouch why/trace/impact`) --------
@@ -219,6 +228,7 @@ def deindex(conn: sqlite3.Connection, *, kind: str, id: str) -> None:
 
 def clear_prov_edges(conn: sqlite3.Connection) -> None:
     conn.execute("DELETE FROM prov_edges")
+    conn.execute("DELETE FROM prov_nodes")
 
 
 def index_prov_edge(
@@ -240,6 +250,26 @@ def read_prov_edges(kb_dir: Path) -> list[tuple[str, str, str, str, str | None]]
             "ORDER BY src_id, dst_id, kind"
         ).fetchall()
     return [(r[0], r[1], r[2], r[3], r[4]) for r in rows]
+
+
+def index_prov_node(
+    conn: sqlite3.Connection, *, id: str, kind: str, status: str = "",
+    label: str = "",
+) -> None:
+    conn.execute(
+        "INSERT OR REPLACE INTO prov_nodes (id, kind, status, label) "
+        "VALUES (?, ?, ?, ?)",
+        (id, kind, status, label),
+    )
+
+
+def read_prov_nodes(kb_dir: Path) -> list[tuple[str, str, str, str]]:
+    """Return the cached node facts (kind, status, label), ordered by id."""
+    with open_db(kb_dir) as conn:
+        rows = conn.execute(
+            "SELECT id, kind, status, label FROM prov_nodes ORDER BY id"
+        ).fetchall()
+    return [(r[0], r[1], r[2], r[3]) for r in rows]
 
 
 def set_meta(conn: sqlite3.Connection, key: str, value: str) -> None:

@@ -15,8 +15,8 @@ questions:
 * ``trace``  — the shortest typed-edge path between two artifacts.
 
 The graph is *derived state*. Nothing here is a source of truth: every edge is
-rebuilt from durable files, and the persistent ``prov_edges`` table in
-``state.db`` is a disposable cache that ``vouch provenance rebuild``
+rebuilt from files on disk, and the persistent ``prov_edges`` / ``prov_nodes``
+tables in ``state.db`` are a disposable cache that ``vouch provenance rebuild``
 reconstructs byte-for-byte. All mutations still flow through the existing
 proposal + lifecycle code paths.
 """
@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from .cache import load_graph, prov_stamp, rebuild_prov_edges
 from .graph import ProvGraph, build_graph
-from .model import Edge, EdgeKind, NodeKind
+from .model import Edge, EdgeKind, NodeKind, NodeMeta
 from .query import (
     LifecycleOp,
     graph_export,
@@ -42,6 +42,7 @@ __all__ = [
     "EdgeKind",
     "LifecycleOp",
     "NodeKind",
+    "NodeMeta",
     "ProvGraph",
     "build_graph",
     "graph_export",

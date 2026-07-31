@@ -91,6 +91,27 @@ export interface Proposal {
   [k: string]: unknown
 }
 
+/** A node in kb.graph_export's json format — one artifact, or one pending proposal. */
+export interface GraphNode {
+  id: string
+  kind: 'claim' | 'page' | 'evidence' | 'source' | 'session' | 'event' | 'proposal' | 'unknown'
+  /** The artifact's own words: a claim's text, a page's title. Falls back to the id. */
+  label: string
+  /** Review status — 'pending' for an unreviewed proposal, '' for structural nodes. */
+  status: string
+}
+
+export interface GraphEdge {
+  src: string
+  dst: string
+  kind: string
+}
+
+export interface GraphExport {
+  nodes: GraphNode[]
+  edges: GraphEdge[]
+}
+
 /** One row of kb.list_sessions — a captured agent session in the summary pipeline. */
 export interface SessionEntry {
   /** Null when the capture never recorded a session id (legacy buffers). */

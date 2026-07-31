@@ -7,6 +7,7 @@ import { BrowseView } from './views/BrowseView'
 import { ChatView } from './views/ChatView'
 import { ClaimsView } from './views/ClaimsView'
 import { DashboardView } from './views/DashboardView'
+import { MemoryNetworkView } from './views/MemoryNetworkView'
 import { PendingView } from './views/PendingView'
 import { ReviewView } from './views/ReviewView'
 import { SessionsView } from './views/SessionsView'
@@ -26,6 +27,7 @@ export default function App() {
                 <Route path="/pending" element={<PendingView />} />
                 <Route path="/claims" element={<ClaimsView />} />
                 <Route path="/browse/:kind?/:id?" element={<BrowseView />} />
+                <Route path="/memory" element={<MemoryNetworkView />} />
                 <Route path="/sessions" element={<SessionsView />} />
                 <Route path="/dashboard" element={<DashboardView />} />
                 <Route path="/stats" element={<StatsView />} />

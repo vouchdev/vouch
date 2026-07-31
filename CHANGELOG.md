@@ -7,6 +7,23 @@ All notable changes to vouch are documented here. Format follows
 ## [Unreleased]
 
 ### Added
+- **memory network — the kb as a graph, pending included** (#604): vouch knew
+  the shape of its own knowledge and had no way to *look* at it. `vouch graph`
+  and `kb.graph_export` gain `format=json` — `{nodes: [{id, kind, label,
+  status}], edges: [{src, dst, kind}]}` — and the console gains a **Memory**
+  view that renders it as a pannable, zoomable graph where clicking a node
+  opens the existing artifact drawer. `dot` and `mermaid` are untouched.
+  The load-bearing part is `status`: **pending proposals are now graph nodes**,
+  keyed on the proposal id rather than the artifact id their payload would
+  create, wired in by the same edge kinds a durable artifact uses (`cites` to
+  the sources they quote, `embeds` to the claims a proposed page would collect,
+  `proposedIn` to the filing session) plus one new kind, `targets`, for the
+  artifact a pending delete would remove. A graph that shows only approved
+  knowledge hides exactly the part a reviewer is there to look at; colouring by
+  status makes the review gate the thing you see. Kind, status and label are
+  captured during the build and cached in a new `prov_nodes` table, so `json`
+  costs no file reads per node — it is as cheap as `dot`, and a cache-loaded
+  graph reports the same facts as a freshly built one.
 - **bench: composite guards** (#616): `efficiency`, `consistency` and `canary`
   as bounded multipliers over the composite, plus a `bench_version` stamp on
   every report. Reported **beside** the composite, never folded into it —
