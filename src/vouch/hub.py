@@ -2,7 +2,8 @@
 
 `~/.config/vouch/registry.yaml` (override with VOUCH_REGISTRY_PATH; honours
 XDG_CONFIG_HOME) lists known KBs — one row per KB instance: id, display
-name, role (project | personal | team), path. The registry is advisory
+name, role (project | personal | team), path, and who it belongs to (owner,
+and the agent it was provisioned for, if any). The registry is advisory
 routing state, never authority: identity and content live in each KB's own
 `.vouch/`, so a stale or deleted registry degrades to today's per-project
 behaviour instead of breaking anything. It is machine-local and never
@@ -13,10 +14,16 @@ This file is the local seed of the vouchhub registry of connected KBs
 daemon start here as plain functions over a YAML file.
 
 `resolve()` wraps `storage.discover_root` with the registry-aware safety
-check: a KB registered with role `personal` is never an ambient capture
-target for a directory below it — capture refuses, reads warn. This is the
-second belt on top of the structural $HOME walk-stop in `discover_root`
-(which needs no registry state at all).
+check: a KB that belongs to someone other than the directory it was found
+from — a `personal` catch-all, or a KB provisioned for an agent — is never
+an ambient capture target for a directory below it, so capture refuses and
+reads warn. This is the second belt on top of the structural $HOME walk-stop
+in `discover_root` (which needs no registry state at all).
+
+Ownership here is routing metadata, and only that. It records *whose* KB this
+is so `vouch kb list` can say so and so the guard above knows a machine-owned
+KB when it sees one. What a credential may actually reach is a separate,
+enforced question — see `kb_binding.py`.
 """
 
 from __future__ import annotations
@@ -38,6 +45,7 @@ from .storage import KB_DIRNAME, KBNotFoundError, KBStore, discover_root
 
 REGISTRY_ENV = "VOUCH_REGISTRY_PATH"
 PERSONAL_KB_ENV = "VOUCH_PERSONAL_KB"
+AGENT_KBS_ENV = "VOUCH_AGENT_KBS_DIR"
 REGISTRY_VERSION = 1
 ROLES = ("project", "personal", "team")
 
@@ -59,6 +67,18 @@ class RegistryEntry:
     role: str
     path: str
     added_at: str
+    # Who this KB belongs to. `owner` is the human accountable for it;
+    # `agent` names the agent it was provisioned for, and is what makes a KB
+    # machine-owned. Both default empty so every row written before they
+    # existed reads back as a human-owned KB with an unrecorded owner —
+    # which is exactly what those rows are.
+    owner: str = ""
+    agent: str = ""
+
+    @property
+    def machine_owned(self) -> bool:
+        """Whether this KB exists to hold one agent's memory."""
+        return bool(self.agent)
 
 
 def _parse_entry(raw: object) -> RegistryEntry | None:
@@ -79,6 +99,8 @@ def _parse_entry(raw: object) -> RegistryEntry | None:
         role=str(role),
         path=path,
         added_at=str(raw.get("added_at") or ""),
+        owner=str(raw.get("owner") or ""),
+        agent=str(raw.get("agent") or ""),
     )
 
 
@@ -128,22 +150,30 @@ def _registry_lock(p: Path) -> Iterator[None]:
         os.close(fd)
 
 
+def _row(e: RegistryEntry) -> dict[str, Any]:
+    """One serialized registry row. Empty ownership fields are omitted so a
+    registry full of ordinary project KBs reads the same as it always did."""
+    row: dict[str, Any] = {
+        "kb_id": e.kb_id,
+        "name": e.name,
+        "role": e.role,
+        "path": e.path,
+        "added_at": e.added_at,
+    }
+    if e.owner:
+        row["owner"] = e.owner
+    if e.agent:
+        row["agent"] = e.agent
+    return row
+
+
 def save_registry(entries: list[RegistryEntry], path: Path | None = None) -> Path:
     """Atomically write the registry (unique tmp file + rename)."""
     p = path or registry_path()
     p.parent.mkdir(parents=True, exist_ok=True)
     body: dict[str, Any] = {
         "version": REGISTRY_VERSION,
-        "kbs": [
-            {
-                "kb_id": e.kb_id,
-                "name": e.name,
-                "role": e.role,
-                "path": e.path,
-                "added_at": e.added_at,
-            }
-            for e in entries
-        ],
+        "kbs": [_row(e) for e in entries],
     }
     # A per-writer tempfile (not a shared fixed name) so two concurrent
     # writers can never truncate or rename-steal each other's staging file.
@@ -187,9 +217,16 @@ def register_kb(
     role: str = "project",
     name: str | None = None,
     actor: str,
+    owner: str | None = None,
+    agent: str | None = None,
     path: Path | None = None,
 ) -> RegistryEntry:
-    """Add (or refresh) one KB in the machine registry. Idempotent on kb_id."""
+    """Add (or refresh) one KB in the machine registry. Idempotent on kb_id.
+
+    ``owner`` and ``agent`` are sticky: passing None on a refresh keeps what
+    the row already said, so re-running plain `vouch hub register` over an
+    agent-owned KB does not quietly launder it into a human-owned one.
+    """
     root = root.resolve()
     if not (root / KB_DIRNAME).is_dir():
         raise KBNotFoundError(f"no {KB_DIRNAME}/ at {root} — run `vouch init` there first")
@@ -197,27 +234,21 @@ def register_kb(
         raise ValueError(f"role must be one of {ROLES}, got {role!r}")
     store = KBStore(root)
     kb_id, kb_name = ensure_kb_identity(store, actor=actor)
-    entry = RegistryEntry(
-        kb_id=kb_id,
-        name=name or kb_name,
-        role=role,
-        path=str(root),
-        added_at=utcnow_iso(),
-    )
     with _registry_lock(path or registry_path()):
         existing = load_registry(path)
         entries = [e for e in existing if e.kb_id != kb_id]
         # A moved/re-registered KB keeps one row: the kb_id is the key, the
         # path is metadata. Preserve the original added_at on refresh.
         previous = next((e for e in existing if e.kb_id == kb_id), None)
-        if previous is not None and previous.added_at:
-            entry = RegistryEntry(
-                kb_id=entry.kb_id,
-                name=entry.name,
-                role=entry.role,
-                path=entry.path,
-                added_at=previous.added_at,
-            )
+        entry = RegistryEntry(
+            kb_id=kb_id,
+            name=name or kb_name,
+            role=role,
+            path=str(root),
+            added_at=(previous.added_at if previous and previous.added_at else utcnow_iso()),
+            owner=owner if owner is not None else (previous.owner if previous else ""),
+            agent=agent if agent is not None else (previous.agent if previous else ""),
+        )
         entries.append(entry)
         save_registry(entries, path)
     return entry
@@ -292,15 +323,23 @@ def resolve(start: Path | None = None) -> Resolution:
         return Resolution(root=root, why=trace)
 
     entry = entry_for_root(root)
-    if entry is not None and entry.role == "personal":
+    if entry is not None and (entry.role == "personal" or entry.machine_owned):
         origin = (start or Path.cwd()).resolve()
         if os.environ.get("VOUCH_PROJECT_DIR") and start is None:
             candidate = Path(os.environ["VOUCH_PROJECT_DIR"])
             if candidate.is_dir():
                 origin = candidate.resolve()
         if origin != root.resolve():
+            # An agent KB caught by upward discovery is the same hazard as the
+            # personal catch-all: a project's sessions would land in a store
+            # curated for something else entirely.
+            kind = (
+                f"provisioned for agent {entry.agent!r}"
+                if entry.machine_owned
+                else "registered as a personal KB"
+            )
             guard = (
-                f"KB at {root} is registered as a personal KB; refusing ambient "
+                f"KB at {root} is {kind}; refusing ambient "
                 f"capture from {origin}. Run `vouch init` in the project root, or "
                 f"set VOUCH_KB_PATH={root / KB_DIRNAME} to target it deliberately."
             )
@@ -340,6 +379,39 @@ def personal_kb_root() -> Path | None:
     except RuntimeError:
         return None
     return home / ".local" / "share" / "vouch" / "personal"
+
+
+def agent_kb_root(name: str) -> Path | None:
+    """Where a KB provisioned for an agent lives, by name.
+
+    ``VOUCH_AGENT_KBS_DIR`` > ``$XDG_DATA_HOME/vouch/kbs`` >
+    ``~/.local/share/vouch/kbs``, mirroring `personal_kb_root`: content, so a
+    data path. Deliberately *outside* any project tree — a KB that sits above
+    a project is one that upward discovery can capture into by accident, and
+    the whole point of a dedicated agent KB is that it cannot be reached
+    without asking for it. None when no home can be determined (containers).
+    """
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip("-.")
+    if not slug:
+        raise ValueError(f"cannot derive a directory name from {name!r}")
+    forced = os.environ.get(AGENT_KBS_ENV)
+    if forced:
+        return Path(forced).expanduser() / slug
+    xdg = os.environ.get("XDG_DATA_HOME")
+    if xdg:
+        return Path(xdg) / "vouch" / "kbs" / slug
+    try:
+        home = Path.home()
+    except RuntimeError:
+        return None
+    return home / ".local" / "share" / "vouch" / "kbs" / slug
+
+
+def agent_entries(*, path: Path | None = None) -> list[RegistryEntry]:
+    """Every machine-owned row, newest-registered first."""
+    rows = [e for e in load_registry(path) if e.machine_owned]
+    rows.sort(key=lambda e: e.added_at, reverse=True)
+    return rows
 
 
 def personal_entries(*, path: Path | None = None) -> list[RegistryEntry]:

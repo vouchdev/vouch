@@ -41,6 +41,7 @@ from . import goals as goals_mod
 from . import hub as hub_mod
 from . import inbox as inbox_mod
 from . import install_adapter as install_mod
+from . import kb_binding as kb_binding_mod
 from . import lifecycle as life
 from . import media as media_mod
 from . import metrics as metrics_mod
@@ -124,6 +125,7 @@ def _cli_errors() -> Iterator[None]:
         codex_rollout_mod.CodexRolloutError,
         agents_mod.AgentError,
         pins_mod.PinError,
+        kb_binding_mod.BindingError,
     ) as e:
         raise click.ClickException(str(e)) from e
 
@@ -393,6 +395,227 @@ def hub_unregister(token: str) -> None:
     if removed is None:
         raise click.ClickException(f"no registered KB matches {token!r}")
     click.echo(f"unregistered {removed.name} ({removed.kb_id})")
+
+
+# --- dedicated agent KBs (#609) -------------------------------------------
+
+
+@cli.group(name="kb")
+def kb_group() -> None:
+    """Provision KBs, including dedicated ones for scheduled agents.
+
+    An agent that runs on a schedule produces a lot of narrow, machine-shaped
+    memory; mixing it into the project KB buries what a human curated. A
+    dedicated KB keeps it separate, and the credential issued alongside it
+    reaches that KB and no other — so a leaked CI secret cannot write to the
+    project KB no matter which directory the agent runs from.
+    """
+
+
+def _issue_agent_credential(
+    store: KBStore, *, agent: str, actor: str, note: str | None
+) -> tuple[str, str]:
+    """Mint a credential for `agent`, bind it to `store`'s KB, register it.
+
+    Returns (token, env_var). The token is returned for a single echo and is
+    never written anywhere by vouch: what lands on disk is its 16-hex subject,
+    in the KB's own committed agent registry and in the machine-local binding
+    file. Recovering it later is impossible by construction — issue a new one.
+    """
+    identity = store.identity()
+    if identity is None:  # pragma: no cover - init always mints
+        raise click.ClickException(f"KB at {store.root} has no identity to bind to")
+    kb_id, kb_name = identity
+    token = kb_binding_mod.issue_token()
+    subject = trust_mod.auth_subject_for_token(token)
+    agents_mod.register(
+        store, subject=subject, name=agent, actor=actor,
+        note=note or f"dedicated KB {kb_name}",
+    )
+    kb_binding_mod.bind(
+        subject=subject, kb_id=kb_id, kb_name=kb_name, agent=agent,
+    )
+    audit_mod.log_event(
+        store.kb_dir, event="agent.bind", actor=actor,
+        data={"subject": subject, "kb_id": kb_id, "agent": agent},
+    )
+    return token, kb_binding_mod.token_env_var(agent)
+
+
+def _echo_credential(token: str, env_var: str, kb_dir: Path) -> None:
+    """Print a freshly issued credential once, with what to do with it."""
+    click.echo("")
+    click.echo(f"  {env_var}={token}")
+    click.echo("")
+    click.echo(
+        "This is the only time the token is shown — vouch stores its "
+        "fingerprint, never the secret."
+    )
+    click.echo(
+        f"Export it where the agent runs, then point the agent at this KB:\n"
+        f"  export {env_var}=...\n"
+        f"  export VOUCH_KB_PATH={kb_dir}"
+    )
+
+
+@kb_group.command("create")
+@click.argument("name")
+@click.option(
+    "--for-agent",
+    "for_agent",
+    default=None,
+    help="Provision this KB for an agent and issue it a credential bound to "
+    "this KB alone.",
+)
+@click.option(
+    "--path",
+    default=None,
+    type=click.Path(file_okay=False),
+    help="Where to create it (default: $XDG_DATA_HOME/vouch/kbs/<name>).",
+)
+@click.option("--note", default=None, help="What this agent is for.")
+def kb_create(
+    name: str, for_agent: str | None, path: str | None, note: str | None
+) -> None:
+    """Create a KB called NAME and register it on this machine.
+
+    With --for-agent, the KB is provisioned for that agent: the registry row
+    records who owns it, ambient capture from a project directory refuses to
+    write into it, and a fresh credential is printed once, bound to this KB.
+    Promote anything worth keeping into the project KB with `vouch adopt`.
+    """
+    if path is not None:
+        root = Path(path).expanduser().resolve()
+    else:
+        with _cli_errors():
+            derived = hub_mod.agent_kb_root(name)
+        if derived is None:
+            raise click.ClickException(
+                "cannot determine a home for the KB — pass --path or set "
+                f"{hub_mod.AGENT_KBS_ENV} to a writable folder"
+            )
+        root = derived
+    if (root / ".vouch").is_dir():
+        raise click.ClickException(
+            f"a KB already exists at {root} — choose another name, or run "
+            f"`vouch kb issue {name}` to issue it another credential"
+        )
+    with _cli_errors():
+        try:
+            store, _seed, _tmpl = _bootstrap_kb(root)
+        except Exception as e:
+            # Same rollback as the personal KB: an unwritable path must not
+            # leave half a KB behind for a rerun to mistake for a finished one.
+            shutil.rmtree(root / ".vouch", ignore_errors=True)
+            raise click.ClickException(f"could not initialise the KB at {root}: {e}") from e
+        entry = hub_mod.register_kb(
+            root, name=name, actor=_whoami(),
+            owner=_whoami(), agent=for_agent or "",
+        )
+    click.echo(f"Initialised KB at {store.kb_dir}")
+    click.echo(f"Registered in the machine registry: {entry.name} ({entry.kb_id})")
+    if for_agent is None:
+        return
+    with _cli_errors():
+        token, env_var = _issue_agent_credential(
+            store, agent=for_agent, actor=_whoami(), note=note
+        )
+        _write_serve_token_ref(store, env_var)
+    click.echo(f"Issued a credential for {for_agent}, bound to this KB only.")
+    _echo_credential(token, env_var, store.kb_dir)
+
+
+@kb_group.command("issue")
+@click.argument("name")
+@click.option("--for-agent", "for_agent", required=True, help="The agent to issue for.")
+@click.option("--note", default=None, help="What this agent is for.")
+def kb_issue(name: str, for_agent: str, note: str | None) -> None:
+    """Issue another credential for the existing KB called NAME.
+
+    The rotation path: a leaked credential is retired with `vouch agents
+    revoke`, which is terminal, and re-admitting an agent means giving it a
+    new token — which is a new subject, bound afresh to this KB.
+    """
+    entry = _agent_kb_entry(name)
+    store = KBStore(Path(entry.path))
+    with _cli_errors():
+        token, env_var = _issue_agent_credential(
+            store, agent=for_agent, actor=_whoami(), note=note
+        )
+    click.echo(f"Issued a credential for {for_agent}, bound to {entry.name} only.")
+    _echo_credential(token, env_var, store.kb_dir)
+    if env_var not in store.config_path.read_text(encoding="utf-8"):
+        click.echo(
+            f"note: add `env:{env_var}` to serve.bearer_tokens in "
+            f"{store.config_path} for this KB to accept it.",
+            err=True,
+        )
+
+
+@kb_group.command("list")
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON instead of a table.")
+def kb_list(as_json: bool) -> None:
+    """List the KBs provisioned for agents on this machine."""
+    entries = hub_mod.agent_entries()
+    if as_json:
+        _emit_json(
+            {
+                "registry": str(hub_mod.registry_path()),
+                "kbs": [
+                    {
+                        "kb_id": e.kb_id,
+                        "name": e.name,
+                        "path": e.path,
+                        "owner": e.owner,
+                        "agent": e.agent,
+                        "added_at": e.added_at,
+                        "credentials": len(kb_binding_mod.bindings_for_kb(e.kb_id)),
+                    }
+                    for e in entries
+                ],
+            }
+        )
+        return
+    if not entries:
+        click.echo("no agent KBs on this machine (vouch kb create <name> --for-agent <agent>)")
+        return
+    for e in entries:
+        creds = len(kb_binding_mod.bindings_for_kb(e.kb_id))
+        click.echo(
+            f"{e.name}  agent={e.agent}  owner={e.owner or '-'}  "
+            f"credentials={creds}  {e.path}"
+        )
+
+
+def _agent_kb_entry(name: str) -> hub_mod.RegistryEntry:
+    """The registry row for an agent KB called `name`, or a clean error."""
+    entry = next((e for e in hub_mod.agent_entries() if e.name == name), None)
+    if entry is None:
+        raise click.ClickException(
+            f"no agent KB called {name!r} — `vouch kb list` shows what exists"
+        )
+    if not (Path(entry.path) / ".vouch").is_dir():
+        raise click.ClickException(
+            f"agent KB {name!r} is registered at {entry.path} but there is no "
+            ".vouch/ there — it moved or was deleted"
+        )
+    return entry
+
+
+def _write_serve_token_ref(store: KBStore, env_var: str) -> None:
+    """Point the fresh KB's accept-list at the credential's env var.
+
+    Only ever called on a KB `_bootstrap_kb` just wrote, so a structural
+    rewrite is safe here — there are no hand-written comments to lose, which
+    is the reason `hub.set_personal_fallback` goes to textual lengths.
+    The `env:` indirection is what keeps the secret out of a committed file.
+    """
+    loaded = yaml.safe_load(store.config_path.read_text(encoding="utf-8")) or {}
+    serve = loaded.setdefault("serve", {})
+    serve["bearer_tokens"] = [f"env:{env_var}"]
+    store.config_path.write_text(
+        yaml.safe_dump(loaded, sort_keys=False, allow_unicode=True), encoding="utf-8"
+    )
 
 
 def _init_personal_kb(fallback: bool | None) -> Path:

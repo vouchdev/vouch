@@ -27,6 +27,62 @@ A common convention: `<host>-<human>` so you can tell apart "Alice
 running Claude Code" from "Bob running Claude Code" from "Alice
 running Cursor".
 
+## Dedicated KBs for scheduled agents
+
+`VOUCH_AGENT` separates *attribution* inside one KB. An agent that runs
+on a schedule — a PR triager in CI, an incident summariser, a docs bot —
+usually wants separation of *storage* too: it produces a lot of narrow,
+machine-shaped memory, and a thousand run logs bury the knowledge a human
+curated.
+
+```bash
+vouch kb create ci-triage --for-agent pr-triager
+```
+
+That provisions an isolated KB under `$XDG_DATA_HOME/vouch/kbs/` (never
+inside a project tree), registers it in the machine registry as owned by
+you and provisioned for `pr-triager`, and prints a credential **once**:
+
+```
+  VOUCH_TOKEN_PR_TRIAGER=…
+```
+
+vouch never stores that secret. What it keeps is the token's 16-hex
+subject — in the KB's own committed `agents.yaml`, and in a machine-local
+binding file at `~/.config/vouch/credentials.yaml` (mode 0600). The
+binding is the part that matters: **that credential authenticates against
+that KB and no other.**
+
+Why the binding rather than just running `vouch init` somewhere else:
+which KB an agent hits is normally a function of its working directory,
+because discovery walks upward. A CI job that starts in the wrong
+directory — or a leaked token used from one — would otherwise reach the
+project KB. A bound credential fails closed everywhere but its own KB,
+regardless of cwd.
+
+Point the agent at it with both halves:
+
+```bash
+export VOUCH_TOKEN_PR_TRIAGER=…          # the credential
+export VOUCH_KB_PATH=~/.local/share/vouch/kbs/ci-triage/.vouch
+```
+
+Housekeeping:
+
+```bash
+vouch kb list                                   # what exists, and how many credentials each has
+vouch kb issue ci-triage --for-agent triager-2  # rotate / add a credential
+vouch agents revoke pr-triager                  # retire one (terminal, by design)
+vouch adopt …                                   # promote what's worth keeping into the project KB
+```
+
+Two properties worth knowing. **Tokens with no binding are unaffected** —
+an existing deployment keeps working exactly as before, so this is opt-in
+rather than a migration. And ambient capture *refuses* to write into an
+agent KB it reached by walking up from a project directory, the same
+guard the personal catch-all KB gets; set `VOUCH_KB_PATH` when you mean
+it deliberately.
+
 ## Concurrency
 
 vouch is single-writer per file. Two agents proposing simultaneously

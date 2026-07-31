@@ -275,10 +275,20 @@ def is_active(store: KBStore, subject: str) -> bool:
 def subject_is_active(subject: str) -> bool:
     """Store-resolving gate for the transport chokepoint.
 
+    Two questions, one gate: is this subject's row active *here*, and may this
+    subject reach this KB at all (`kb_binding`)? The second is what isolates a
+    credential issued for an agent's own KB — without it the token would still
+    authenticate against the project KB, because the answer below for a
+    subject this KB has never heard of is deliberately "yes".
+
     Best-effort by design: a request that cannot resolve a KB has no registry
     to be denied by, and an unreadable registry must not lock every agent out
     of a running server.
     """
+    # Imported here rather than at module scope for the same reason `trust.py`
+    # takes this gate as an injected callable: the auth path must not drag the
+    # storage layer into every importer of this module.
+    from . import kb_binding
     from .storage import KBStore, discover_root
 
     try:
@@ -286,7 +296,7 @@ def subject_is_active(subject: str) -> bool:
     except Exception:
         return True
     try:
-        return is_active(store, subject)
+        return is_active(store, subject) and kb_binding.store_allows(store, subject)
     except Exception:  # pragma: no cover - defensive
         logger.debug("agents: registry unreadable, allowing subject")
         return True

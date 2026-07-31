@@ -7,6 +7,28 @@ All notable changes to vouch are documented here. Format follows
 ## [Unreleased]
 
 ### Added
+- **dedicated agent kbs — `vouch kb create <name> --for-agent <agent>`** (#609): a
+  scheduled agent (a pr triager in ci, an incident summariser) produces a lot of
+  narrow, machine-shaped memory, and mixing it into the project kb buries what a
+  human curated. `vouch kb create` provisions an isolated kb outside any project
+  tree, registers it with an **owner and the agent it serves**, and issues a
+  credential **bound to that kb and only that kb** — printed once, never
+  persisted; what lands on disk is the 16-hex subject `trust.py` already derives.
+  The binding is what makes this worth more than `vouch init` in a subdirectory:
+  upward discovery makes which kb an agent hits a function of its working
+  directory, so a leaked ci secret otherwise reaches the project kb from the
+  wrong cwd. It is enforced at the existing transport chokepoint
+  (`agents.subject_is_active`) and lives machine-local in
+  `~/.config/vouch/credentials.yaml` (0600) — a binding stored *inside* the kb it
+  names is circular, since the project kb's copy has nothing to say about a token
+  issued for another kb and would still fall open. **Unbound tokens are
+  unaffected**, so this is opt-in rather than a migration; a bound one fails
+  closed everywhere but its own kb, including against a kb whose `kb.id` was
+  stripped. Ambient capture refuses to write into an agent kb reached by upward
+  discovery, the same guard the personal catch-all already gets. `vouch kb issue`
+  is the rotation path, `vouch kb list` shows what exists, `vouch agents revoke`
+  still retires a credential, and `vouch adopt` still promotes anything worth
+  keeping into the project kb.
 - **bench: composite guards** (#616): `efficiency`, `consistency` and `canary`
   as bounded multipliers over the composite, plus a `bench_version` stamp on
   every report. Reported **beside** the composite, never folded into it —
