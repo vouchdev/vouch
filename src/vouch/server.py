@@ -92,11 +92,24 @@ def _agent() -> str:
     # An authenticated bearer subject (set by the /mcp transport) is the
     # principal's real identity and must be what proposals/audit attribute to,
     # so a token cannot be spoofed and distinct tokens are distinct actors.
-    # VOUCH_AGENT is only the tokenless (stdio/dev) fallback.
+    # VOUCH_AGENT is only the tokenless (stdio/dev) fallback. Agent-provisioned
+    # KBs stamp `agent.caller` into config so the identity survives when the
+    # host forgot to export VOUCH_AGENT (#606).
     subject = trust_mod.current().auth_subject
     if subject is not None:
         return f"token:{subject}"
-    return os.environ.get("VOUCH_AGENT", "unknown-agent")
+    env = os.environ.get("VOUCH_AGENT")
+    if env:
+        return env
+    try:
+        from . import agent_provision as agent_provision_mod
+
+        stamped = agent_provision_mod.caller_from_store(_store())
+        if stamped:
+            return stamped
+    except Exception:
+        pass
+    return "unknown-agent"
 
 
 # === capabilities / status ================================================

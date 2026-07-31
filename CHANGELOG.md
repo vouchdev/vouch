@@ -7,6 +7,19 @@ All notable changes to vouch are documented here. Format follows
 ## [Unreleased]
 
 ### Added
+- **agent-native provisioning — `vouch init --agent` + `vouch agents claim`**
+  (#606): an agent can provision its own identity and agent-scoped KB without
+  a human handing it one first. `--agent --agent-caller <name>` creates the KB
+  under `$XDG_DATA_HOME/vouch/agents/<name>/`, stamps `agent.caller` into
+  config as the persistent proposer identity (MCP/JSONL/CLI fall back to it
+  when `VOUCH_AGENT` is unset), and writes a local credential to
+  `~/.config/vouch/agent-credentials.yaml` (chmod 0600) that is **never**
+  echoed to stdout. It emits a claim token plus the exact
+  `vouch agents claim <token>` command (and `--json` for skills). Claiming
+  from a project KB transfers ownership and moves knowledge through the same
+  review gate as `vouch adopt`; the agent's credential and its own KB
+  artifacts stay untouched. Unclaimed agent proposals live only in the agent
+  KB until claim — they are not visible to the project beforehand.
 - **explicit pins — a working set that always enters the pack** (#615):
   `vouch pin <id>` / `vouch pins list` / `vouch unpin <id>`. Pinned claims and
   pages lead every context pack instead of having to win the query each turn,

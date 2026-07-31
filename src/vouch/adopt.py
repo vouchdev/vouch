@@ -37,9 +37,7 @@ ADOPT_ACTOR = "vouch-adopt"
 
 # Claim statuses that never travel: superseded/archived knowledge was
 # retired on purpose, redacted knowledge must not propagate.
-_DEAD_STATUSES = frozenset(
-    {ClaimStatus.SUPERSEDED, ClaimStatus.ARCHIVED, ClaimStatus.REDACTED}
-)
+_DEAD_STATUSES = frozenset({ClaimStatus.SUPERSEDED, ClaimStatus.ARCHIVED, ClaimStatus.REDACTED})
 
 
 @dataclass
@@ -91,16 +89,12 @@ def find_adoptable_sources(personal: KBStore, match_root: Path) -> list[Source]:
     out: list[Source] = []
     for src in personal.list_sources():
         origin_path = src.metadata.get("origin_path")
-        if isinstance(origin_path, str) and origin_path and _origin_matches(
-            origin_path, root
-        ):
+        if isinstance(origin_path, str) and origin_path and _origin_matches(origin_path, root):
             out.append(src)
     return out
 
 
-def _claims_citing(
-    personal: KBStore, source_ids: set[str]
-) -> list[tuple[Claim, Evidence | None]]:
+def _claims_citing(personal: KBStore, source_ids: set[str]) -> list[tuple[Claim, Evidence | None]]:
     """Live personal claims citing any of ``source_ids``, with a receipt if any.
 
     A claim cites a source either directly (a bare source id in evidence) or
@@ -148,25 +142,84 @@ def adopt(
     rejected by the receipt resolver. ``dry_run`` reports without writing.
     """
     root = Path(match_root).resolve()
-    personal_identity = personal.identity()
-    project_identity = project.identity()
-    report = AdoptReport(
+    sources = find_adoptable_sources(personal, root)
+    return _adopt_sources(
+        project,
+        personal,
+        sources,
         origin=str(root),
-        from_kb=personal_identity[0] if personal_identity else None,
+        rationale_prefix=(f"adopted from personal KB {{from_kb}} — captured in {root}"),
+        receipt_reason="adopted from personal KB (receipt re-verified)",
+        actor=actor,
+        retire=retire,
+        dry_run=dry_run,
+        pages_pending=_pending_pages_for_origin(personal, root),
+    )
+
+
+def adopt_kb(
+    project: KBStore,
+    source_kb: KBStore,
+    *,
+    actor: str = ADOPT_ACTOR,
+    retire: bool = False,
+    dry_run: bool = False,
+    origin_label: str | None = None,
+) -> AdoptReport:
+    """Adopt every live source/claim from ``source_kb`` into ``project``.
+
+    Same gate path as :func:`adopt`, but without an origin-folder filter —
+    used when the source KB *is* the agent's own store (agent-native
+    provisioning claim), not a personal catch-all that stamped
+    ``metadata.origin_path``.
+    """
+    sources = list(source_kb.list_sources())
+    label = origin_label or str(source_kb.root)
+    return _adopt_sources(
+        project,
+        source_kb,
+        sources,
+        origin=label,
+        rationale_prefix=f"adopted from agent KB {{from_kb}} ({label})",
+        receipt_reason="adopted from agent KB (receipt re-verified)",
+        actor=actor,
+        retire=retire,
+        dry_run=dry_run,
+        pages_pending=[],
+    )
+
+
+def _adopt_sources(
+    project: KBStore,
+    source_kb: KBStore,
+    sources: list[Source],
+    *,
+    origin: str,
+    rationale_prefix: str,
+    receipt_reason: str,
+    actor: str,
+    retire: bool,
+    dry_run: bool,
+    pages_pending: list[str],
+) -> AdoptReport:
+    source_identity = source_kb.identity()
+    project_identity = project.identity()
+    from_kb = source_identity[0] if source_identity else None
+    report = AdoptReport(
+        origin=origin,
+        from_kb=from_kb,
         to_kb=project_identity[0] if project_identity else None,
         dry_run=dry_run,
     )
-    report.pages_pending_in_personal = _pending_pages_for_origin(personal, root)
-    sources = find_adoptable_sources(personal, root)
+    report.pages_pending_in_personal = list(pages_pending)
     if not sources:
         return report
     source_ids = {s.id for s in sources}
-    pairs = _claims_citing(personal, source_ids)
+    pairs = _claims_citing(source_kb, source_ids)
+    rationale = rationale_prefix.format(from_kb=from_kb or "(no id)")
 
     if dry_run:
-        report.sources = sorted(
-            sid for sid in source_ids if not _source_exists(project, sid)
-        )
+        report.sources = sorted(sid for sid in source_ids if not _source_exists(project, sid))
         queued = _pending_payload_ids(project)
         # Predict against the PROJECT's real gate — a dry run that promises
         # durable claims a closed gate will leave pending is worse than no
@@ -184,7 +237,7 @@ def adopt(
     for src in sources:
         if _source_exists(project, src.id):
             continue  # content-addressed: already here from a prior pass
-        content = personal.read_source_content(src.id)
+        content = source_kb.read_source_content(src.id)
         project.put_source(
             content,
             title=src.title,
@@ -195,7 +248,7 @@ def adopt(
                 **src.metadata,
                 "adopted_from": report.from_kb,
             },
-            # The project's own stamp, not the personal KB's: from here on
+            # The project's own stamp, not the source KB's: from here on
             # this knowledge belongs to this project.
             scope=proposals_mod.default_scope(project),
         )
@@ -206,7 +259,7 @@ def adopt(
     # another copy of the same claim into the review queue.
     queued = _pending_payload_ids(project)
     # Only claims that actually landed DURABLE in the project may be retired
-    # from the personal KB. Archiving one that is merely pending would strand
+    # from the source KB. Archiving one that is merely pending would strand
     # it: reject or expire the proposal and the knowledge is live in neither
     # KB, with no unarchive path and no second adopt pass (archived claims are
     # skipped as dead).
@@ -215,10 +268,6 @@ def adopt(
         if _already_durable(project, claim) or claim.id in queued:
             report.claims_skipped.append(claim.id)
             continue
-        rationale = (
-            f"adopted from personal KB {report.from_kb or '(no id)'} — "
-            f"captured in {root}"
-        )
         if receipt is not None and receipt.quote:
             result = proposals_mod.propose_quoted_claim(
                 project,
@@ -241,7 +290,7 @@ def adopt(
                 project,
                 result.proposal,
                 actor=actor,
-                reason="adopted from personal KB (receipt re-verified)",
+                reason=receipt_reason,
             )
             if durable is not None:
                 report.claims_durable.append(durable.id)
@@ -277,9 +326,9 @@ def adopt(
     if retire:
         for claim_id in landed_durable:
             try:
-                lifecycle.archive(personal, claim_id=claim_id, actor=actor)
+                lifecycle.archive(source_kb, claim_id=claim_id, actor=actor)
             except Exception:
-                # Retiring is best-effort tidying of the personal KB; a claim
+                # Retiring is best-effort tidying of the source KB; a claim
                 # that cannot be archived must not fail the adoption.
                 continue
             report.retired.append(claim_id)
@@ -300,7 +349,7 @@ def adopt(
             data={**data, "direction": "in", "from_kb": report.from_kb},
         )
         audit_mod.log_event(
-            personal.kb_dir,
+            source_kb.kb_dir,
             event="kb.adopt",
             actor=actor,
             data={**data, "direction": "out", "to_kb": report.to_kb},
@@ -324,8 +373,10 @@ def _pending_pages_for_origin(personal: KBStore, match_root: Path) -> list[str]:
         if not isinstance(meta, dict):
             continue
         origin_path = meta.get("origin_path")
-        if isinstance(origin_path, str) and origin_path and _origin_matches(
-            origin_path, match_root
+        if (
+            isinstance(origin_path, str)
+            and origin_path
+            and _origin_matches(origin_path, match_root)
         ):
             out.append(proposal.id)
     return out
@@ -334,9 +385,7 @@ def _pending_pages_for_origin(personal: KBStore, match_root: Path) -> list[str]:
 def _receipts_auto_approve(project: KBStore) -> bool:
     """Whether this KB's gate lets a verified receipt land durable by itself."""
     cfg = proposals_mod._review_config(project)
-    return bool(cfg.get("auto_approve_on_receipt")) or (
-        cfg.get("approver_role") == "trusted-agent"
-    )
+    return bool(cfg.get("auto_approve_on_receipt")) or (cfg.get("approver_role") == "trusted-agent")
 
 
 def _pending_payload_ids(project: KBStore) -> set[str]:

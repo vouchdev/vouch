@@ -108,10 +108,22 @@ def _agent() -> str:
     # or one token could propose as one actor and approve as another to defeat
     # the self-approval gate. Only fall back to the header/env when the request
     # is unauthenticated (tokenless loopback/dev), which is trusted by design.
+    # Agent-provisioned KBs stamp `agent.caller` into config (#606).
     subject = trust_mod.current().auth_subject
     if subject is not None:
         return f"token:{subject}"
-    return _actor.get() or os.environ.get("VOUCH_AGENT", "unknown-agent")
+    env = _actor.get() or os.environ.get("VOUCH_AGENT")
+    if env:
+        return env
+    try:
+        from . import agent_provision as agent_provision_mod
+
+        stamped = agent_provision_mod.caller_from_store(_store())
+        if stamped:
+            return stamped
+    except Exception:
+        pass
+    return "unknown-agent"
 
 
 # --- per-method handlers ---------------------------------------------------
