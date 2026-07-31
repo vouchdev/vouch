@@ -1104,7 +1104,12 @@ def handle_request(envelope: dict) -> dict:
             "id": req_id, "ok": False,
             "error": {"code": "dead_claim_refs", "message": str(e)},
         }
-    except (ValueError, ProposalError, ArtifactNotFoundError) as e:
+    # lifecycle validation failures (unknown goal status, self-supersede /
+    # -contradict) are caller errors, not server faults — the sibling of
+    # ProposalError. map to invalid_request so jsonl/http match the mcp contract
+    # (kb_set_goal_status catches LifecycleError and re-raises it as ValueError);
+    # otherwise a bad request reads as a retryable internal_error.
+    except (ValueError, ProposalError, ArtifactNotFoundError, life.LifecycleError) as e:
         return {
             "id": req_id, "ok": False,
             "error": {"code": "invalid_request", "message": str(e)},

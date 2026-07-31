@@ -381,3 +381,22 @@ def test_import_check_bundle_path_fenced_on_remote(store: KBStore, monkeypatch) 
                                "params": {"bundle_path": "/etc/passwd"}})
     assert not resp["ok"]
     assert "project root" in resp["error"]["message"]
+
+
+def test_jsonl_set_goal_status_bad_status_is_invalid_request(store: KBStore, monkeypatch) -> None:
+    # a typo'd goal status is a caller error, not a server fault. set_goal_status
+    # validates the status before the goal lookup and raises LifecycleError (a
+    # RuntimeError, not a ValueError); the dispatcher must map it to
+    # invalid_request like mcp does, or a client sees internal_error and wrongly
+    # treats a bad request as retryable. (status is checked before goal lookup,
+    # so no goal need exist.)
+    monkeypatch.chdir(store.root)
+    resp = handle_request(
+        {
+            "id": "1",
+            "method": "kb.set_goal_status",
+            "params": {"goal_id": "g-missing", "status": "bogus"},
+        }
+    )
+    assert not resp["ok"]
+    assert resp["error"]["code"] == "invalid_request"
