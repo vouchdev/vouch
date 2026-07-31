@@ -87,6 +87,7 @@ METHODS = [
     "kb.index_rebuild",
     "kb.lint",
     "kb.doctor",
+    "kb.fsck",
     "kb.export",
     "kb.export_check",
     "kb.import_check",

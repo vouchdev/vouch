@@ -7,6 +7,15 @@ All notable changes to vouch are documented here. Format follows
 ## [Unreleased]
 
 ### Added
+- **`kb.fsck` — the deepest health check, now agent-facing** (roadmap 1.5,
+  #738): `health.fsck()` (orphaned embeddings, dangling
+  supersede/contradict chains, decided-proposal ↔ artifact mismatches,
+  index-vs-file drift) was CLI-only — `kb.lint` and `kb.doctor` had full
+  MCP/JSONL/`capabilities.METHODS` registration, `fsck` didn't, so an
+  agent had no way to run the deepest check without shelling out.
+  Registered the same way `kb.doctor` already is; the CLI mirror
+  (`vouch fsck`) needed no change since it already matches the default
+  `kb.foo` → `vouch foo` naming rule.
 - **bench: composite guards** (#616): `efficiency`, `consistency` and `canary`
   as bounded multipliers over the composite, plus a `bench_version` stamp on
   every report. Reported **beside** the composite, never folded into it —

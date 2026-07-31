@@ -425,6 +425,80 @@ def test_fsck_without_state_db_reports_info(store: KBStore) -> None:
     assert report.ok is True
 
 
+# --- kb.fsck: agent-facing surfaces (MCP/JSONL/CLI) -------------------------
+#
+# health.fsck() itself is exercised throughout this file; these tests cover
+# only the newly-registered kb.fsck surfaces (it was CLI-only before, with
+# no MCP tool, JSONL handler, or capabilities.METHODS entry).
+
+
+def test_jsonl_fsck_matches_direct_call(store: KBStore, monkeypatch) -> None:
+    from vouch.jsonl_server import handle_request
+
+    src = store.put_source(b"e")
+    store.put_claim(Claim(id="c1", text="t", evidence=[src.id]))
+    monkeypatch.chdir(store.root)
+
+    resp = handle_request({"id": "f1", "method": "kb.fsck", "params": {}})
+    assert resp["ok"] is True
+
+    direct = health.fsck(store)
+    assert resp["result"]["ok"] == direct.ok
+    assert {f["code"] for f in resp["result"]["findings"]} == {
+        f.code for f in direct.findings
+    }
+    assert resp["result"]["counts"]["claims"] == direct.counts["claims"]
+
+
+def test_jsonl_fsck_surfaces_findings_not_just_ok_flag(
+    store: KBStore, monkeypatch,
+) -> None:
+    """A real finding (not just the ok flag) must round-trip through the
+    JSONL envelope — confirms the handler forwards the full findings list,
+    not a summarized/truncated version."""
+    from vouch.jsonl_server import handle_request
+
+    src = store.put_source(b"e")
+    c = Claim(id="real", text="t", evidence=[src.id])
+    store.put_claim(c)
+    _index_claim(store, c)
+    with index_db.open_db(store.kb_dir) as conn:
+        index_db.index_claim(
+            conn, id="ghost", text="x", type="fact", status="working", tags=[],
+        )
+    monkeypatch.chdir(store.root)
+
+    resp = handle_request({"id": "f2", "method": "kb.fsck", "params": {}})
+    assert resp["ok"] is True
+    codes = {f["code"] for f in resp["result"]["findings"]}
+    assert "index_orphan_claim" in codes
+
+
+def test_mcp_surface_serves_fsck(store: KBStore, monkeypatch) -> None:
+    from vouch import server
+
+    src = store.put_source(b"e")
+    store.put_claim(Claim(id="c1", text="t", evidence=[src.id]))
+    monkeypatch.setattr(server, "_store", lambda: store)
+
+    result = server.kb_fsck()
+    direct = health.fsck(store)
+    assert result["ok"] == direct.ok
+    assert {f["code"] for f in result["findings"]} == {f.code for f in direct.findings}
+    assert result["counts"]["claims"] == direct.counts["claims"]
+
+
+def test_cli_fsck_registered_as_kb_fsck_method() -> None:
+    """kb.fsck's default CLI mirror rule (kb.foo -> vouch foo) must resolve
+    to the pre-existing `fsck` command rather than needing a new one — this
+    pins that `_CLI_MIRRORS` correctly has no entry for kb.fsck."""
+    from tests.test_capabilities import _CLI_MIRRORS
+    from vouch import capabilities
+
+    assert "kb.fsck" in capabilities.METHODS
+    assert "kb.fsck" not in _CLI_MIRRORS
+
+
 def test_receipt_coverage_fidelity_number(store: KBStore) -> None:
     from vouch.extract import ingest_source
     from vouch.models import Claim

@@ -786,6 +786,19 @@ def _h_doctor(_: dict) -> dict:
     }
 
 
+def _h_fsck(_: dict) -> dict:
+    report = health.fsck(_store())
+    return {
+        "ok": report.ok,
+        "findings": [
+            {"severity": f.severity, "code": f.code,
+             "message": f.message, "object_ids": f.object_ids}
+            for f in report.findings
+        ],
+        "counts": report.counts,
+    }
+
+
 def _h_export(p: dict) -> dict:
     s = _store()
     exclude = tuple(p.get("exclude") or ())
@@ -1048,6 +1061,7 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.index_rebuild": _h_index_rebuild,
     "kb.lint": _h_lint,
     "kb.doctor": _h_doctor,
+    "kb.fsck": _h_fsck,
     "kb.export": _h_export,
     "kb.export_check": _h_export_check,
     "kb.import_check": _h_import_check,

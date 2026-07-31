@@ -1195,6 +1195,25 @@ def kb_doctor() -> dict[str, Any]:
 
 
 @mcp.tool()
+def kb_fsck() -> dict[str, Any]:
+    """Deep consistency check: orphaned embeddings, dangling lifecycle
+    chains, decided-proposal <-> artifact mismatches, index-vs-file drift.
+
+    Slower and stricter than `kb_doctor` — read-only, report findings only.
+    """
+    report = health.fsck(_store())
+    return {
+        "ok": report.ok,
+        "findings": [
+            {"severity": f.severity, "code": f.code,
+             "message": f.message, "object_ids": f.object_ids}
+            for f in report.findings
+        ],
+        "counts": report.counts,
+    }
+
+
+@mcp.tool()
 def kb_export(out_path: str, exclude: list[str] | None = None) -> dict[str, Any]:
     # exclude: subdir/file names to omit (e.g. "decided", "sessions") for a
     # knowledge-only bundle — mirrors `vouch export --exclude` and the kb.export
