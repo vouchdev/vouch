@@ -8,6 +8,7 @@ import pytest
 
 from vouch import health, index_db
 from vouch.models import Claim, ClaimStatus, Proposal, ProposalKind, ProposalStatus
+from vouch.proposals import approve, propose_claim, propose_delete, propose_goal
 from vouch.storage import KBStore, _yaml_dump
 
 
@@ -313,6 +314,108 @@ def test_fsck_decided_missing_artifact(store: KBStore) -> None:
     report = health.fsck(store)
     codes = {f.code for f in report.findings}
     assert "decided_missing_artifact" in codes
+
+
+def test_artifact_proposal_kinds_cover_enum() -> None:
+    """Every ProposalKind is either DELETE or an artifact kind fsck knows.
+
+    Hand-maintained presence maps over a growing enum are what made #682
+    (DELETE) and the #683 follow-up (GOAL) crash vouch fsck. A new member
+    must extend _ARTIFACT_PROPOSAL_KINDS (or be DELETE) or this fails.
+    """
+    assert health._ARTIFACT_PROPOSAL_KINDS | {ProposalKind.DELETE} == set(
+        ProposalKind
+    )
+    assert ProposalKind.DELETE not in health._ARTIFACT_PROPOSAL_KINDS
+
+
+def test_fsck_survives_approved_delete_proposal(store: KBStore) -> None:
+    """An approved delete must not crash fsck, and must not false-positive
+    the original create proposal as decided_missing_artifact."""
+    src = store.put_source(b"evidence")
+    pr = propose_claim(store, text="a fact", evidence=[src.id], proposed_by="agent-a")
+    claim = approve(store, pr.id, approved_by="human-b")
+
+    del_pr = propose_delete(
+        store, target_kind="claim", target_id=claim.id, proposed_by="agent-a",
+    )
+    approve(store, del_pr.id, approved_by="human-c")
+
+    report = health.fsck(store)
+    assert report.findings == []
+
+
+def test_fsck_survives_approved_goal_proposal(store: KBStore) -> None:
+    """Approved GOAL proposals are live create kinds — must not KeyError."""
+    pr = propose_goal(store, title="ship the thing", proposed_by="agent")
+    approve(store, pr.id, approved_by="reviewer")
+
+    report = health.fsck(store)
+    codes = {f.code for f in report.findings}
+    assert "decided_missing_artifact" not in codes
+    assert report.ok is True
+
+
+def test_fsck_flags_delete_whose_artifact_still_exists(store: KBStore) -> None:
+    """Delete approved but target still on disk — the delete never took."""
+    src = store.put_source(b"evidence")
+    claim = Claim(id="still-here", text="t", evidence=[src.id])
+    store.put_claim(claim)
+    store.put_proposal(Proposal(
+        id="del-1",
+        kind=ProposalKind.DELETE,
+        proposed_by="agent",
+        payload={"target_kind": "claim", "id": "still-here", "snapshot": {}},
+        status=ProposalStatus.APPROVED,
+    ))
+
+    report = health.fsck(store)
+    codes = {f.code for f in report.findings}
+    assert "decided_delete_artifact_present" in codes
+
+
+def test_fsck_flags_delete_with_invalid_target_kind(store: KBStore) -> None:
+    store.put_proposal(Proposal(
+        id="del-2",
+        kind=ProposalKind.DELETE,
+        proposed_by="agent",
+        payload={"target_kind": "not-a-real-kind", "id": "whatever", "snapshot": {}},
+        status=ProposalStatus.APPROVED,
+    ))
+
+    report = health.fsck(store)
+    codes = {f.code for f in report.findings}
+    assert "decided_delete_invalid_target_kind" in codes
+
+
+def test_fsck_flags_delete_proposal_with_no_artifact_id(store: KBStore) -> None:
+    """Malformed DELETE with no payload id is reported, not silently skipped."""
+    store.put_proposal(Proposal(
+        id="del-3",
+        kind=ProposalKind.DELETE,
+        proposed_by="agent",
+        payload={"target_kind": "claim", "snapshot": {}},
+        status=ProposalStatus.APPROVED,
+    ))
+
+    report = health.fsck(store)
+    codes = {f.code for f in report.findings}
+    assert "decided_no_artifact_id" in codes
+
+
+def test_fsck_flags_create_proposal_with_no_artifact_id(store: KBStore) -> None:
+    """Second-pass create/edit proposals also report a missing payload id."""
+    store.put_proposal(Proposal(
+        id="claim-no-id",
+        kind=ProposalKind.CLAIM,
+        proposed_by="agent",
+        payload={"text": "t", "evidence": ["e1"]},
+        status=ProposalStatus.APPROVED,
+    ))
+
+    report = health.fsck(store)
+    codes = {f.code for f in report.findings}
+    assert "decided_no_artifact_id" in codes
 
 
 def test_fsck_index_orphan_row(store: KBStore) -> None:

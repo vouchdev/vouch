@@ -155,6 +155,19 @@ All notable changes to vouch are documented here. Format follows
   artifact the caller could not already retrieve, and it touches no write path.
 
 ### Fixed
+- **`vouch fsck` no longer crashes on approved DELETE or GOAL proposals**
+  (#682; revisits #538/#683): `_check_decided_proposals` indexed a
+  `presence` dict by every approved proposal's own kind, but only the
+  four create kinds (claim/page/entity/relation) were keys — so any KB
+  that had approved a delete or a goal crashed `fsck()` with an uncaught
+  `KeyError`. DELETE proposals are checked in a first pass against
+  `target_kind` (reporting `decided_delete_invalid_target_kind` /
+  `decided_delete_artifact_present` as appropriate), and ids they
+  legitimately removed are excluded from the second pass so the original
+  creating proposal does not false-positive as `decided_missing_artifact`.
+  GOAL is a create kind and is checked against `list_goals()`. An
+  exhaustiveness test ties the artifact-kind set to `ProposalKind` so a
+  seventh member fails the suite instead of users.
 - **`extract` no longer fractures file paths/URLs into auto-approved
   garbage claims** (#702): the sentence segmenter only skipped a `.` as a
   boundary when it was flanked by digits on both sides (decimals/versions
