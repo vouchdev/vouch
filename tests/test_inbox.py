@@ -70,6 +70,24 @@ def test_scan_skips_short_files_and_foreign_extensions(store: KBStore) -> None:
     assert sorted(result.skipped) == ["binary.png", "tiny.md"]
 
 
+def test_load_config_lowercases_configured_extensions(store: KBStore) -> None:
+    """Regression: scan() matches `path.suffix.lower()`, so a verbatim
+    uppercase ".MD" in config matched no file at all and silently skipped the
+    whole inbox. load_config must case-fold configured extensions to the file
+    side, the same way `enabled: "false"` coercion is handled defensively."""
+    store.config_path.write_text(
+        store.config_path.read_text(encoding="utf-8")
+        + '\ninbox:\n  extensions: [".MD", ".TXT"]\n',
+        encoding="utf-8",
+    )
+    assert inbox.load_config(store).extensions == (".md", ".txt")
+
+    _drop(store, "notes.md")
+    result = inbox.scan(store, store.root / "inbox")
+    assert len(result.proposed) == 1
+    assert result.skipped == []
+
+
 def test_scan_disabled_via_config_is_noop(store: KBStore) -> None:
     store.config_path.write_text(
         store.config_path.read_text(encoding="utf-8") + "\ninbox:\n  enabled: false\n",

@@ -65,8 +65,11 @@ def load_config(store: KBStore) -> InboxConfig:
     return InboxConfig(
         enabled=coerce_bool(raw.get("enabled", True), True),
         min_chars=int(raw.get("min_chars", DEFAULT_MIN_CHARS)),
+        # lowercase to match scan()'s `path.suffix.lower()` compare — the file
+        # side is already case-folded, so a verbatim ".MD" here would match no
+        # file at all and silently skip the whole inbox.
         extensions=(
-            tuple(str(e) for e in extensions)
+            tuple(str(e).lower() for e in extensions)
             if isinstance(extensions, list)
             else DEFAULT_EXTENSIONS
         ),
