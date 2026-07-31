@@ -155,6 +155,11 @@ All notable changes to vouch are documented here. Format follows
   artifact the caller could not already retrieve, and it touches no write path.
 
 ### Fixed
+- **session crystallize summary lists approved goals** (#741):
+  `_approved_artifact_ids_for_session` hard-coded claim/page/entity/relation,
+  so a goal approved in-session never appeared under "Crystallized
+  artifacts" after goals landed (#427). GOAL is included with the other
+  create kinds; DELETE stays excluded (no new artifact id).
 - **`extract` no longer fractures file paths/URLs into auto-approved
   garbage claims** (#702): the sentence segmenter only skipped a `.` as a
   boundary when it was flanked by digits on both sides (decimals/versions

@@ -169,11 +169,20 @@ def _build_summary_body(sess: Session, ids: list[str]) -> str:
 
 
 def _approved_artifact_ids_for_session(store: KBStore, session_id: str) -> list[str]:
+    # Every create-kind proposal belongs on the summary. DELETE is inverse
+    # (no new artifact id). GOAL must be included — omitting it after #427
+    # left approved objectives invisible on the crystallize page.
+    _SUMMARY_KINDS = frozenset({
+        ProposalKind.CLAIM,
+        ProposalKind.PAGE,
+        ProposalKind.ENTITY,
+        ProposalKind.RELATION,
+        ProposalKind.GOAL,
+    })
     ids = {
         str(pr.payload.get("id"))
         for pr in store.list_proposals(ProposalStatus.APPROVED)
-        if pr.session_id == session_id and pr.kind in {
-            ProposalKind.CLAIM, ProposalKind.PAGE, ProposalKind.ENTITY, ProposalKind.RELATION,
-        } and pr.payload.get("id")
+        if pr.session_id == session_id and pr.kind in _SUMMARY_KINDS
+        and pr.payload.get("id")
     }
     return sorted(ids)

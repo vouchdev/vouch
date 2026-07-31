@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from vouch import sessions as sess_mod
-from vouch.proposals import approve, propose_claim
+from vouch.proposals import approve, propose_claim, propose_goal
 from vouch.storage import KBStore
 
 
@@ -246,3 +246,17 @@ def test_crystallize_open_session_summary_body_is_idempotent(
     body2 = store.get_page(second["summary_page_id"]).body
 
     assert body1 == body2
+
+
+def test_crystallize_summary_includes_approved_goals(store: KBStore) -> None:
+    """Approved GOAL proposals are create-kind artifacts — must list on summary."""
+    sess = sess_mod.session_start(store, agent="agent", task="ship")
+    pr = propose_goal(
+        store, title="land the release", proposed_by="agent", session_id=sess.id,
+    )
+    goal = approve(store, pr.id, approved_by="human")
+    sess_mod.session_end(store, sess.id)
+
+    result = sess_mod.crystallize(store, sess.id, approver="human")
+    body = store.get_page(result["summary_page_id"]).body
+    assert f"`{goal.id}`" in body
