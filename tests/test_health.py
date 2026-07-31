@@ -8,6 +8,7 @@ import pytest
 
 from vouch import health, index_db
 from vouch.models import Claim, ClaimStatus, Proposal, ProposalKind, ProposalStatus
+from vouch.proposals import approve, propose_claim, propose_delete, propose_goal
 from vouch.storage import KBStore, _yaml_dump
 
 
@@ -313,6 +314,102 @@ def test_fsck_decided_missing_artifact(store: KBStore) -> None:
     report = health.fsck(store)
     codes = {f.code for f in report.findings}
     assert "decided_missing_artifact" in codes
+
+
+def test_fsck_survives_approved_delete_proposal(store: KBStore) -> None:
+    """An approved delete proposal must not crash fsck, and the artifact it
+    correctly removed must not be flagged as a missing create-time artifact."""
+    src = store.put_source(b"evidence")
+    pr = propose_claim(store, text="a fact", evidence=[src.id], proposed_by="agent-a")
+    claim = approve(store, pr.id, approved_by="human-b")
+
+    del_pr = propose_delete(
+        store, target_kind="claim", target_id=claim.id, proposed_by="agent-a",
+    )
+    approve(store, del_pr.id, approved_by="human-c")
+
+    report = health.fsck(store)
+    assert report.findings == []
+
+
+def test_fsck_flags_delete_whose_artifact_still_exists(store: KBStore) -> None:
+    """A delete proposal is approved, but the artifact it claims to have
+    removed is still on disk — the delete never actually took effect."""
+    src = store.put_source(b"evidence")
+    claim = Claim(id="still-here", text="t", evidence=[src.id])
+    store.put_claim(claim)
+    store.put_proposal(Proposal(
+        id="del-1",
+        kind=ProposalKind.DELETE,
+        proposed_by="agent",
+        payload={"target_kind": "claim", "id": "still-here", "snapshot": {}},
+        status=ProposalStatus.APPROVED,
+    ))
+
+    report = health.fsck(store)
+    codes = {f.code for f in report.findings}
+    assert "decided_delete_artifact_present" in codes
+
+
+def test_fsck_flags_delete_with_invalid_target_kind(store: KBStore) -> None:
+    store.put_proposal(Proposal(
+        id="del-2",
+        kind=ProposalKind.DELETE,
+        proposed_by="agent",
+        payload={"target_kind": "not-a-real-kind", "id": "whatever", "snapshot": {}},
+        status=ProposalStatus.APPROVED,
+    ))
+
+    report = health.fsck(store)
+    codes = {f.code for f in report.findings}
+    assert "decided_delete_invalid_target_kind" in codes
+
+
+def test_fsck_flags_delete_proposal_with_no_artifact_id(store: KBStore) -> None:
+    """A malformed DELETE proposal with no payload id is reported the same
+    way a malformed create/edit proposal already is, not silently skipped."""
+    store.put_proposal(Proposal(
+        id="del-3",
+        kind=ProposalKind.DELETE,
+        proposed_by="agent",
+        payload={"target_kind": "claim", "snapshot": {}},
+        status=ProposalStatus.APPROVED,
+    ))
+
+    report = health.fsck(store)
+    codes = {f.code for f in report.findings}
+    assert "decided_no_artifact_id" in codes
+
+
+def test_fsck_survives_approved_goal_proposal(store: KBStore) -> None:
+    """An approved GOAL proposal must not crash fsck. `_check_decided_
+    proposals`' presence map previously covered only CLAIM/PAGE/ENTITY/
+    RELATION, so an approved goal fell through to `presence[pr.kind]` (or,
+    with only the DELETE fix applied, the sibling `deleted[pr.kind]` two
+    lines earlier) and raised KeyError - the exact crash `fsck` is meant to
+    survive, just for a different kind."""
+    pr = propose_goal(store, title="ship the thing", proposed_by="agent")
+    approve(store, pr.id, approved_by="reviewer")
+
+    report = health.fsck(store)
+    codes = {f.code for f in report.findings}
+    assert not any(c.startswith("decided_") for c in codes)
+
+
+def test_check_decided_proposals_presence_covers_every_non_delete_kind() -> None:
+    """`_check_decided_proposals`'s presence map is meant to be exhaustive
+    over ProposalKind (minus DELETE, checked separately via target_kind).
+    Exercised indirectly by test_fsck_survives_approved_goal_proposal for
+    the current six kinds; this pins the *shape* of that guarantee so a
+    seventh kind fails here - and via the runtime assert the next time any
+    test touches fsck - instead of crashing fsck for a user."""
+    assert set(ProposalKind) - {ProposalKind.DELETE} == {
+        ProposalKind.CLAIM,
+        ProposalKind.PAGE,
+        ProposalKind.ENTITY,
+        ProposalKind.RELATION,
+        ProposalKind.GOAL,
+    }
 
 
 def test_fsck_index_orphan_row(store: KBStore) -> None:
