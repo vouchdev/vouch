@@ -93,7 +93,7 @@ jobs:
 
       - name: set up python
         if: steps.classify.outputs.mode == 'ladder'
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.12'
 
