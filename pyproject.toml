@@ -61,7 +61,7 @@ dev = [
     # the `diff coverage` ci gate: every python line a pr adds or changes under
     # src/vouch must be executed by a test. repo-wide coverage is a ratchet
     # (see [tool.coverage.report] fail_under); this is the per-pr bar.
-    "diff-cover>=9,<10",
+    "diff-cover>=9,<11",
 ]
 embeddings-fast = [
     "fastembed>=0.3,<1",
