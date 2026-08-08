@@ -42,6 +42,7 @@ from . import hub as hub_mod
 from . import inbox as inbox_mod
 from . import install_adapter as install_mod
 from . import lifecycle as life
+from . import md_import as md_import_mod
 from . import media as media_mod
 from . import metrics as metrics_mod
 from . import migrations as migrations_mod
@@ -4719,6 +4720,81 @@ def import_chatgpt_cmd(
         pid = row.get("proposal_id") or "(dry-run)"
         _echo(f"  • {pid}  {row['title']}")
     if not dry_run and (report["imported"] or report["updated"]):
+        _echo("run `vouch review` to decide.")
+
+
+@cli.command("import-md")
+@click.argument(
+    "folder", type=click.Path(exists=True, file_okay=False, path_type=Path)
+)
+@click.option(
+    "--max-claims", type=int, default=None,
+    help="Per file, keep only the N most information-dense spans "
+         "(density selection). Unset captures every quotable span.",
+)
+@click.option(
+    "--budget-chars", type=int, default=None,
+    help="Per file, keep the densest spans that fit within this many "
+         "characters.",
+)
+@click.option(
+    "--no-approve", is_flag=True,
+    help="File the claims but never auto-approve, even if the receipt "
+         "gate is on.",
+)
+@click.option(
+    "--min-chars", type=int, default=md_import_mod.DEFAULT_MIN_CHARS,
+    show_default=True,
+    help="Skip files shorter than this after whitespace-stripping.",
+)
+@click.option("--json", "as_json", is_flag=True, help="Machine-readable report.")
+def import_md_cmd(
+    folder: Path,
+    max_claims: int | None,
+    budget_chars: int | None,
+    no_approve: bool,
+    min_chars: int,
+    as_json: bool,
+) -> None:
+    """Import a markdown folder one file at a time, through the receipt gate.
+
+    Recursively walks FOLDER for *.md files and runs the same mechanical
+    ingest `vouch ingest` runs on one file: each file is registered as a
+    content-addressed source via extract.ingest_source, receipt-backed
+    claims are filed for its quotable spans, and they are auto-approved
+    when -- and only when -- review.auto_approve_on_receipt is on.
+
+    Re-runs skip unchanged files (per-file content hash in
+    .vouch/md_import_state.json); an EDITED file is fully re-ingested --
+    there is no claim-level diffing against what an earlier version of
+    the same note already contributed. Review with `vouch review`.
+    """
+    store = _load_store()
+    with _cli_errors():
+        report = md_import_mod.import_folder(
+            store,
+            folder,
+            auto_approve=not no_approve,
+            max_claims=max_claims,
+            budget_chars=budget_chars,
+            min_chars=min_chars,
+        )
+    if as_json:
+        _emit_json(report)
+        return
+    _echo(
+        f"{report['files']} markdown file(s) -- ingested {report['ingested']}, "
+        f"skipped {report['skipped']}, {report['approved']} claim(s) "
+        f"auto-approved, {report['pending_claims']} pending review"
+    )
+    for row in report["rows"]:
+        if row["action"] == "skipped":
+            continue
+        _echo(
+            f"  - {row['source'][:12]}...  {row['path']}  "
+            f"(+{row['approved']} approved)"
+        )
+    if report["pending_claims"]:
         _echo("run `vouch review` to decide.")
 
 

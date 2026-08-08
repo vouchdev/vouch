@@ -7,6 +7,22 @@ All notable changes to vouch are documented here. Format follows
 ## [Unreleased]
 
 ### Added
+- **cli: `vouch import-md` -- markdown-folder importer** (#744): a folder of
+  markdown notes could not enter a fresh KB without hand-importing each file
+  -- `vouch ingest` works per file, the inbox drop has no recursive walk or
+  re-run tracking. `vouch import-md <folder>` recursively walks `*.md`
+  (hidden dot-directories pruned, symlinked directories never chased) and
+  runs the same mechanical `extract.ingest_source` per file: each file is
+  registered as a content-addressed source, receipt-backed claims are filed
+  for its quotable spans, auto-approved when -- and only when --
+  `review.auto_approve_on_receipt` is on. Re-runs are idempotent for
+  unchanged files through a per-file content hash in
+  `.vouch/md_import_state.json`; an EDITED file is fully re-ingested
+  (documented limitation -- claim-level diffing belongs to the full #612
+  track). `--max-claims`/`--budget-chars` reuse the existing density
+  selection so a large vault doesn't firehose ten thousand spans;
+  `--no-approve`, `--min-chars`, `--json`. Purely additive: one command,
+  one module, one bookkeeping file.
 - **bench: composite guards** (#616): `efficiency`, `consistency` and `canary`
   as bounded multipliers over the composite, plus a `bench_version` stamp on
   every report. Reported **beside** the composite, never folded into it —

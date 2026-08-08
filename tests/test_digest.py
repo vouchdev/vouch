@@ -102,7 +102,7 @@ def store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> KBStore:
         )
 
     s.put_page(followup("due-open", "2026-07-01", "open"))
-    s.put_page(followup("future-open", "2026-08-01", "open"))
+    s.put_page(followup("future-open", "2028-08-01", "open"))
     s.put_page(followup("due-done", "2026-07-01", "done"))
     return s
 
@@ -228,4 +228,4 @@ def test_jsonl_digest_handler(store: KBStore, monkeypatch: pytest.MonkeyPatch) -
 
     body = HANDLERS["kb.digest"]({"since": "all", "limit": 5})
     assert body["pending_total"] == 2
-    assert [r["id"] for r in body["followups_due"]] == ["due-open"]
+    assert sorted(r["id"] for r in body["followups_due"]) == ["due-open"]
