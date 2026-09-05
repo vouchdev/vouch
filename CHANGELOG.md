@@ -7,6 +7,22 @@ All notable changes to vouch are documented here. Format follows
 ## [Unreleased]
 
 ### Added
+- **`kb.wiki_lint` — the wiki's own health sweep** (roadmap 1.4): a
+  page-level sibling to `kb.lint`'s claim-health sweep. Four checks over the
+  live, already-approved page set — `orphan_page` (nothing links to it),
+  `dead_wikilink` (a `[[link]]` in its body no longer resolves), `stale_page`
+  (not updated in `--stale-days`, default 180), and `uncited_section`
+  (citation coverage below `--min-coverage`, default 0.5). Wikilink
+  validation and citation coverage were previously checked only once, at
+  `vouch compile`'s draft-approval gate — a link whose target was later
+  archived, or a hand-edited page whose coverage eroded after approval,
+  surfaced nowhere. Reuses `wiki_render`'s link index/backlinks and
+  `compile`'s citation-coverage sentence walk rather than reimplementing
+  either. Archived pages are excluded entirely (out of the wiki front door
+  per #695 — a link to one is exactly as dead as a link to nothing). Purely
+  read-only, like `wiki_render`'s existing derived views — never proposes,
+  writes, or mutates. `vouch wiki-lint [--stale-days N] [--min-coverage F]`,
+  plus MCP (`kb_wiki_lint`) and JSONL (`kb.wiki_lint`).
 - **bench: composite guards** (#616): `efficiency`, `consistency` and `canary`
   as bounded multipliers over the composite, plus a `bench_version` stamp on
   every report. Reported **beside** the composite, never folded into it —

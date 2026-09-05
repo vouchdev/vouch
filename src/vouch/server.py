@@ -32,6 +32,7 @@ from . import sessions as sess_mod
 from . import skills as skills_mod
 from . import trust as trust_mod
 from . import verify as verify_mod
+from . import wiki_lint as wiki_lint_mod
 from .capabilities import capabilities as build_caps
 from .context import build_context_pack
 from .lifecycle import LifecycleError
@@ -1183,6 +1184,26 @@ def kb_lint(stale_days: int = 180) -> dict[str, Any]:
 @mcp.tool()
 def kb_doctor() -> dict[str, Any]:
     report = health.doctor(_store())
+    return {
+        "ok": report.ok,
+        "findings": [
+            {"severity": f.severity, "code": f.code,
+             "message": f.message, "object_ids": f.object_ids}
+            for f in report.findings
+        ],
+        "counts": report.counts,
+    }
+
+
+@mcp.tool()
+def kb_wiki_lint(
+    stale_days: int = wiki_lint_mod.DEFAULT_STALE_AFTER_DAYS,
+    min_coverage: float = wiki_lint_mod.DEFAULT_MIN_CITATION_COVERAGE,
+) -> dict[str, Any]:
+    """Page-health sweep: orphan pages, dead wikilinks, stale pages, thin citation coverage."""
+    report = wiki_lint_mod.wiki_lint(
+        _store(), stale_after_days=stale_days, min_citation_coverage=min_coverage,
+    )
     return {
         "ok": report.ok,
         "findings": [

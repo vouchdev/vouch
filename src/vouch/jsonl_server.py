@@ -41,6 +41,7 @@ from . import sessions as sess_mod
 from . import skills as skills_mod
 from . import trust as trust_mod
 from . import verify as verify_mod
+from . import wiki_lint as wiki_lint_mod
 from .capabilities import capabilities as build_caps
 from .context import build_context_pack
 from .logging_config import configure_logging
@@ -786,6 +787,25 @@ def _h_doctor(_: dict) -> dict:
     }
 
 
+def _h_wiki_lint(p: dict) -> dict:
+    report = wiki_lint_mod.wiki_lint(
+        _store(),
+        stale_after_days=int(p.get("stale_days", wiki_lint_mod.DEFAULT_STALE_AFTER_DAYS)),
+        min_citation_coverage=float(
+            p.get("min_coverage", wiki_lint_mod.DEFAULT_MIN_CITATION_COVERAGE)
+        ),
+    )
+    return {
+        "ok": report.ok,
+        "findings": [
+            {"severity": f.severity, "code": f.code,
+             "message": f.message, "object_ids": f.object_ids}
+            for f in report.findings
+        ],
+        "counts": report.counts,
+    }
+
+
 def _h_export(p: dict) -> dict:
     s = _store()
     exclude = tuple(p.get("exclude") or ())
@@ -1048,6 +1068,7 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.index_rebuild": _h_index_rebuild,
     "kb.lint": _h_lint,
     "kb.doctor": _h_doctor,
+    "kb.wiki_lint": _h_wiki_lint,
     "kb.export": _h_export,
     "kb.export_check": _h_export_check,
     "kb.import_check": _h_import_check,

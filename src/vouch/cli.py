@@ -59,6 +59,7 @@ from . import synthesize as synth
 from . import trust as trust_mod
 from . import vault_sync as vault_sync_mod
 from . import verify as verify_mod
+from . import wiki_lint as wiki_lint_mod
 from . import wiki_render as wiki_render_mod
 from .capabilities import capabilities as build_caps
 from .context import build_context_pack
@@ -885,6 +886,25 @@ def doctor() -> None:
         marker = {"error": "✗", "warning": "!", "info": "·"}.get(f.severity, "?")
         click.echo(f"{marker} [{f.code}] {f.message}")
     click.echo(f"-- {report.counts}")
+    sys.exit(0 if report.ok else 1)
+
+
+@cli.command(name="wiki-lint")
+@click.option("--stale-days", default=wiki_lint_mod.DEFAULT_STALE_AFTER_DAYS,
+              show_default=True, type=int)
+@click.option("--min-coverage", default=wiki_lint_mod.DEFAULT_MIN_CITATION_COVERAGE,
+              show_default=True, type=float)
+def wiki_lint_cmd(stale_days: int, min_coverage: float) -> None:
+    """Page-health sweep: orphan pages, dead wikilinks, stale pages, thin citation coverage."""
+    store = _load_store()
+    report = wiki_lint_mod.wiki_lint(
+        store, stale_after_days=stale_days, min_citation_coverage=min_coverage,
+    )
+    for f in report.findings:
+        marker = {"error": "✗", "warning": "!", "info": "·"}.get(f.severity, "?")
+        click.echo(f"{marker} [{f.code}] {f.message}")
+    if not report.findings:
+        click.echo("clean")
     sys.exit(0 if report.ok else 1)
 
 

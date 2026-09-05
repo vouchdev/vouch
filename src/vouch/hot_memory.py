@@ -197,6 +197,7 @@ HOT_MEMORY_EXCLUDED: dict[str, str] = {
     "kb.index_rebuild": "maintenance — mutates derived index",
     "kb.lint": "diagnostics — no claim payload",
     "kb.doctor": "diagnostics — no claim payload",
+    "kb.wiki_lint": "diagnostics — no claim payload",
     "kb.export": "bundle write — not a read response",
     "kb.export_check": "preflight — no claim sidebar needed",
     "kb.import_check": "preflight — no claim sidebar needed",
