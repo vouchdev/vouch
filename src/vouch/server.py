@@ -32,11 +32,12 @@ from . import sessions as sess_mod
 from . import skills as skills_mod
 from . import trust as trust_mod
 from . import verify as verify_mod
+from . import wiki_render as wiki_render_mod
 from .capabilities import capabilities as build_caps
 from .context import build_context_pack
 from .lifecycle import LifecycleError
 from .logging_config import configure_logging
-from .models import ProposalStatus
+from .models import PageStatus, ProposalStatus
 from .page_filters import filter_pages
 from .proposals import (
     EXPIRE_ACTOR,
@@ -325,6 +326,25 @@ def kb_neighbors(
         )
     except ArtifactNotFoundError as e:
         raise ValueError(str(e)) from e
+
+
+@mcp.tool()
+def kb_backlinks(page_id: str | None = None) -> dict[str, Any]:
+    """Inbound + outbound [[wikilink]] edges over the approved wiki.
+
+    With ``page_id``, returns that page's inbound/outbound link titles.
+    Without, returns the full inbound map for every live page (the same
+    graph `wiki_render.render_moc` ranks pages by, exposed as raw data).
+    Archived pages are excluded from the checked set and treated as
+    unresolvable link targets, matching `render-wiki`'s own policy (#695).
+    """
+    pages = [p for p in _store().list_pages() if p.status is not PageStatus.ARCHIVED]
+    if page_id is None:
+        return {"backlinks": wiki_render_mod.backlinks(pages)}
+    result = wiki_render_mod.page_links(pages, page_id)
+    if result is None:
+        raise ValueError(f"page {page_id} not found")
+    return {"page_id": page_id, **result}
 
 
 @mcp.tool()

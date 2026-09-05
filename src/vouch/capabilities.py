@@ -37,6 +37,7 @@ METHODS = [
     "kb.search",
     "kb.explain_ranking",
     "kb.neighbors",
+    "kb.backlinks",
     "kb.experts",
     "kb.context",
     "kb.synthesize",

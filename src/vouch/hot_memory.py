@@ -145,6 +145,7 @@ HOT_MEMORY_EXCLUDED: dict[str, str] = {
     "kb.digest": "aggregated reviewer briefing — sidebar would duplicate its own recency content",
     "kb.activity": "aggregated audit-log buckets — sidebar would duplicate counts",
     "kb.neighbors": "graph slice — out of scope for recency sidebar",
+    "kb.backlinks": "wiki link-graph slice — out of scope for recency sidebar",
     "kb.synthesize": "answer-mode prose — sidebar adds noise",
     "kb.diff": "field-level revision diff — self-contained, not a claim browse",
     "kb.explain_ranking": (

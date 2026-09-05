@@ -8,8 +8,17 @@ and a map-of-content ranked by how referenced a page is.
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
+import pytest
+from click.testing import CliRunner
+
 from vouch import wiki_render
-from vouch.models import Page
+from vouch.cli import cli
+from vouch.jsonl_server import handle_request
+from vouch.models import Page, PageStatus
+from vouch.storage import KBStore
 
 
 def _page(
@@ -104,3 +113,155 @@ def test_render_moc_ranks_by_inbound_links() -> None:
     # Gamma has 2 inbound links; it must rank above the 0-inbound pages.
     assert out.index("Gamma") < out.index("Alpha")
     assert out.index("Gamma") < out.index("Beta")
+
+
+# --- outbound_links / page_links (kb.backlinks) ---------------------------
+
+
+def test_outbound_links_resolves_and_excludes_self() -> None:
+    a = _page("Alpha", body="see [[Beta]] and also [[Alpha]] (self)", pid="alpha")
+    b = _page("Beta", pid="beta")
+    assert wiki_render.outbound_links(a, [a, b]) == ["Beta"]
+
+
+def test_outbound_links_deduplicates_repeated_links() -> None:
+    a = _page("Alpha", body="see [[Beta]] and again [[Beta]]", pid="alpha")
+    b = _page("Beta", pid="beta")
+    assert wiki_render.outbound_links(a, [a, b]) == ["Beta"]
+
+
+def test_outbound_links_drops_unresolved() -> None:
+    a = _page("Alpha", body="see [[Ghost]]", pid="alpha")
+    assert wiki_render.outbound_links(a, [a]) == []
+
+
+def test_page_links_combines_inbound_and_outbound() -> None:
+    a = _page("Alpha", body="see [[Beta]]", pid="alpha")
+    b = _page("Beta", body="see [[Gamma]]", pid="beta")
+    g = _page("Gamma", pid="gamma")
+    pages = [a, b, g]
+    assert wiki_render.page_links(pages, "beta") == {
+        "inbound": ["Alpha"],
+        "outbound": ["Gamma"],
+    }
+
+
+def test_page_links_returns_none_for_unknown_page() -> None:
+    a = _page("Alpha", pid="alpha")
+    assert wiki_render.page_links([a], "nope") is None
+
+
+# --- kb.backlinks (server/jsonl/cli registration) --------------------------
+
+
+@pytest.fixture
+def store(tmp_path: Path) -> KBStore:
+    return KBStore.init(tmp_path)
+
+
+def _put(
+    store: KBStore, pid: str, title: str, body: str,
+    *, status: PageStatus = PageStatus.ACTIVE,
+) -> None:
+    store.put_page(Page(id=pid, title=title, body=body, status=status))
+
+
+def test_jsonl_backlinks_single_page(store: KBStore, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(store.root)
+    _put(store, "alpha", "Alpha", "see [[Beta]] for more.")
+    _put(store, "beta", "Beta", "a leaf page.")
+    resp = handle_request(
+        {"id": "b1", "method": "kb.backlinks", "params": {"page_id": "beta"}}
+    )
+    assert resp["ok"] is True
+    assert resp["result"]["inbound"] == ["Alpha"]
+    assert resp["result"]["outbound"] == []
+
+
+def test_jsonl_backlinks_full_map_with_no_page_id(
+    store: KBStore, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(store.root)
+    _put(store, "alpha", "Alpha", "see [[Beta]] for more.")
+    _put(store, "beta", "Beta", "a leaf page.")
+    resp = handle_request({"id": "b2", "method": "kb.backlinks", "params": {}})
+    assert resp["ok"] is True
+    assert resp["result"]["backlinks"] == {"beta": ["Alpha"]}
+
+
+def test_jsonl_backlinks_unknown_page_errors(
+    store: KBStore, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(store.root)
+    resp = handle_request(
+        {"id": "b3", "method": "kb.backlinks", "params": {"page_id": "nope"}}
+    )
+    assert resp["ok"] is False
+    assert resp["error"]["code"] == "invalid_request"
+
+
+def test_jsonl_backlinks_excludes_archived_pages(
+    store: KBStore, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Archived pages are out of the wiki front door (#695) — a link to one
+    is exactly as dead as a link to nothing, so it's dropped from both the
+    inbound map and treated as unresolved for outbound purposes."""
+    monkeypatch.chdir(store.root)
+    _put(store, "gone", "Gone", "retired content.", status=PageStatus.ARCHIVED)
+    _put(store, "linker", "Linker", "see [[Gone]] for the old details.")
+    resp = handle_request(
+        {"id": "b4", "method": "kb.backlinks", "params": {"page_id": "linker"}}
+    )
+    assert resp["ok"] is True
+    assert resp["result"]["outbound"] == []
+    full = handle_request({"id": "b5", "method": "kb.backlinks", "params": {}})
+    assert "gone" not in full["result"]["backlinks"]
+
+
+def test_mcp_surface_serves_backlinks(store: KBStore, monkeypatch: pytest.MonkeyPatch) -> None:
+    from vouch import server
+
+    _put(store, "alpha", "Alpha", "see [[Beta]] for more.")
+    _put(store, "beta", "Beta", "a leaf page.")
+    monkeypatch.setattr(server, "_store", lambda: store)
+
+    single = server.kb_backlinks("beta")
+    assert single["inbound"] == ["Alpha"]
+    assert single["outbound"] == []
+
+    full = server.kb_backlinks()
+    assert full["backlinks"] == {"beta": ["Alpha"]}
+
+    with pytest.raises(ValueError, match="not found"):
+        server.kb_backlinks("nope")
+
+
+def test_cli_backlinks_full_map(store: KBStore, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(store.root)
+    _put(store, "alpha", "Alpha", "see [[Beta]] for more.")
+    _put(store, "beta", "Beta", "a leaf page.")
+    runner = CliRunner()
+    result = runner.invoke(cli, ["backlinks"])
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["backlinks"] == {"beta": ["Alpha"]}
+
+
+def test_cli_backlinks_single_page(store: KBStore, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(store.root)
+    _put(store, "alpha", "Alpha", "see [[Beta]] for more.")
+    _put(store, "beta", "Beta", "a leaf page.")
+    runner = CliRunner()
+    result = runner.invoke(cli, ["backlinks", "beta"])
+    assert result.exit_code == 0
+    assert '"inbound"' in result.output
+    assert "Alpha" in result.output
+
+
+def test_cli_backlinks_unknown_page_errors(
+    store: KBStore, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(store.root)
+    runner = CliRunner()
+    result = runner.invoke(cli, ["backlinks", "nope"])
+    assert result.exit_code != 0

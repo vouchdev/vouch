@@ -3496,6 +3496,26 @@ def render_wiki_cmd(out_dir: str | None) -> None:
 
 
 @cli.command()
+@click.argument("page_id", required=False, default=None)
+def backlinks(page_id: str | None) -> None:
+    """Inbound + outbound [[wikilink]] edges over the approved wiki.
+
+    With PAGE_ID, show that page's inbound/outbound links. Without, print
+    the full inbound map. Archived pages are excluded, same as render-wiki.
+    """
+    store = _load_store()
+    pages = [p for p in store.list_pages() if p.status is not PageStatus.ARCHIVED]
+    if page_id is None:
+        _emit_json({"backlinks": wiki_render_mod.backlinks(pages)})
+        return
+    with _cli_errors():
+        result = wiki_render_mod.page_links(pages, page_id)
+        if result is None:
+            raise ValueError(f"page {page_id} not found")
+    _emit_json({"page_id": page_id, **result})
+
+
+@cli.command()
 @click.argument("session_id")
 @click.option("--no-page", is_flag=True, help="Skip the session-summary page.")
 def crystallize(session_id: str, no_page: bool) -> None:

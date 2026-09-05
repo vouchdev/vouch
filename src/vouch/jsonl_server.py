@@ -41,10 +41,11 @@ from . import sessions as sess_mod
 from . import skills as skills_mod
 from . import trust as trust_mod
 from . import verify as verify_mod
+from . import wiki_render as wiki_render_mod
 from .capabilities import capabilities as build_caps
 from .context import build_context_pack
 from .logging_config import configure_logging
-from .models import ProposalStatus
+from .models import PageStatus, ProposalStatus
 from .page_filters import filter_pages
 from .proposals import (
     EXPIRE_ACTOR,
@@ -228,6 +229,17 @@ def _h_neighbors(p: dict) -> dict:
         rel_types=p.get("rel_types"),
         max_nodes=int(p.get("max_nodes", 50)),
     )
+
+
+def _h_backlinks(p: dict) -> dict:
+    pages = [pg for pg in _store().list_pages() if pg.status is not PageStatus.ARCHIVED]
+    page_id = p.get("page_id")
+    if page_id is None:
+        return {"backlinks": wiki_render_mod.backlinks(pages)}
+    result = wiki_render_mod.page_links(pages, page_id)
+    if result is None:
+        raise ValueError(f"page {page_id} not found")
+    return {"page_id": page_id, **result}
 
 
 def _h_context(p: dict) -> dict:
@@ -997,6 +1009,7 @@ HANDLERS: dict[str, Callable[[dict], Any]] = {
     "kb.search": _h_search,
     "kb.explain_ranking": _h_explain_ranking,
     "kb.neighbors": _h_neighbors,
+    "kb.backlinks": _h_backlinks,
     "kb.experts": _h_experts,
     "kb.context": _h_context,
     "kb.synthesize": _h_synthesize,

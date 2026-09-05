@@ -7,6 +7,19 @@ All notable changes to vouch are documented here. Format follows
 ## [Unreleased]
 
 ### Added
+- **`kb.backlinks` — the wiki's link graph, agent-facing** (roadmap 1.4):
+  `wiki_render.backlinks()` already computed the inbound-link map internally
+  (used by `render_moc`'s ranking), but nothing exposed it — no MCP tool, no
+  JSONL handler, no CLI command, only reachable indirectly via
+  `vouch render-wiki`'s rendered markdown. `kb.backlinks` (MCP `kb_backlinks`,
+  JSONL `kb.backlinks`, CLI `vouch backlinks [page_id]`) returns it directly:
+  with a `page_id`, that page's inbound *and* outbound `[[wikilink]]` titles
+  (`outbound_links`, a new sibling to `backlinks` in `wiki_render.py`); with
+  none, the full inbound map. Archived pages are excluded from the checked
+  set and treated as unresolvable link targets, matching `render-wiki`'s own
+  exclusion policy (#695) — a link to an archived page is exactly as dead as
+  a link to nothing. Read-only, like every other `wiki_render` view — never
+  proposes, writes, or mutates.
 - **bench: composite guards** (#616): `efficiency`, `consistency` and `canary`
   as bounded multipliers over the composite, plus a `bench_version` stamp on
   every report. Reported **beside** the composite, never folded into it —

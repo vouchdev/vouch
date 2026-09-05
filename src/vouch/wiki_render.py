@@ -65,6 +65,41 @@ def backlinks(pages: list[Page]) -> dict[str, list[str]]:
     return {pid: sorted(titles) for pid, titles in inbound.items()}
 
 
+def outbound_links(page: Page, pages: list[Page]) -> list[str]:
+    """Titles of pages ``page``'s body links to, resolved and deduplicated.
+
+    Self-links are dropped, matching ``backlinks()``'s own exclusion. Order
+    is first-occurrence in the body text, not sorted - ``backlinks()`` sorts
+    because it aggregates across many source pages, but outbound is already
+    one page's own authored order.
+    """
+    index = _link_index(pages)
+    seen: set[str] = set()
+    out: list[str] = []
+    for raw in _WIKILINK_RE.findall(page.body):
+        target = index.get(raw.strip().lower())
+        if target is not None and target.id != page.id and target.id not in seen:
+            seen.add(target.id)
+            out.append(target.title)
+    return out
+
+
+def page_links(pages: list[Page], page_id: str) -> dict[str, list[str]] | None:
+    """Inbound + outbound wikilink titles for one page.
+
+    ``None`` if ``page_id`` doesn't match any page in ``pages`` - the caller
+    decides how to report that (``kb.backlinks`` raises, matching
+    ``kb.neighbors``' contract for an unknown root node).
+    """
+    page = next((p for p in pages if p.id == page_id), None)
+    if page is None:
+        return None
+    return {
+        "inbound": backlinks(pages).get(page_id, []),
+        "outbound": outbound_links(page, pages),
+    }
+
+
 def render_index(pages: list[Page]) -> str:
     """Render an index grouped by page type, each entry with its summary."""
     if not pages:
